@@ -832,6 +832,51 @@ defmodule EXLA.MLIR.Value do
     {p, l, u}
   end
 
+  # ===========================================================================
+  # GPU Custom Calls (CUDA)
+  # ===========================================================================
+
+  @doc """
+  GPU element-wise add via CUDA custom call.
+
+  This is a prototype to validate GPU custom calls work in EXLA.
+  The CUDA kernel is defined in `c_src/exla/custom_calls/gpu_add.cu`.
+
+  ## Arguments
+
+  - `a` - First tensor (f32)
+  - `b` - Second tensor (f32, same shape as `a`)
+  - `out_typespec` - Typespec for the output
+
+  ## Returns
+
+  Output value with element-wise sum.
+
+  ## Note
+
+  This only works when running on a CUDA device. The custom call target
+  "exla_gpu_add_f32" is registered with platform "CUDA" in the C++ code.
+  """
+  def gpu_add(%Value{function: func} = a, %Value{function: func} = b, out_typespec) do
+    %{type: a_type} = get_typespec(a)
+    %{type: b_type} = get_typespec(b)
+
+    unless a_type == {:f, 32} and b_type == {:f, 32} do
+      raise ArgumentError,
+            "gpu_add requires f32 tensors, got #{inspect(a_type)} and #{inspect(b_type)}"
+    end
+
+    operands = [a, b]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_gpu_add_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
   @doc """
   Builds a StableHLO `custom_call` that targets the EXLA Elixir callback bridge.
 
