@@ -939,6 +939,153 @@ defmodule EXLA.Defn do
     {result, cache}
   end
 
+  # Fused Selective Scan (Mamba) — CUDA custom call (Edifice)
+  defp cached_recur_operator(
+         :optional,
+         %T{
+           data: %Expr{
+             args: [
+               %{data: %{op: :fused_selective_scan, args: [x, dt, a, b, c]}},
+               expr,
+               _callback
+             ]
+           }
+         },
+         %{client: %EXLA.Client{platform: :cuda}} = state,
+         cache
+       ) do
+    {x, cache} = recur_operator(x, state, cache) |> unwrap_single_tensor!()
+    {dt, cache} = recur_operator(dt, state, cache) |> unwrap_single_tensor!()
+    {a, cache} = recur_operator(a, state, cache) |> unwrap_single_tensor!()
+    {b, cache} = recur_operator(b, state, cache) |> unwrap_single_tensor!()
+    {c, cache} = recur_operator(c, state, cache) |> unwrap_single_tensor!()
+
+    result = Value.fused_selective_scan(x, dt, a, b, c, expr_to_typespec(expr))
+    {result, cache}
+  end
+
+  # Fused DeltaProduct scan — CUDA custom call (Edifice)
+  defp cached_recur_operator(
+         :optional,
+         %T{
+           data: %Expr{
+             args: [
+               %{data: %{op: :fused_delta_product_scan, args: [q, k, v, beta]}},
+               expr,
+               _callback
+             ]
+           }
+         },
+         %{client: %EXLA.Client{platform: :cuda}} = state,
+         cache
+       ) do
+    {q, cache} = recur_operator(q, state, cache) |> unwrap_single_tensor!()
+    {k, cache} = recur_operator(k, state, cache) |> unwrap_single_tensor!()
+    {v, cache} = recur_operator(v, state, cache) |> unwrap_single_tensor!()
+    {beta, cache} = recur_operator(beta, state, cache) |> unwrap_single_tensor!()
+
+    result = Value.fused_delta_product_scan(q, k, v, beta, expr_to_typespec(expr))
+    {result, cache}
+  end
+
+  # Fused LSTM scan — CUDA custom call (Edifice)
+  defp cached_recur_operator(
+         :optional,
+         %T{
+           data: %Expr{
+             args: [
+               %{data: %{op: :fused_lstm_scan, args: [wx, r, h0, c0]}},
+               expr,
+               _callback
+             ]
+           }
+         },
+         %{client: %EXLA.Client{platform: :cuda}} = state,
+         cache
+       ) do
+    {wx, cache} = recur_operator(wx, state, cache) |> unwrap_single_tensor!()
+    {r, cache} = recur_operator(r, state, cache) |> unwrap_single_tensor!()
+    {h0, cache} = recur_operator(h0, state, cache) |> unwrap_single_tensor!()
+    {c0, cache} = recur_operator(c0, state, cache) |> unwrap_single_tensor!()
+
+    result = Value.fused_lstm_scan(wx, r, h0, c0, expr_to_typespec(expr))
+    {result, cache}
+  end
+
+  # Fused GRU scan — CUDA custom call (Edifice)
+  defp cached_recur_operator(
+         :optional,
+         %T{
+           data: %Expr{
+             args: [
+               %{data: %{op: :fused_gru_scan, args: [wx, r, h0]}},
+               expr,
+               _callback
+             ]
+           }
+         },
+         %{client: %EXLA.Client{platform: :cuda}} = state,
+         cache
+       ) do
+    {wx, cache} = recur_operator(wx, state, cache) |> unwrap_single_tensor!()
+    {r, cache} = recur_operator(r, state, cache) |> unwrap_single_tensor!()
+    {h0, cache} = recur_operator(h0, state, cache) |> unwrap_single_tensor!()
+
+    result = Value.fused_gru_scan(wx, r, h0, expr_to_typespec(expr))
+    {result, cache}
+  end
+
+  # Fused sLSTM scan — CUDA custom call (Edifice)
+  defp cached_recur_operator(
+         :optional,
+         %T{
+           data: %Expr{
+             args: [
+               %{data: %{op: :fused_slstm_scan, args: [wx, r, h0, c0]}},
+               expr,
+               _callback
+             ]
+           }
+         },
+         %{client: %EXLA.Client{platform: :cuda}} = state,
+         cache
+       ) do
+    {wx, cache} = recur_operator(wx, state, cache) |> unwrap_single_tensor!()
+    {r, cache} = recur_operator(r, state, cache) |> unwrap_single_tensor!()
+    {h0, cache} = recur_operator(h0, state, cache) |> unwrap_single_tensor!()
+    {c0, cache} = recur_operator(c0, state, cache) |> unwrap_single_tensor!()
+
+    result = Value.fused_slstm_scan(wx, r, h0, c0, expr_to_typespec(expr))
+    {result, cache}
+  end
+
+  # Fused TTT-Linear scan — CUDA custom call (Edifice)
+  defp cached_recur_operator(
+         :optional,
+         %T{
+           data: %Expr{
+             args: [
+               %{data: %{op: :fused_ttt_scan, args: [q, k, v, eta, w0, ln_g, ln_b]}},
+               expr,
+               _callback
+             ]
+           }
+         },
+         %{client: %EXLA.Client{platform: :cuda}} = state,
+         cache
+       ) do
+    {q, cache} = recur_operator(q, state, cache) |> unwrap_single_tensor!()
+    {k, cache} = recur_operator(k, state, cache) |> unwrap_single_tensor!()
+    {v, cache} = recur_operator(v, state, cache) |> unwrap_single_tensor!()
+    {eta, cache} = recur_operator(eta, state, cache) |> unwrap_single_tensor!()
+    {w0, cache} = recur_operator(w0, state, cache) |> unwrap_single_tensor!()
+    {ln_g, cache} = recur_operator(ln_g, state, cache) |> unwrap_single_tensor!()
+    {ln_b, cache} = recur_operator(ln_b, state, cache) |> unwrap_single_tensor!()
+
+    result = Value.fused_ttt_scan(q, k, v, eta, w0, ln_g, ln_b, expr_to_typespec(expr))
+    {result, cache}
+  end
+
   defp cached_recur_operator(:optional, %T{data: %Expr{args: args}}, state, cache) do
     [call, expr, _callback] = args
     %{data: %{args: in_args, op: op}} = call
