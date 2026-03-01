@@ -940,6 +940,218 @@ defmodule EXLA.MLIR.Value do
   end
 
   @doc """
+  Fused Liquid (LTC) exact solver scan via CUDA custom call.
+
+  Implements x(t+1) = activation + (x(t) - activation) * exp(-1/tau) with dt=1.
+
+  ## Arguments
+
+    * `tau` - [batch, seq_len, hidden] f32 tensor (post-softplus time constants)
+    * `activation` - [batch, seq_len, hidden] f32 tensor
+    * `h0` - [batch, hidden] f32 tensor (initial hidden state)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_liquid_scan(
+        %Value{function: func} = tau,
+        %Value{function: func} = activation,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [tau, activation, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_liquid_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused ELU-GRU scan via CUDA custom call (NativeRecurrence variant).
+
+  z = sigmoid(gate), c = 1 + elu(cand), h = (1-z)*h + z*c.
+  Inputs are raw pre-activation projections — sigmoid/elu applied in-kernel.
+
+  ## Arguments
+
+    * `gates` - [batch, seq_len, hidden] f32 tensor (raw, pre-sigmoid)
+    * `candidates` - [batch, seq_len, hidden] f32 tensor (raw, pre-elu)
+    * `h0` - [batch, hidden] f32 tensor
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_elu_gru_scan(
+        %Value{function: func} = gates,
+        %Value{function: func} = candidates,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [gates, candidates, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_elu_gru_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused Real-GRU scan via CUDA custom call (NativeRecurrence variant).
+
+  z = sigmoid(gate), h = (1-z)*h + z*cand. Like MinGRU but with in-kernel sigmoid.
+
+  ## Arguments
+
+    * `gates` - [batch, seq_len, hidden] f32 tensor (raw, pre-sigmoid)
+    * `candidates` - [batch, seq_len, hidden] f32 tensor
+    * `h0` - [batch, hidden] f32 tensor
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_real_gru_scan(
+        %Value{function: func} = gates,
+        %Value{function: func} = candidates,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [gates, candidates, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_real_gru_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused diagonal linear recurrence scan via CUDA custom call (NativeRecurrence variant).
+
+  h = sigmoid(a)*h + b. The sigmoid is applied in-kernel.
+
+  ## Arguments
+
+    * `a_vals` - [batch, seq_len, hidden] f32 tensor (raw, pre-sigmoid)
+    * `b_vals` - [batch, seq_len, hidden] f32 tensor
+    * `h0` - [batch, hidden] f32 tensor
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_diag_linear_scan(
+        %Value{function: func} = a_vals,
+        %Value{function: func} = b_vals,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [a_vals, b_vals, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_diag_linear_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused linear recurrence scan via CUDA custom call.
+
+  h = a*h + b. No nonlinearities — all activations pre-computed on XLA side.
+  Covers Griffin RG-LRU, MEGA EMA, GSS SSM, and other linear recurrences.
+
+  ## Arguments
+
+    * `a_vals` - [batch, seq_len, hidden] f32 tensor (multiplicative coefficients)
+    * `b_vals` - [batch, seq_len, hidden] f32 tensor (additive terms)
+    * `h0` - [batch, hidden] f32 tensor
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_linear_scan(
+        %Value{function: func} = a_vals,
+        %Value{function: func} = b_vals,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [a_vals, b_vals, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_linear_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused DeltaNet scan via CUDA custom call.
+
+  Matrix-state recurrence: S_t = S_{t-1} + beta * outer(v - S@k, k), o = S@q.
+  Uses shared memory for the d x d state matrix.
+
+  ## Arguments
+
+    * `q` - [batch, seq_len, num_heads, head_dim] f32 tensor
+    * `k` - [batch, seq_len, num_heads, head_dim] f32 tensor (L2-normalized)
+    * `v` - [batch, seq_len, num_heads, head_dim] f32 tensor
+    * `beta` - [batch, seq_len, num_heads, head_dim] f32 tensor (post-sigmoid)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, num_heads, head_dim})`
+  """
+  def fused_delta_net_scan(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = beta,
+        out_typespec
+      ) do
+    operands = [q, k, v, beta]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_delta_net_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused GatedDeltaNet scan via CUDA custom call.
+
+  Like DeltaNet but with per-head scalar decay: S = alpha * S before delta update.
+
+  ## Arguments
+
+    * `q` - [batch, seq_len, num_heads, head_dim] f32 tensor
+    * `k` - [batch, seq_len, num_heads, head_dim] f32 tensor (L2-normalized)
+    * `v` - [batch, seq_len, num_heads, head_dim] f32 tensor
+    * `beta` - [batch, seq_len, num_heads, head_dim] f32 tensor (post-sigmoid)
+    * `alpha` - [batch, seq_len, num_heads] f32 tensor (per-head decay)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, num_heads, head_dim})`
+  """
+  def fused_gated_delta_net_scan(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = beta,
+        %Value{function: func} = alpha,
+        out_typespec
+      ) do
+    operands = [q, k, v, beta, alpha]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_gated_delta_net_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
   Builds a StableHLO `custom_call` that targets the EXLA Elixir callback bridge.
 
   The `callback_id` is typically the underlying `Nx.Defn.Expr` id of the
