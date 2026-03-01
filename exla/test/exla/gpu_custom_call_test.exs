@@ -889,4 +889,454 @@ defmodule EXLA.GPUCustomCallTest do
       assert Nx.all_close(result_tensor, expected, atol: 1.0e-3) == Nx.tensor(1, type: :u8)
     end
   end
+
+  # ==========================================================================
+  # P2 Kernels — fused recurrent with hidden-to-hidden matmul R@h
+  # ==========================================================================
+
+  describe "fused_lstm_scan CUDA custom call" do
+    test "single step matches manual LSTM computation" do
+      # batch=1, seq_len=1, hidden=2
+      # wx: [1, 1, 8] (4*hidden=8), R: [2, 8], h0: [1,2], c0: [1,2]
+      # All wx=0, R=0, h0=[1,1], c0=[0,0]
+      # With wx=0, R@h contributes nothing extra since R=0
+      # i=sigmoid(0)=0.5, f=sigmoid(0)=0.5, g=tanh(0)=0, o=sigmoid(0)=0.5
+      # c = 0.5*0 + 0.5*0 = 0
+      # h = 0.5*tanh(0) = 0
+      hidden = 2
+      out_ts = f32_3d_typespec(1, 1, hidden)
+      wx_ts = f32_3d_typespec(1, 1, 4 * hidden)
+      r_ts = f32_2d_typespec(hidden, 4 * hidden)
+      h0_ts = f32_2d_typespec(1, hidden)
+      c0_ts = f32_2d_typespec(1, hidden)
+
+      wx = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 1, 8}) |> Nx.as_type(:f32)), wx_ts)
+      r = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {2, 8}) |> Nx.as_type(:f32)), r_ts)
+      h0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[1.0, 1.0]], type: :f32)), h0_ts)
+      c0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0, 0.0]], type: :f32)), c0_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([wx, r, h0, c0], [], [out_ts], fn _builder, wx_, r_, h0_, c0_ ->
+                 [Value.fused_lstm_scan(wx_, r_, h0_, c0_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      # i=0.5, f=0.5, g=0, o=0.5 → c=0, h=0.5*tanh(0)=0
+      expected = Nx.tensor([0.0, 0.0])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
+    end
+
+    test "biased gates produce nonzero output" do
+      # batch=1, seq_len=1, hidden=1
+      # wx = [wx_i, wx_f, wx_g, wx_o] = [10, 10, 0.5, 10] (large biases → saturated gates)
+      # R=0, so rh=0
+      # i=sigmoid(10)≈1, f=sigmoid(10)≈1, g=tanh(0.5)≈0.4621, o=sigmoid(10)≈1
+      # c = 1*0 + 1*0.4621 = 0.4621
+      # h = 1*tanh(0.4621) ≈ 0.4317
+      hidden = 1
+      out_ts = f32_3d_typespec(1, 1, hidden)
+      wx_ts = f32_3d_typespec(1, 1, 4)
+      r_ts = f32_2d_typespec(1, 4)
+      h0_ts = f32_2d_typespec(1, 1)
+      c0_ts = f32_2d_typespec(1, 1)
+
+      wx = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[10.0, 10.0, 0.5, 10.0]]], type: :f32)), wx_ts)
+      r = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 4}) |> Nx.as_type(:f32)), r_ts)
+      h0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), h0_ts)
+      c0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), c0_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([wx, r, h0, c0], [], [out_ts], fn _builder, wx_, r_, h0_, c0_ ->
+                 [Value.fused_lstm_scan(wx_, r_, h0_, c0_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      g = :math.tanh(0.5)
+      c = g
+      expected_h = :math.tanh(c)
+      expected = Nx.tensor([expected_h], type: :f32)
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-3) == Nx.tensor(1, type: :u8)
+    end
+
+    test "multi-step with cell memory accumulation" do
+      # batch=1, seq_len=2, hidden=1
+      # All gates biased: i≈1, f≈1, g=tanh(wx_g), o≈1
+      # Step 0: c = 1*0 + 1*tanh(1.0) = 0.7616, h = tanh(0.7616) = 0.6411
+      # Step 1: R@h adds to gates. R=[0,0,0,0] so no recurrent contribution
+      #   c = 1*0.7616 + 1*tanh(1.0) = 1.5232, h = tanh(1.5232) = 0.9088
+      hidden = 1
+      out_ts = f32_3d_typespec(1, 2, hidden)
+      wx_ts = f32_3d_typespec(1, 2, 4)
+      r_ts = f32_2d_typespec(1, 4)
+      h0_ts = f32_2d_typespec(1, 1)
+      c0_ts = f32_2d_typespec(1, 1)
+
+      wx = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[10.0, 10.0, 1.0, 10.0],
+                                  [10.0, 10.0, 1.0, 10.0]]], type: :f32)), wx_ts)
+      r = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 4}) |> Nx.as_type(:f32)), r_ts)
+      h0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), h0_ts)
+      c0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), c0_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([wx, r, h0, c0], [], [out_ts], fn _builder, wx_, r_, h0_, c0_ ->
+                 [Value.fused_lstm_scan(wx_, r_, h0_, c0_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32) |> Nx.reshape({1, 2, 1})
+      g = :math.tanh(1.0)
+      c0_val = g
+      h0_val = :math.tanh(c0_val)
+      c1_val = c0_val + g
+      h1_val = :math.tanh(c1_val)
+      expected = Nx.tensor([[[h0_val], [h1_val]]], type: :f32)
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-3) == Nx.tensor(1, type: :u8)
+    end
+  end
+
+  describe "fused_gru_scan CUDA custom call" do
+    test "single step with zero R (no recurrent contribution)" do
+      # batch=1, seq_len=1, hidden=2
+      # wx: [1, 1, 6] (3*hidden), R: [2, 6], h0: [1, 2]
+      # wx_z=0, wx_r=0, wx_h=0, R=0 → rh=0
+      # z=sigmoid(0)=0.5, r=sigmoid(0)=0.5
+      # h_tilde = tanh(0 + 0.5*0) = tanh(0) = 0
+      # h = (1-0.5)*0 + 0.5*h_prev = 0.5*h_prev
+      hidden = 2
+      out_ts = f32_3d_typespec(1, 1, hidden)
+      wx_ts = f32_3d_typespec(1, 1, 3 * hidden)
+      r_ts = f32_2d_typespec(hidden, 3 * hidden)
+      h0_ts = f32_2d_typespec(1, hidden)
+
+      wx = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 1, 6}) |> Nx.as_type(:f32)), wx_ts)
+      r = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {2, 6}) |> Nx.as_type(:f32)), r_ts)
+      h0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[4.0, 8.0]], type: :f32)), h0_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([wx, r, h0], [], [out_ts], fn _builder, wx_, r_, h0_ ->
+                 [Value.fused_gru_scan(wx_, r_, h0_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      # z=0.5, h_tilde=0, h = 0.5*0 + 0.5*[4,8] = [2, 4]
+      expected = Nx.tensor([2.0, 4.0])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
+    end
+
+    test "large update gate means keep previous state" do
+      # wx_z = 100 → z ≈ 1, so h ≈ z*h_prev = h_prev
+      hidden = 2
+      out_ts = f32_3d_typespec(1, 1, hidden)
+      wx_ts = f32_3d_typespec(1, 1, 6)
+      r_ts = f32_2d_typespec(2, 6)
+      h0_ts = f32_2d_typespec(1, 2)
+
+      # wx: z part is huge, r and h parts are 0
+      wx_data = Nx.tensor([[[100.0, 100.0, 0.0, 0.0, 0.0, 0.0]]], type: :f32)
+      wx = BinaryBuffer.from_binary(Nx.to_binary(wx_data), wx_ts)
+      r = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {2, 6}) |> Nx.as_type(:f32)), r_ts)
+      h0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[7.0, 9.0]], type: :f32)), h0_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([wx, r, h0], [], [out_ts], fn _builder, wx_, r_, h0_ ->
+                 [Value.fused_gru_scan(wx_, r_, h0_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      expected = Nx.tensor([7.0, 9.0])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-3) == Nx.tensor(1, type: :u8)
+    end
+
+    test "multi-step GRU with zero R" do
+      # batch=1, seq_len=2, hidden=1
+      # Step 0: wx=[0, 0, 1.0] → z=0.5, r=0.5, h_tilde=tanh(1+0)=0.7616
+      #   h = 0.5*0.7616 + 0.5*0 = 0.3808
+      # Step 1: same wx, R=0, rh=0
+      #   z=0.5, r=0.5, h_tilde=tanh(1+0)=0.7616
+      #   h = 0.5*0.7616 + 0.5*0.3808 = 0.5712
+      hidden = 1
+      out_ts = f32_3d_typespec(1, 2, hidden)
+      wx_ts = f32_3d_typespec(1, 2, 3)
+      r_ts = f32_2d_typespec(1, 3)
+      h0_ts = f32_2d_typespec(1, 1)
+
+      wx = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[0.0, 0.0, 1.0], [0.0, 0.0, 1.0]]], type: :f32)), wx_ts)
+      r = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 3}) |> Nx.as_type(:f32)), r_ts)
+      h0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), h0_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([wx, r, h0], [], [out_ts], fn _builder, wx_, r_, h0_ ->
+                 [Value.fused_gru_scan(wx_, r_, h0_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32) |> Nx.reshape({1, 2, 1})
+      h_tilde = :math.tanh(1.0)
+      h0_val = 0.5 * h_tilde + 0.5 * 0.0
+      h1_val = 0.5 * h_tilde + 0.5 * h0_val
+      expected = Nx.tensor([[[h0_val], [h1_val]]], type: :f32)
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-3) == Nx.tensor(1, type: :u8)
+    end
+  end
+
+  describe "fused_slstm_scan CUDA custom call" do
+    test "single step with zero inputs (log-domain baseline)" do
+      # batch=1, seq_len=1, hidden=1
+      # wx=0, R=0 → all raw gate values are 0
+      # log_i_raw=0, log_f_raw=0, z_t=tanh(0)=0, o_t=sigmoid(0)=0.5
+      # m_prev=0 → m_new = max(0+0, 0) = 0
+      # i=exp(0-0)=1, f=exp(0-0)=1
+      # c = 1*0 + 1*0 = 0 (c0=0, z=0)
+      # n = 1*1 + 1 = 2 (n0=1)
+      # h = 0.5 * 0/max(2, 1) = 0
+      hidden = 1
+      out_ts = f32_3d_typespec(1, 1, hidden)
+      wx_ts = f32_3d_typespec(1, 1, 4)
+      r_ts = f32_2d_typespec(1, 4)
+      h0_ts = f32_2d_typespec(1, 1)
+      c0_ts = f32_2d_typespec(1, 1)
+
+      wx = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 1, 4}) |> Nx.as_type(:f32)), wx_ts)
+      r = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 4}) |> Nx.as_type(:f32)), r_ts)
+      h0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), h0_ts)
+      c0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), c0_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([wx, r, h0, c0], [], [out_ts], fn _builder, wx_, r_, h0_, c0_ ->
+                 [Value.fused_slstm_scan(wx_, r_, h0_, c0_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      expected = Nx.tensor([0.0])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
+    end
+
+    test "exponential gating with strong input gate" do
+      # batch=1, seq_len=1, hidden=1
+      # wx = [log_i=10, log_f=-10, z=0.5, o=10]
+      # R=0, h0=0, c0=0
+      # m_prev=0, log_i=10, log_f=-10
+      # m_new = max(-10+0, 10) = 10
+      # i = exp(10-10) = 1, f = exp(-10-10) ≈ 0
+      # z = tanh(0.5) ≈ 0.4621
+      # c = 0*0 + 1*0.4621 = 0.4621
+      # n = 0*1 + 1 = 1
+      # h = sigmoid(10) * 0.4621/max(1, 1) ≈ 0.4621
+      hidden = 1
+      out_ts = f32_3d_typespec(1, 1, hidden)
+      wx_ts = f32_3d_typespec(1, 1, 4)
+      r_ts = f32_2d_typespec(1, 4)
+      h0_ts = f32_2d_typespec(1, 1)
+      c0_ts = f32_2d_typespec(1, 1)
+
+      wx = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[10.0, -10.0, 0.5, 10.0]]], type: :f32)), wx_ts)
+      r = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 4}) |> Nx.as_type(:f32)), r_ts)
+      h0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), h0_ts)
+      c0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), c0_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([wx, r, h0, c0], [], [out_ts], fn _builder, wx_, r_, h0_, c0_ ->
+                 [Value.fused_slstm_scan(wx_, r_, h0_, c0_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      z = :math.tanh(0.5)
+      expected = Nx.tensor([z], type: :f32)
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-3) == Nx.tensor(1, type: :u8)
+    end
+
+    test "forget gate preserves cell state" do
+      # batch=1, seq_len=1, hidden=1
+      # wx = [log_i=-100, log_f=10, z=0, o=10]
+      # c0=5.0, h0=0, R=0
+      # m_prev=0, m_new = max(10+0, -100) = 10
+      # i = exp(-100-10) ≈ 0, f = exp(10-10) = 1
+      # c = 1*5 + 0*0 = 5
+      # n = 1*1 + 0 = 1
+      # h ≈ 1 * 5/1 = 5
+      hidden = 1
+      out_ts = f32_3d_typespec(1, 1, hidden)
+      wx_ts = f32_3d_typespec(1, 1, 4)
+      r_ts = f32_2d_typespec(1, 4)
+      h0_ts = f32_2d_typespec(1, 1)
+      c0_ts = f32_2d_typespec(1, 1)
+
+      wx = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[-100.0, 10.0, 0.0, 10.0]]], type: :f32)), wx_ts)
+      r = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 4}) |> Nx.as_type(:f32)), r_ts)
+      h0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[0.0]], type: :f32)), h0_ts)
+      c0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[5.0]], type: :f32)), c0_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([wx, r, h0, c0], [], [out_ts], fn _builder, wx_, r_, h0_, c0_ ->
+                 [Value.fused_slstm_scan(wx_, r_, h0_, c0_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      expected = Nx.tensor([5.0])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-2) == Nx.tensor(1, type: :u8)
+    end
+  end
+
+  describe "fused_ttt_scan CUDA custom call" do
+    test "single step identity weight matrix" do
+      # batch=1, seq_len=1, inner_size=2
+      # W0 = identity, k=[1, 0], v=[1, 0], q=[1, 0]
+      # pred = W@k = [1, 0]
+      # LN(pred) with gamma=1, beta=0: mean=0.5, var=0.25, inv_std=1/sqrt(0.25+eps)=2
+      #   normed = [(1-0.5)*2, (0-0.5)*2] = [1, -1]
+      # error = [1, -1] - [1, 0] = [0, -1]
+      # eta = [0.1, 0.1] (pre-computed)
+      # scaled_error = [0, -0.1]
+      # W_update: W[0,:] -= 0*[1,0] = no change, W[1,:] -= -0.1*[1,0] = [0, 1] + [0.1, 0]
+      # W_updated = [[1, 0], [0.1, 1]]
+      # out = W_updated @ q = W_updated @ [1,0] = [1, 0.1]
+      d = 2
+      out_ts = f32_3d_typespec(1, 1, d)
+      qkv_ts = f32_3d_typespec(1, 1, d)
+      w0_ts = Typespec.tensor({:f, 32}, {1, d, d})
+      ln_ts = f32_vec_typespec(d)
+
+      q = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[1.0, 0.0]]], type: :f32)), qkv_ts)
+      k = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[1.0, 0.0]]], type: :f32)), qkv_ts)
+      v = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[1.0, 0.0]]], type: :f32)), qkv_ts)
+      eta = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[0.1, 0.1]]], type: :f32)), qkv_ts)
+      w0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[1.0, 0.0], [0.0, 1.0]]], type: :f32)), w0_ts)
+      ln_g = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([1.0, 1.0], type: :f32)), ln_ts)
+      ln_b = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([0.0, 0.0], type: :f32)), ln_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([q, k, v, eta, w0, ln_g, ln_b], [], [out_ts],
+                 fn _builder, q_, k_, v_, eta_, w0_, lng_, lnb_ ->
+                   [Value.fused_ttt_scan(q_, k_, v_, eta_, w0_, lng_, lnb_, out_ts)]
+                 end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      expected = Nx.tensor([1.0, 0.1])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
+    end
+
+    test "zero weight matrix learns from first step" do
+      # batch=1, seq_len=1, inner_size=2
+      # W0 = 0, k=[1, 0], v=[3, 5], q=[1, 0]
+      # pred = 0@k = [0, 0]
+      # LN([0,0]) with gamma=1, beta=0: mean=0, var=0, normed=[0,0]
+      # error = [0, 0] - [3, 5] = [-3, -5]
+      # eta = [0.5, 0.5]
+      # scaled_error = [-1.5, -2.5]
+      # W[0,:] -= -1.5*[1,0] → W[0,:] = [1.5, 0]
+      # W[1,:] -= -2.5*[1,0] → W[1,:] = [2.5, 0]
+      # out = W @ q = [[1.5,0],[2.5,0]] @ [1,0] = [1.5, 2.5]
+      d = 2
+      out_ts = f32_3d_typespec(1, 1, d)
+      qkv_ts = f32_3d_typespec(1, 1, d)
+      w0_ts = Typespec.tensor({:f, 32}, {1, d, d})
+      ln_ts = f32_vec_typespec(d)
+
+      q = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[1.0, 0.0]]], type: :f32)), qkv_ts)
+      k = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[1.0, 0.0]]], type: :f32)), qkv_ts)
+      v = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[3.0, 5.0]]], type: :f32)), qkv_ts)
+      eta = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[0.5, 0.5]]], type: :f32)), qkv_ts)
+      w0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 2, 2}) |> Nx.as_type(:f32)), w0_ts)
+      ln_g = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([1.0, 1.0], type: :f32)), ln_ts)
+      ln_b = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([0.0, 0.0], type: :f32)), ln_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([q, k, v, eta, w0, ln_g, ln_b], [], [out_ts],
+                 fn _builder, q_, k_, v_, eta_, w0_, lng_, lnb_ ->
+                   [Value.fused_ttt_scan(q_, k_, v_, eta_, w0_, lng_, lnb_, out_ts)]
+                 end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      expected = Nx.tensor([1.5, 2.5])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
+    end
+
+    test "multi-step weight adaptation" do
+      # batch=1, seq_len=2, inner_size=2
+      # W0=0, eta=[0.5, 0.5] throughout
+      # Step 0: k=[1,0], v=[2,0], q=[1,0]
+      #   pred=[0,0], LN→[0,0], error=[-2,0], scaled=[-1,0]
+      #   W[0,:] -= -1*[1,0] → [1,0]; W[1,:] -= 0*[1,0] → [0,0]
+      #   W = [[1,0],[0,0]], out = W@[1,0] = [1, 0]
+      # Step 1: k=[0,1], v=[0,3], q=[0,1]
+      #   pred = W@[0,1] = [0, 0]
+      #   LN([0,0])=[0,0], error=[0,0]-[0,3]=[-0,-3], scaled=[0,-1.5]
+      #   W[0,:] -= 0*[0,1] → [1,0]; W[1,:] -= -1.5*[0,1] → [0, 1.5]
+      #   W = [[1,0],[0,1.5]], out = W@[0,1] = [0, 1.5]
+      d = 2
+      out_ts = f32_3d_typespec(1, 2, d)
+      qkv_ts = f32_3d_typespec(1, 2, d)
+      w0_ts = Typespec.tensor({:f, 32}, {1, d, d})
+      ln_ts = f32_vec_typespec(d)
+
+      q = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[1.0, 0.0], [0.0, 1.0]]], type: :f32)), qkv_ts)
+      k = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[1.0, 0.0], [0.0, 1.0]]], type: :f32)), qkv_ts)
+      v = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[2.0, 0.0], [0.0, 3.0]]], type: :f32)), qkv_ts)
+      eta = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[0.5, 0.5], [0.5, 0.5]]], type: :f32)), qkv_ts)
+      w0 = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.broadcast(0.0, {1, 2, 2}) |> Nx.as_type(:f32)), w0_ts)
+      ln_g = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([1.0, 1.0], type: :f32)), ln_ts)
+      ln_b = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([0.0, 0.0], type: :f32)), ln_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([q, k, v, eta, w0, ln_g, ln_b], [], [out_ts],
+                 fn _builder, q_, k_, v_, eta_, w0_, lng_, lnb_ ->
+                   [Value.fused_ttt_scan(q_, k_, v_, eta_, w0_, lng_, lnb_, out_ts)]
+                 end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32) |> Nx.reshape({1, 2, 2})
+      expected = Nx.tensor([[[1.0, 0.0], [0.0, 1.5]]])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-3) == Nx.tensor(1, type: :u8)
+    end
+  end
 end
