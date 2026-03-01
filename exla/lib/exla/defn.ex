@@ -728,6 +728,53 @@ defmodule EXLA.Defn do
     {fft2(&Value.fft(&1, :ifft, &2, &3), [tensor, opts], expr, state), cache}
   end
 
+  # Fused MinGRU scan — CUDA custom call (Edifice)
+  defp cached_recur_operator(
+         :optional,
+         %T{
+           data: %Expr{
+             args: [
+               %{data: %{op: :fused_mingru_scan, args: [gates, candidates, h0]}},
+               expr,
+               _callback
+             ]
+           }
+         },
+         %{client: %EXLA.Client{platform: :cuda}} = state,
+         cache
+       ) do
+    {gates, cache} = recur_operator(gates, state, cache) |> unwrap_single_tensor!()
+    {candidates, cache} = recur_operator(candidates, state, cache) |> unwrap_single_tensor!()
+    {h0, cache} = recur_operator(h0, state, cache) |> unwrap_single_tensor!()
+
+    result = Value.fused_mingru_scan(gates, candidates, h0, expr_to_typespec(expr))
+    {result, cache}
+  end
+
+  # Fused MinLSTM scan — CUDA custom call (Edifice)
+  defp cached_recur_operator(
+         :optional,
+         %T{
+           data: %Expr{
+             args: [
+               %{data: %{op: :fused_minlstm_scan, args: [forget_gates, input_gates, candidates, h0]}},
+               expr,
+               _callback
+             ]
+           }
+         },
+         %{client: %EXLA.Client{platform: :cuda}} = state,
+         cache
+       ) do
+    {forget_gates, cache} = recur_operator(forget_gates, state, cache) |> unwrap_single_tensor!()
+    {input_gates, cache} = recur_operator(input_gates, state, cache) |> unwrap_single_tensor!()
+    {candidates, cache} = recur_operator(candidates, state, cache) |> unwrap_single_tensor!()
+    {h0, cache} = recur_operator(h0, state, cache) |> unwrap_single_tensor!()
+
+    result = Value.fused_minlstm_scan(forget_gates, input_gates, candidates, h0, expr_to_typespec(expr))
+    {result, cache}
+  end
+
   defp cached_recur_operator(:optional, %T{data: %Expr{args: args}}, state, cache) do
     [call, expr, _callback] = args
     %{data: %{args: in_args, op: op}} = call

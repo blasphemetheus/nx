@@ -878,6 +878,68 @@ defmodule EXLA.MLIR.Value do
   end
 
   @doc """
+  Fused MinGRU scan via CUDA custom call.
+
+  Runs the entire sequential scan in a single CUDA kernel, avoiding per-timestep
+  graph breaks. The kernel is defined in `c_src/exla/custom_calls/fused_mingru_scan.cu`.
+
+  ## Arguments
+
+    * `gates` - [batch, seq_len, hidden] f32 tensor (post-sigmoid gate values)
+    * `candidates` - [batch, seq_len, hidden] f32 tensor
+    * `h0` - [batch, hidden] f32 tensor (initial hidden state)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_mingru_scan(
+        %Value{function: func} = gates,
+        %Value{function: func} = candidates,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [gates, candidates, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_mingru_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused MinLSTM scan via CUDA custom call.
+
+  Runs the entire sequential scan in a single CUDA kernel. The kernel normalizes
+  forget/input gates internally (f' = f/(f+i+eps), i' = i/(f+i+eps)).
+
+  ## Arguments
+
+    * `forget_gates` - [batch, seq_len, hidden] f32 tensor (post-sigmoid)
+    * `input_gates` - [batch, seq_len, hidden] f32 tensor (post-sigmoid)
+    * `candidates` - [batch, seq_len, hidden] f32 tensor
+    * `h0` - [batch, hidden] f32 tensor (initial cell state)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_minlstm_scan(
+        %Value{function: func} = forget_gates,
+        %Value{function: func} = input_gates,
+        %Value{function: func} = candidates,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [forget_gates, input_gates, candidates, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_minlstm_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
   Builds a StableHLO `custom_call` that targets the EXLA Elixir callback bridge.
 
   The `callback_id` is typically the underlying `Nx.Defn.Expr` id of the

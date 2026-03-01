@@ -57,7 +57,7 @@ $(info EXLA_CPU_ONLY is not set, checking for nvcc availability)
 	ifeq ($(NVCC_TEST),nvcc)
 $(info CUDA is available.)
 		NVCC = nvcc
-		NVCCFLAGS = -Xcompiler "$(CFLAGS)" -DCUDA_ENABLED
+		NVCCFLAGS = -Xcompiler "$(CFLAGS)" -DCUDA_ENABLED -DEXLA_FFI
 		CFLAGS += -DCUDA_ENABLED -I$(dir $(NVCC_RESULT))../include
 	else
 $(info CUDA is not available.)
