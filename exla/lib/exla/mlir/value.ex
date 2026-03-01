@@ -1152,6 +1152,40 @@ defmodule EXLA.MLIR.Value do
   end
 
   @doc """
+  Fused Mamba selective scan via CUDA custom call.
+
+  Performs the full SSM recurrence with input-dependent discretization:
+  A_bar = exp(dt * A), h_t = A_bar * h_{t-1} + dt*B*x_t, y_t = C*h_t.
+
+  ## Arguments
+
+    * `x` - [batch, seq_len, hidden] f32 tensor (input activations)
+    * `dt` - [batch, seq_len, hidden] f32 tensor (discretization timesteps)
+    * `a` - [hidden, state] f32 tensor (state transition diagonal, negative)
+    * `b` - [batch, seq_len, state] f32 tensor (input-to-state projection)
+    * `c` - [batch, seq_len, state] f32 tensor (state-to-output projection)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_selective_scan(
+        %Value{function: func} = x,
+        %Value{function: func} = dt,
+        %Value{function: func} = a,
+        %Value{function: func} = b,
+        %Value{function: func} = c,
+        out_typespec
+      ) do
+    operands = [x, dt, a, b, c]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_selective_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
   Builds a StableHLO `custom_call` that targets the EXLA Elixir callback bridge.
 
   The `callback_id` is typically the underlying `Nx.Defn.Expr` id of the

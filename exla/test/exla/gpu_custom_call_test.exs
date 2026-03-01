@@ -14,6 +14,62 @@ defmodule EXLA.GPUCustomCallTest do
   defp f32_2d_typespec(b, h), do: Typespec.tensor({:f, 32}, {b, h})
   defp f32_4d_typespec(b, t, h, d), do: Typespec.tensor({:f, 32}, {b, t, h, d})
 
+  # Helper to compute expected selective scan output on CPU
+  # Returns flat tensor matching GPU layout [batch * seq_len * hidden]
+  defp selective_scan_cpu(x, dt_vals, a, b_proj, c_proj) do
+    {batch, seq_len, hidden} = Nx.shape(x)
+    {_h, state} = Nx.shape(a)
+
+    # Each hidden dim has independent state — scan per (batch, hidden) pair
+    # Build per-hidden scan results, then interleave to [batch, seq_len, hidden]
+    results =
+      for bi <- 0..(batch - 1) do
+        # For each hidden dim, compute the full sequence of outputs
+        per_hidden =
+          for hi <- 0..(hidden - 1) do
+            h_state = List.duplicate(0.0, state)
+
+            {_, outputs} =
+              Enum.reduce(0..(seq_len - 1), {h_state, []}, fn t, {hs, acc} ->
+                x_t = Nx.to_number(x[bi][t][hi])
+                dt_t = Nx.to_number(dt_vals[bi][t][hi])
+                dt_t = min(max(dt_t, 0.001), 0.1)
+
+                {new_hs, y_t} =
+                  Enum.reduce(0..(state - 1), {hs, 0.0}, fn s, {hs_acc, y_acc} ->
+                    a_s = Nx.to_number(a[hi][s])
+                    b_s = Nx.to_number(b_proj[bi][t][s])
+                    c_s = Nx.to_number(c_proj[bi][t][s])
+
+                    a_bar = :math.exp(dt_t * a_s)
+                    b_bar = dt_t * b_s
+
+                    new_h = a_bar * Enum.at(hs_acc, s) + b_bar * x_t
+                    new_hs_acc = List.replace_at(hs_acc, s, new_h)
+                    {new_hs_acc, y_acc + c_s * new_h}
+                  end)
+
+                {new_hs, [y_t | acc]}
+              end)
+
+            Enum.reverse(outputs)
+          end
+
+        # per_hidden is [[h0_t0, h0_t1, ...], [h1_t0, h1_t1, ...], ...]
+        # We need [t0_h0, t0_h1, ..., t1_h0, t1_h1, ...] (seq_len groups of hidden)
+        for t <- 0..(seq_len - 1) do
+          for hi <- 0..(hidden - 1) do
+            Enum.at(Enum.at(per_hidden, hi), t)
+          end
+        end
+      end
+
+    # results is [batch][seq_len][hidden] nested lists
+    results
+    |> List.flatten()
+    |> Nx.tensor(type: :f32)
+  end
+
   describe "gpu_add CUDA custom call" do
     test "adds two f32 vectors via CUDA kernel" do
       ts = f32_vec_typespec(4)
@@ -601,6 +657,115 @@ defmodule EXLA.GPUCustomCallTest do
       # Step 1: alpha=0 (full decay), S_decayed=0, new S=[[0,1],[0,1]], out=[1,1]
       expected = Nx.tensor([[[[10.0, 20.0]], [[1.0, 1.0]]]])
       assert Nx.all_close(result_tensor, expected, atol: 1.0e-3) == Nx.tensor(1, type: :u8)
+    end
+  end
+
+  describe "fused_selective_scan CUDA custom call" do
+    test "single hidden dim, single state dim, single step" do
+      # batch=1, seq_len=1, hidden=1, state=1
+      # A=[-1], x=1.0, dt=0.01, B=1.0, C=1.0
+      # A_bar = exp(0.01 * -1) = 0.99005
+      # B_bar = 0.01 * 1 = 0.01
+      # h = 0.99005*0 + 0.01*1 = 0.01
+      # y = 1.0 * 0.01 = 0.01
+      out_ts = f32_3d_typespec(1, 1, 1)
+      x_ts = f32_3d_typespec(1, 1, 1)
+      dt_ts = f32_3d_typespec(1, 1, 1)
+      a_ts = f32_2d_typespec(1, 1)
+      b_ts = f32_3d_typespec(1, 1, 1)
+      c_ts = f32_3d_typespec(1, 1, 1)
+
+      x = BinaryBuffer.from_binary(Nx.to_binary(Nx.tensor([[[1.0]]], type: :f32)), x_ts)
+      dt_val = BinaryBuffer.from_binary(Nx.to_binary(Nx.tensor([[[0.01]]], type: :f32)), dt_ts)
+      a = BinaryBuffer.from_binary(Nx.to_binary(Nx.tensor([[-1.0]], type: :f32)), a_ts)
+      b_proj = BinaryBuffer.from_binary(Nx.to_binary(Nx.tensor([[[1.0]]], type: :f32)), b_ts)
+      c_proj = BinaryBuffer.from_binary(Nx.to_binary(Nx.tensor([[[1.0]]], type: :f32)), c_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([x, dt_val, a, b_proj, c_proj], [], [out_ts],
+                 fn _builder, x_, dt_, a_, b_, c_ ->
+                   [Value.fused_selective_scan(x_, dt_, a_, b_, c_, out_ts)]
+                 end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      expected = Nx.tensor([0.01])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-5) == Nx.tensor(1, type: :u8)
+    end
+
+    test "multi-step scan matches CPU reference" do
+      # batch=1, seq_len=4, hidden=2, state=2
+      x_nx = Nx.tensor([[[1.0, 2.0], [0.5, 1.5], [2.0, 0.5], [1.0, 1.0]]], type: :f32)
+      dt_nx = Nx.tensor([[[0.05, 0.02], [0.03, 0.04], [0.01, 0.05], [0.02, 0.03]]], type: :f32)
+      a_nx = Nx.tensor([[-1.0, -2.0], [-1.5, -0.5]], type: :f32)
+      b_nx = Nx.tensor([[[1.0, 0.5], [0.8, 1.2], [0.3, 0.7], [1.0, 0.9]]], type: :f32)
+      c_nx = Nx.tensor([[[0.5, 1.0], [1.0, 0.5], [0.7, 0.3], [0.8, 0.6]]], type: :f32)
+
+      out_ts = f32_3d_typespec(1, 4, 2)
+      x_ts = f32_3d_typespec(1, 4, 2)
+      dt_ts = f32_3d_typespec(1, 4, 2)
+      a_ts = f32_2d_typespec(2, 2)
+      b_ts = f32_3d_typespec(1, 4, 2)
+      c_ts = f32_3d_typespec(1, 4, 2)
+
+      x = BinaryBuffer.from_binary(Nx.to_binary(x_nx), x_ts)
+      dt_val = BinaryBuffer.from_binary(Nx.to_binary(dt_nx), dt_ts)
+      a = BinaryBuffer.from_binary(Nx.to_binary(a_nx), a_ts)
+      b_proj = BinaryBuffer.from_binary(Nx.to_binary(b_nx), b_ts)
+      c_proj = BinaryBuffer.from_binary(Nx.to_binary(c_nx), c_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([x, dt_val, a, b_proj, c_proj], [], [out_ts],
+                 fn _builder, x_, dt_, a_, b_, c_ ->
+                   [Value.fused_selective_scan(x_, dt_, a_, b_, c_, out_ts)]
+                 end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32) |> Nx.reshape({1, 4, 2})
+      expected = selective_scan_cpu(x_nx, dt_nx, a_nx, b_nx, c_nx) |> Nx.reshape({1, 4, 2})
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
+    end
+
+    test "multi-batch scan" do
+      # batch=2, seq_len=3, hidden=2, state=2
+      x_nx = Nx.tensor([
+        [[1.0, 0.5], [2.0, 1.0], [0.5, 2.0]],
+        [[0.5, 1.0], [1.0, 0.5], [1.5, 1.5]]
+      ], type: :f32)
+      dt_nx = Nx.tensor([
+        [[0.05, 0.03], [0.02, 0.04], [0.01, 0.02]],
+        [[0.03, 0.05], [0.04, 0.01], [0.02, 0.03]]
+      ], type: :f32)
+      a_nx = Nx.tensor([[-1.0, -2.0], [-0.5, -1.5]], type: :f32)
+      b_nx = Nx.tensor([
+        [[1.0, 0.5], [0.8, 0.3], [0.6, 1.0]],
+        [[0.7, 0.9], [1.0, 0.4], [0.5, 0.8]]
+      ], type: :f32)
+      c_nx = Nx.tensor([
+        [[1.0, 0.5], [0.5, 1.0], [0.8, 0.2]],
+        [[0.6, 0.4], [0.9, 0.1], [0.3, 0.7]]
+      ], type: :f32)
+
+      out_ts = f32_3d_typespec(2, 3, 2)
+      x_ts = f32_3d_typespec(2, 3, 2)
+      dt_ts = f32_3d_typespec(2, 3, 2)
+      a_ts = f32_2d_typespec(2, 2)
+      b_ts = f32_3d_typespec(2, 3, 2)
+      c_ts = f32_3d_typespec(2, 3, 2)
+
+      x = BinaryBuffer.from_binary(Nx.to_binary(x_nx), x_ts)
+      dt_val = BinaryBuffer.from_binary(Nx.to_binary(dt_nx), dt_ts)
+      a = BinaryBuffer.from_binary(Nx.to_binary(a_nx), a_ts)
+      b_proj = BinaryBuffer.from_binary(Nx.to_binary(b_nx), b_ts)
+      c_proj = BinaryBuffer.from_binary(Nx.to_binary(c_nx), c_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([x, dt_val, a, b_proj, c_proj], [], [out_ts],
+                 fn _builder, x_, dt_, a_, b_, c_ ->
+                   [Value.fused_selective_scan(x_, dt_, a_, b_, c_, out_ts)]
+                 end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32) |> Nx.reshape({2, 3, 2})
+      expected = selective_scan_cpu(x_nx, dt_nx, a_nx, b_nx, c_nx) |> Nx.reshape({2, 3, 2})
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
     end
   end
 end
