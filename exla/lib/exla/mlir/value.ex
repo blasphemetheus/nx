@@ -1186,6 +1186,39 @@ defmodule EXLA.MLIR.Value do
   end
 
   @doc """
+  Fused DeltaProduct scan via CUDA custom call.
+
+  Multiple Householder transformation steps per token with state matrix S:
+  S = (I - beta*k*k^T) @ S + beta*k*v^T, output = RMS_norm(S @ q).
+  Keys are L2-normalized in-kernel.
+
+  ## Arguments
+
+    * `q` - [batch, seq_len, num_heads, head_dim] f32 tensor
+    * `k` - [batch, seq_len, num_householder, num_heads, head_dim] f32 tensor
+    * `v` - [batch, seq_len, num_householder, num_heads, head_dim] f32 tensor
+    * `beta` - [batch, seq_len, num_householder, num_heads] f32 tensor (post-sigmoid)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, num_heads, head_dim})`
+  """
+  def fused_delta_product_scan(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = beta,
+        out_typespec
+      ) do
+    operands = [q, k, v, beta]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_delta_product_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
   Builds a StableHLO `custom_call` that targets the EXLA Elixir callback bridge.
 
   The `callback_id` is typically the underlying `Nx.Defn.Expr` id of the
