@@ -67,7 +67,7 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 XLA_FFI_REGISTER_HANDLER(
-    ffi::GetXlaFfiApi(),
+    XLA_FFI_GetApi(),
     "exla_gpu_add_f32",
     "CUDA",
     gpu_add
