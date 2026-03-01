@@ -768,4 +768,125 @@ defmodule EXLA.GPUCustomCallTest do
       assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
     end
   end
+
+  describe "fused_delta_product_scan CUDA custom call" do
+    test "single step, single Householder, identity-like retrieval" do
+      # batch=1, seq_len=1, n_h=1, heads=1, d=2
+      # S starts at 0. After one Householder step with beta=1:
+      #   k=[1,0] (already unit norm), v=[3,5]
+      #   S^T @ k = [0,0] (S is zero)
+      #   error = v - S^T@k = [3,5]
+      #   S_new[i][j] = 0 + 1*k[i]*(v[j] - 0) = k[i]*v[j]
+      #   S = [[3,5],[0,0]] (outer product of k=[1,0] and v=[3,5])
+      #   output = RMS_norm(S @ q)
+      #   q=[1,0] → S@q = [3,0]
+      #   RMS = sqrt(mean([9,0])) = sqrt(4.5) = 2.1213
+      #   o_normed = [3/2.1213, 0/2.1213] = [1.4142, 0]
+      out_ts = f32_4d_typespec(1, 1, 1, 2)
+      q_ts = f32_4d_typespec(1, 1, 1, 2)
+      # k,v: [B, T, n_h, H, d] = [1,1,1,1,2]
+      k_ts = Typespec.tensor({:f, 32}, {1, 1, 1, 1, 2})
+      v_ts = Typespec.tensor({:f, 32}, {1, 1, 1, 1, 2})
+      # beta: [B, T, n_h, H] = [1,1,1,1]
+      beta_ts = Typespec.tensor({:f, 32}, {1, 1, 1, 1})
+
+      q = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[1.0, 0.0]]]], type: :f32)), q_ts)
+      k = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[[1.0, 0.0]]]]], type: :f32)), k_ts)
+      v = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[[3.0, 5.0]]]]], type: :f32)), v_ts)
+      beta = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[1.0]]]], type: :f32)), beta_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([q, k, v, beta], [], [out_ts], fn _builder, q_, k_, v_, b_ ->
+                 [Value.fused_delta_product_scan(q_, k_, v_, b_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      # S@q = [3, 0], RMS = sqrt((9+0)/2) = sqrt(4.5)
+      rms = :math.sqrt(4.5)
+      expected = Nx.tensor([3.0 / rms, 0.0 / rms], type: :f32)
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
+    end
+
+    test "two Householder steps build rank-2 state" do
+      # batch=1, seq_len=1, n_h=2, heads=1, d=2
+      # Step 0: k=[1,0], v=[1,0], beta=1
+      #   S = outer([1,0], [1,0]) = [[1,0],[0,0]]
+      # Step 1: k=[0,1], v=[0,1], beta=1
+      #   S^T@k = [[1,0],[0,0]]^T @ [0,1] = [0,0]
+      #   error = [0,1] - [0,0] = [0,1]
+      #   S += outer([0,1], [0,1]) → S = [[1,0],[0,1]] (identity!)
+      # query q=[1,1] → S@q = [1,1]
+      # RMS = sqrt(mean([1,1])) = sqrt(1) = 1
+      # o_normed = [1,1]
+      out_ts = f32_4d_typespec(1, 1, 1, 2)
+      q_ts = f32_4d_typespec(1, 1, 1, 2)
+      k_ts = Typespec.tensor({:f, 32}, {1, 1, 2, 1, 2})
+      v_ts = Typespec.tensor({:f, 32}, {1, 1, 2, 1, 2})
+      beta_ts = Typespec.tensor({:f, 32}, {1, 1, 2, 1})
+
+      q = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[1.0, 1.0]]]], type: :f32)), q_ts)
+      # k: [1,1,2,1,2] — two Householder steps with orthogonal keys
+      k = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[[1.0, 0.0]], [[0.0, 1.0]]]]], type: :f32)), k_ts)
+      v = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[[1.0, 0.0]], [[0.0, 1.0]]]]], type: :f32)), v_ts)
+      beta = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[1.0, 1.0]]], type: :f32)), beta_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([q, k, v, beta], [], [out_ts], fn _builder, q_, k_, v_, b_ ->
+                 [Value.fused_delta_product_scan(q_, k_, v_, b_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32)
+      # S = I, q = [1,1], S@q = [1,1], RMS = sqrt(mean(1+1)) = sqrt(1) = 1
+      expected = Nx.tensor([1.0, 1.0])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-4) == Nx.tensor(1, type: :u8)
+    end
+
+    test "multi-step state accumulation" do
+      # batch=1, seq_len=2, n_h=1, heads=1, d=2
+      # Step 0: k=[1,0], v=[2,0], beta=1
+      #   S = outer([1,0],[2,0]) = [[2,0],[0,0]]
+      #   q=[1,0] → S@q=[2,0], RMS=sqrt(4/2)=sqrt(2), o=[2/sqrt(2), 0]=~[1.4142, 0]
+      # Step 1: k=[0,1], v=[0,3], beta=1
+      #   S^T@k = [[2,0],[0,0]]^T @ [0,1] = [0,0]
+      #   error = [0,3]-[0,0] = [0,3]
+      #   S += outer([0,1],[0,3]) → S = [[2,0],[0,3]]
+      #   q=[0,1] → S@q=[0,3], RMS=sqrt(9/2)=sqrt(4.5), o=[0, 3/sqrt(4.5)]
+      out_ts = f32_4d_typespec(1, 2, 1, 2)
+      q_ts = f32_4d_typespec(1, 2, 1, 2)
+      k_ts = Typespec.tensor({:f, 32}, {1, 2, 1, 1, 2})
+      v_ts = Typespec.tensor({:f, 32}, {1, 2, 1, 1, 2})
+      beta_ts = Typespec.tensor({:f, 32}, {1, 2, 1, 1})
+
+      q = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[1.0, 0.0]], [[0.0, 1.0]]]], type: :f32)), q_ts)
+      k = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[[1.0, 0.0]]], [[[0.0, 1.0]]]]], type: :f32)), k_ts)
+      v = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[[2.0, 0.0]]], [[[0.0, 3.0]]]]], type: :f32)), v_ts)
+      beta = BinaryBuffer.from_binary(
+        Nx.to_binary(Nx.tensor([[[[1.0]], [[1.0]]]], type: :f32)), beta_ts)
+
+      assert [result = %DeviceBuffer{}] =
+               run_one([q, k, v, beta], [], [out_ts], fn _builder, q_, k_, v_, b_ ->
+                 [Value.fused_delta_product_scan(q_, k_, v_, b_, out_ts)]
+               end)
+
+      result_tensor = Nx.from_binary(DeviceBuffer.read(result), :f32) |> Nx.reshape({1, 2, 1, 2})
+
+      # Step 0: S@q=[2,0], RMS=sqrt(2), o=[2/sqrt(2), 0]
+      rms0 = :math.sqrt(2.0)
+      # Step 1: S@q=[0,3], RMS=sqrt(4.5), o=[0, 3/sqrt(4.5)]
+      rms1 = :math.sqrt(4.5)
+      expected = Nx.tensor([[[[2.0 / rms0, 0.0]], [[0.0, 3.0 / rms1]]]])
+      assert Nx.all_close(result_tensor, expected, atol: 1.0e-3) == Nx.tensor(1, type: :u8)
+    end
+  end
 end
