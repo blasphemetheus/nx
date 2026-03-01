@@ -1219,6 +1219,140 @@ defmodule EXLA.MLIR.Value do
   end
 
   @doc """
+  Fused sLSTM scan via CUDA custom call.
+
+  sLSTM (scalar LSTM with exponential gating) uses log-domain stabilized gates:
+  m_t = max(log_f + m_{t-1}, log_i), i/f = exp(log_gate - m_t),
+  c = f*c + i*z, n = f*n + i, h = o * c/max(|n|, 1).
+
+  ## Arguments
+
+    * `wx` - [batch, seq_len, 4*hidden] f32 tensor (pre-computed W@x for i,f,z,o gates)
+    * `r` - [hidden, 4*hidden] f32 tensor (recurrent weight matrix)
+    * `h0` - [batch, hidden] f32 tensor (initial hidden state)
+    * `c0` - [batch, hidden] f32 tensor (initial cell state)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_slstm_scan(
+        %Value{function: func} = wx,
+        %Value{function: func} = r,
+        %Value{function: func} = h0,
+        %Value{function: func} = c0,
+        out_typespec
+      ) do
+    operands = [wx, r, h0, c0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_slstm_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused LSTM scan via CUDA custom call.
+
+  Standard LSTM with hidden-to-hidden matmul R@h fused into the scan:
+  i/f/o = sigmoid(wx + rh), g = tanh(wx + rh), c = f*c + i*g, h = o*tanh(c).
+
+  ## Arguments
+
+    * `wx` - [batch, seq_len, 4*hidden] f32 tensor (pre-computed W@x + bias)
+    * `r` - [hidden, 4*hidden] f32 tensor (recurrent weight matrix)
+    * `h0` - [batch, hidden] f32 tensor (initial hidden state)
+    * `c0` - [batch, hidden] f32 tensor (initial cell state)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_lstm_scan(
+        %Value{function: func} = wx,
+        %Value{function: func} = r,
+        %Value{function: func} = h0,
+        %Value{function: func} = c0,
+        out_typespec
+      ) do
+    operands = [wx, r, h0, c0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_lstm_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused GRU scan via CUDA custom call.
+
+  Standard GRU with hidden-to-hidden matmul R@h fused into the scan:
+  z = sigmoid(wx_z + rh_z), r = sigmoid(wx_r + rh_r),
+  h_tilde = tanh(wx_h + r * rh_h), h = (1-z)*h_tilde + z*h_prev.
+
+  ## Arguments
+
+    * `wx` - [batch, seq_len, 3*hidden] f32 tensor (pre-computed W@x + bias)
+    * `r` - [hidden, 3*hidden] f32 tensor (recurrent weight matrix)
+    * `h0` - [batch, hidden] f32 tensor (initial hidden state)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_gru_scan(
+        %Value{function: func} = wx,
+        %Value{function: func} = r,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [wx, r, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_gru_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused TTT-Linear (Test-Time Training) scan via CUDA custom call.
+
+  TTT uses an inner linear model W as hidden state, updated per timestep:
+  pred = W@k, error = LN(pred) - v, W -= eta * error @ k^T, out = W@q.
+
+  ## Arguments
+
+    * `q` - [batch, seq_len, inner_size] f32 tensor (query projections)
+    * `k` - [batch, seq_len, inner_size] f32 tensor (key projections)
+    * `v` - [batch, seq_len, inner_size] f32 tensor (value/target projections)
+    * `eta` - [batch, seq_len, inner_size] f32 tensor (learning rate, post-sigmoid/scaled)
+    * `w0` - [batch, inner_size, inner_size] f32 tensor (initial weight matrix)
+    * `ln_g` - [inner_size] f32 tensor (LayerNorm gamma)
+    * `ln_b` - [inner_size] f32 tensor (LayerNorm beta)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, inner_size})`
+  """
+  def fused_ttt_scan(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = eta,
+        %Value{function: func} = w0,
+        %Value{function: func} = ln_g,
+        %Value{function: func} = ln_b,
+        out_typespec
+      ) do
+    operands = [q, k, v, eta, w0, ln_g, ln_b]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_ttt_scan_f32"),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
   Builds a StableHLO `custom_call` that targets the EXLA Elixir callback bridge.
 
   The `callback_id` is typically the underlying `Nx.Defn.Expr` id of the
