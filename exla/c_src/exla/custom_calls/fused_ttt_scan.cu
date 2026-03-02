@@ -43,7 +43,7 @@ constexpr float TTT_LN_EPS = 1.0e-6f;
 // With 64 threads per block, that's 16KB registers — fits fine.
 
 // Max inner_size we support in registers
-#define TTT_MAX_INNER 128
+#define TTT_MAX_INNER 256
 
 __global__ void fused_ttt_scan_kernel(
     const float* __restrict__ q,      // [B, T, D]
