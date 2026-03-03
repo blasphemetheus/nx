@@ -877,19 +877,22 @@ defmodule EXLA.MLIR.Value do
     op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
   end
 
-  @doc """
-  Fused MinGRU scan via CUDA custom call.
+  # Fused MinGRU scan via CUDA custom call.
+  #
+  # Runs the entire sequential scan in a single CUDA kernel, avoiding per-timestep
+  # graph breaks. The kernel is defined in `c_src/exla/custom_calls/fused_mingru_scan.cu`.
+  #
+  # Arguments:
+  #   * `gates` - [batch, seq_len, hidden] f32 tensor (post-sigmoid gate values)
+  #   * `candidates` - [batch, seq_len, hidden] f32 tensor
+  #   * `h0` - [batch, hidden] f32 tensor (initial hidden state)
+  #   * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
 
-  Runs the entire sequential scan in a single CUDA kernel, avoiding per-timestep
-  graph breaks. The kernel is defined in `c_src/exla/custom_calls/fused_mingru_scan.cu`.
+  # Derive precision suffix from a typespec for fused kernel dispatch.
+  # bf16 tensors dispatch to bf16 kernels; everything else to f32.
+  defp fused_precision_suffix(%{type: {:bf, 16}}), do: "bf16"
+  defp fused_precision_suffix(_), do: "f32"
 
-  ## Arguments
-
-    * `gates` - [batch, seq_len, hidden] f32 tensor (post-sigmoid gate values)
-    * `candidates` - [batch, seq_len, hidden] f32 tensor
-    * `h0` - [batch, hidden] f32 tensor (initial hidden state)
-    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
-  """
   def fused_mingru_scan(
         %Value{function: func} = gates,
         %Value{function: func} = candidates,
@@ -900,7 +903,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_mingru_scan_f32"),
+      call_target_name: attr_string("exla_fused_mingru_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -932,7 +935,152 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_minlstm_scan_f32"),
+      call_target_name: attr_string("exla_fused_minlstm_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused MinGRU multi-layer block scan via CUDA custom call.
+
+  Processes all layers in a single kernel launch: LayerNorm → Dense projections →
+  Sigmoid → Scan → Residual, with activations kept in shared memory/registers.
+
+  ## Arguments
+
+    * `input` - [batch, seq_len, hidden] f32 tensor
+    * `weights` - [num_layers * (2*H*H + 4*H)] f32 flat packed weights
+    * `h0` - [batch, num_layers, hidden] f32 tensor (per-layer initial states)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_mingru_block_scan(
+        %Value{function: func} = input,
+        %Value{function: func} = weights,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [input, weights, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_mingru_block_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused MinLSTM multi-layer block scan via CUDA custom call.
+
+  Same as `fused_mingru_block_scan/4` but for MinLSTM with 3 projections
+  and softmax-normalized forget/input gates.
+
+  ## Arguments
+
+    * `input` - [batch, seq_len, hidden] f32 tensor
+    * `weights` - [num_layers * (3*H*H + 5*H)] f32 flat packed weights
+    * `h0` - [batch, num_layers, hidden] f32 tensor (per-layer initial states)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_minlstm_block_scan(
+        %Value{function: func} = input,
+        %Value{function: func} = weights,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [input, weights, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_minlstm_block_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused linear multi-layer block scan via CUDA custom call.
+
+  Processes all layers of a linear scan stack (h = a*h + b) in a single kernel.
+
+  ## Arguments
+
+    * `input` - [batch, seq_len, hidden] tensor
+    * `weights` - [num_layers * (2*H*H + 4*H)] flat packed weights
+    * `h0` - [batch, num_layers, hidden] per-layer initial states
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_linear_block_scan(
+        %Value{function: func} = input,
+        %Value{function: func} = weights,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [input, weights, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_linear_block_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused LSTM multi-layer block scan via CUDA custom call.
+
+  ## Arguments
+
+    * `input` - [batch, seq_len, hidden] tensor
+    * `weights` - [num_layers * (8*H*H + 6*H)] flat packed weights
+    * `h0` - [batch, num_layers, hidden] per-layer initial hidden states
+    * `c0` - [batch, num_layers, hidden] per-layer initial cell states
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_lstm_block_scan(
+        %Value{function: func} = input,
+        %Value{function: func} = weights,
+        %Value{function: func} = h0,
+        %Value{function: func} = c0,
+        out_typespec
+      ) do
+    operands = [input, weights, h0, c0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_lstm_block_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused GRU multi-layer block scan via CUDA custom call.
+
+  ## Arguments
+
+    * `input` - [batch, seq_len, hidden] tensor
+    * `weights` - [num_layers * (6*H*H + 5*H)] flat packed weights
+    * `h0` - [batch, num_layers, hidden] per-layer initial states
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, seq_len, hidden})`
+  """
+  def fused_gru_block_scan(
+        %Value{function: func} = input,
+        %Value{function: func} = weights,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [input, weights, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_gru_block_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -961,7 +1109,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_liquid_scan_f32"),
+      call_target_name: attr_string("exla_fused_liquid_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -991,7 +1139,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_elu_gru_scan_f32"),
+      call_target_name: attr_string("exla_fused_elu_gru_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1020,7 +1168,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_real_gru_scan_f32"),
+      call_target_name: attr_string("exla_fused_real_gru_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1049,7 +1197,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_diag_linear_scan_f32"),
+      call_target_name: attr_string("exla_fused_diag_linear_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1079,11 +1227,490 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_linear_scan_f32"),
+      call_target_name: attr_string("exla_fused_linear_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
     op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused linear scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_a, grad_b, grad_h0}.
+  """
+  def fused_linear_scan_backward(
+        %Value{function: func} = a_vals,
+        %Value{function: func} = h0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_a_typespec, grad_b_typespec, grad_h0_typespec
+      ) do
+    operands = [a_vals, h0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_a_typespec, grad_b_typespec, grad_h0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_linear_scan_backward_" <> fused_precision_suffix(grad_a_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_a, grad_b, grad_h0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_a, grad_b, grad_h0}
+  end
+
+  @doc """
+  Fused MinGRU scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_z, grad_cand, grad_h0}.
+  """
+  def fused_mingru_scan_backward(
+        %Value{function: func} = z,
+        %Value{function: func} = candidates,
+        %Value{function: func} = h0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_z_typespec, grad_cand_typespec, grad_h0_typespec
+      ) do
+    operands = [z, candidates, h0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_z_typespec, grad_cand_typespec, grad_h0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_mingru_scan_backward_" <> fused_precision_suffix(grad_z_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_z, grad_cand, grad_h0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_z, grad_cand, grad_h0}
+  end
+
+  @doc """
+  Fused MinLSTM scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_f, grad_i, grad_cand, grad_h0}.
+  """
+  def fused_minlstm_scan_backward(
+        %Value{function: func} = f,
+        %Value{function: func} = i_gate,
+        %Value{function: func} = candidates,
+        %Value{function: func} = h0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_f_typespec, grad_i_typespec, grad_cand_typespec, grad_h0_typespec
+      ) do
+    operands = [f, i_gate, candidates, h0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_f_typespec, grad_i_typespec, grad_cand_typespec, grad_h0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_minlstm_scan_backward_" <> fused_precision_suffix(grad_f_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_f, grad_i, grad_cand, grad_h0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_f, grad_i, grad_cand, grad_h0}
+  end
+
+  @doc """
+  Fused ELU-GRU scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_z, grad_c, grad_h0}.
+  """
+  def fused_elu_gru_scan_backward(
+        %Value{function: func} = z,
+        %Value{function: func} = c,
+        %Value{function: func} = h0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_z_typespec, grad_c_typespec, grad_h0_typespec
+      ) do
+    operands = [z, c, h0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_z_typespec, grad_c_typespec, grad_h0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_elu_gru_scan_backward_" <> fused_precision_suffix(grad_z_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_z, grad_c, grad_h0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_z, grad_c, grad_h0}
+  end
+
+  @doc """
+  Fused Real-GRU scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_z, grad_cand, grad_h0}.
+  """
+  def fused_real_gru_scan_backward(
+        %Value{function: func} = z,
+        %Value{function: func} = candidates,
+        %Value{function: func} = h0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_z_typespec, grad_cand_typespec, grad_h0_typespec
+      ) do
+    operands = [z, candidates, h0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_z_typespec, grad_cand_typespec, grad_h0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_real_gru_scan_backward_" <> fused_precision_suffix(grad_z_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_z, grad_cand, grad_h0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_z, grad_cand, grad_h0}
+  end
+
+  @doc """
+  Fused DiagLinear scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_a, grad_b, grad_h0}.
+  """
+  def fused_diag_linear_scan_backward(
+        %Value{function: func} = a_sig,
+        %Value{function: func} = h0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_a_typespec, grad_b_typespec, grad_h0_typespec
+      ) do
+    operands = [a_sig, h0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_a_typespec, grad_b_typespec, grad_h0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_diag_linear_scan_backward_" <> fused_precision_suffix(grad_a_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_a, grad_b, grad_h0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_a, grad_b, grad_h0}
+  end
+
+  @doc """
+  Fused LSTM scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_wx, grad_h0, grad_c0}.
+  """
+  def fused_lstm_scan_backward(
+        %Value{function: func} = wx,
+        %Value{function: func} = r,
+        %Value{function: func} = h0,
+        %Value{function: func} = c0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_wx_typespec, grad_h0_typespec, grad_c0_typespec
+      ) do
+    operands = [wx, r, h0, c0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_wx_typespec, grad_h0_typespec, grad_c0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_lstm_scan_backward_" <> fused_precision_suffix(grad_wx_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_wx, grad_h0, grad_c0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_wx, grad_h0, grad_c0}
+  end
+
+  @doc """
+  Fused GRU scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_wx, grad_rh, grad_h0}.
+  """
+  def fused_gru_scan_backward(
+        %Value{function: func} = wx,
+        %Value{function: func} = r,
+        %Value{function: func} = h0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_wx_typespec, grad_rh_typespec, grad_h0_typespec
+      ) do
+    operands = [wx, r, h0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_wx_typespec, grad_rh_typespec, grad_h0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_gru_scan_backward_" <> fused_precision_suffix(grad_wx_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_wx, grad_rh, grad_h0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_wx, grad_rh, grad_h0}
+  end
+
+  @doc """
+  Fused Selective Scan (Mamba) backward via CUDA custom call.
+
+  Multi-output: returns {grad_x, grad_dt, grad_B, grad_C}.
+  """
+  def fused_selective_scan_backward(
+        %Value{function: func} = x,
+        %Value{function: func} = dt,
+        %Value{function: func} = a,
+        %Value{function: func} = b,
+        %Value{function: func} = c,
+        %Value{function: func} = grad_output,
+        grad_x_typespec, grad_dt_typespec, grad_b_typespec, grad_c_typespec
+      ) do
+    operands = [x, dt, a, b, c, grad_output]
+    result_types = typespecs_to_mlir_types([grad_x_typespec, grad_dt_typespec, grad_b_typespec, grad_c_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_selective_scan_backward_" <> fused_precision_suffix(grad_x_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_x, grad_dt, grad_b, grad_c] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_x, grad_dt, grad_b, grad_c}
+  end
+
+  @doc """
+  Fused Liquid scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_tau, grad_act, grad_h0}.
+  """
+  def fused_liquid_scan_backward(
+        %Value{function: func} = tau,
+        %Value{function: func} = activation,
+        %Value{function: func} = h0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_tau_typespec, grad_act_typespec, grad_h0_typespec
+      ) do
+    operands = [tau, activation, h0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_tau_typespec, grad_act_typespec, grad_h0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_liquid_scan_backward_" <> fused_precision_suffix(grad_tau_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_tau, grad_act, grad_h0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_tau, grad_act, grad_h0}
+  end
+
+  @doc """
+  Fused DeltaNet (delta rule) scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_q, grad_k, grad_v, grad_beta}.
+  """
+  def fused_delta_rule_scan_backward(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = beta,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_q_typespec, grad_k_typespec, grad_v_typespec, grad_beta_typespec
+      ) do
+    operands = [q, k, v, beta, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_q_typespec, grad_k_typespec, grad_v_typespec, grad_beta_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_delta_rule_scan_backward_" <> fused_precision_suffix(grad_q_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_q, grad_k, grad_v, grad_beta] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_q, grad_k, grad_v, grad_beta}
+  end
+
+  @doc """
+  Fused GatedDeltaNet scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_q, grad_k, grad_v, grad_beta, grad_alpha}.
+  """
+  def fused_gated_delta_net_scan_backward(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = beta,
+        %Value{function: func} = alpha,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_q_typespec, grad_k_typespec, grad_v_typespec, grad_beta_typespec, grad_alpha_typespec
+      ) do
+    operands = [q, k, v, beta, alpha, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_q_typespec, grad_k_typespec, grad_v_typespec, grad_beta_typespec, grad_alpha_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_gated_delta_net_scan_backward_" <> fused_precision_suffix(grad_q_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_q, grad_k, grad_v, grad_beta, grad_alpha] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_q, grad_k, grad_v, grad_beta, grad_alpha}
+  end
+
+  @doc """
+  Fused DeltaProduct scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_q, grad_k, grad_v, grad_beta}.
+  """
+  def fused_delta_product_scan_backward(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = beta,
+        %Value{function: func} = grad_output,
+        grad_q_typespec, grad_k_typespec, grad_v_typespec, grad_beta_typespec
+      ) do
+    operands = [q, k, v, beta, grad_output]
+    result_types = typespecs_to_mlir_types([grad_q_typespec, grad_k_typespec, grad_v_typespec, grad_beta_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_delta_product_scan_backward_" <> fused_precision_suffix(grad_q_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_q, grad_k, grad_v, grad_beta] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_q, grad_k, grad_v, grad_beta}
+  end
+
+  @doc """
+  Fused sLSTM scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_wx, grad_h0, grad_c0}.
+  """
+  def fused_slstm_scan_backward(
+        %Value{function: func} = wx,
+        %Value{function: func} = r,
+        %Value{function: func} = h0,
+        %Value{function: func} = c0,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_wx_typespec, grad_h0_typespec, grad_c0_typespec
+      ) do
+    operands = [wx, r, h0, c0, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_wx_typespec, grad_h0_typespec, grad_c0_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_slstm_scan_backward_" <> fused_precision_suffix(grad_wx_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_wx, grad_h0, grad_c0] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_wx, grad_h0, grad_c0}
+  end
+
+  @doc """
+  Fused KDA (Kimi Delta Attention) scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_q, grad_k, grad_v, grad_alpha, grad_beta}.
+  """
+  def fused_kda_scan_backward(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = alpha,
+        %Value{function: func} = beta,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_q_typespec, grad_k_typespec, grad_v_typespec, grad_alpha_typespec, grad_beta_typespec
+      ) do
+    operands = [q, k, v, alpha, beta, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_q_typespec, grad_k_typespec, grad_v_typespec, grad_alpha_typespec, grad_beta_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_kda_scan_backward_" <> fused_precision_suffix(grad_q_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_q, grad_k, grad_v, grad_alpha, grad_beta] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_q, grad_k, grad_v, grad_alpha, grad_beta}
+  end
+
+  @doc """
+  Fused RLA/RDN (Residual Linear Attention) scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_q, grad_k, grad_v, grad_alpha, grad_beta, grad_gamma}.
+  """
+  def fused_rla_scan_backward(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = alpha,
+        %Value{function: func} = beta,
+        %Value{function: func} = gamma,
+        %Value{function: func} = fwd_grad_packed,
+        grad_q_typespec, grad_k_typespec, grad_v_typespec,
+        grad_alpha_typespec, grad_beta_typespec, grad_gamma_typespec
+      ) do
+    # 7 operands: forward_out and grad_output packed into [2,B,T,H,d] on MLIR side
+    # to stay within XLA's 7-operand custom_call limit. Handler unpacks.
+    # variant/clip hardcoded in handler (variant=0, clip=1.0).
+    operands = [q, k, v, alpha, beta, gamma, fwd_grad_packed]
+    result_types = typespecs_to_mlir_types([grad_q_typespec, grad_k_typespec, grad_v_typespec,
+                                            grad_alpha_typespec, grad_beta_typespec, grad_gamma_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_rla_scan_backward_" <> fused_precision_suffix(grad_q_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_q, grad_k, grad_v, grad_alpha, grad_beta, grad_gamma] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_q, grad_k, grad_v, grad_alpha, grad_beta, grad_gamma}
+  end
+
+  @doc """
+  Fused TTT-Linear scan backward via CUDA custom call.
+
+  Multi-output: returns {grad_q, grad_k, grad_v, grad_eta, grad_w0, grad_lng, grad_lnb}.
+  """
+  def fused_ttt_scan_backward(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = eta,
+        %Value{function: func} = w0,
+        %Value{function: func} = ln_g,
+        %Value{function: func} = ln_b,
+        %Value{function: func} = forward_out,
+        %Value{function: func} = grad_output,
+        grad_q_typespec, grad_k_typespec, grad_v_typespec, grad_eta_typespec,
+        grad_w0_typespec, grad_lng_typespec, grad_lnb_typespec
+      ) do
+    operands = [q, k, v, eta, w0, ln_g, ln_b, forward_out, grad_output]
+    result_types = typespecs_to_mlir_types([grad_q_typespec, grad_k_typespec, grad_v_typespec,
+                                            grad_eta_typespec, grad_w0_typespec, grad_lng_typespec, grad_lnb_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_ttt_scan_backward_" <> fused_precision_suffix(grad_q_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [grad_q, grad_k, grad_v, grad_eta, grad_w0, grad_lng, grad_lnb] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {grad_q, grad_k, grad_v, grad_eta, grad_w0, grad_lng, grad_lnb}
   end
 
   @doc """
@@ -1111,7 +1738,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_delta_net_scan_f32"),
+      call_target_name: attr_string("exla_fused_delta_net_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1144,7 +1771,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_gated_delta_net_scan_f32"),
+      call_target_name: attr_string("exla_fused_gated_delta_net_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1178,7 +1805,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_selective_scan_f32"),
+      call_target_name: attr_string("exla_fused_selective_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1211,7 +1838,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_delta_product_scan_f32"),
+      call_target_name: attr_string("exla_fused_delta_product_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1244,7 +1871,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_slstm_scan_f32"),
+      call_target_name: attr_string("exla_fused_slstm_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1276,7 +1903,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_lstm_scan_f32"),
+      call_target_name: attr_string("exla_fused_lstm_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1307,7 +1934,7 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_gru_scan_f32"),
+      call_target_name: attr_string("exla_fused_gru_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
@@ -1345,10 +1972,284 @@ defmodule EXLA.MLIR.Value do
     result_types = typespecs_to_mlir_types([out_typespec])
 
     attributes = [
-      call_target_name: attr_string("exla_fused_ttt_scan_f32"),
+      call_target_name: attr_string("exla_fused_ttt_scan_" <> fused_precision_suffix(out_typespec)),
       api_version: attr_i32(4)
     ]
 
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  def fused_kda_scan(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = alpha,
+        %Value{function: func} = beta,
+        out_typespec
+      ) do
+    operands = [q, k, v, alpha, beta]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_kda_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  def fused_rla_scan(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = alpha,
+        %Value{function: func} = beta,
+        %Value{function: func} = gamma,
+        out_typespec
+      ) do
+    # 6 operands only — variant/clip omitted due to XLA 7-operand limit on custom_calls.
+    # Handler hardcodes variant=0, clip=1.0.
+    operands = [q, k, v, alpha, beta, gamma]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_rla_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused Flash Attention V2 via CUDA custom call.
+
+  IO-aware exact attention with tiled loading and online softmax.
+  Avoids materializing the full [seq, seq] attention matrix.
+
+  ## Arguments
+
+    * `q` - [batch, heads, seq_len, head_dim] f32 tensor
+    * `k` - [batch, heads, seq_len, head_dim] f32 tensor
+    * `v` - [batch, heads, seq_len, head_dim] f32 tensor
+    * `causal` - scalar i32 tensor (0 = full, 1 = causal mask)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, heads, seq_len, head_dim})`
+  """
+  def fused_flash_attention(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        out_typespec
+      ) do
+    operands = [q, k, v]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_flash_attention_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  LASER flash attention custom call.
+
+  Computes `log(softmax(QK^T / sqrt(d)) @ exp(V))` using the LWSE trick.
+
+  ## Operands
+    * `q` - [batch, heads, seq_len, head_dim] f32 tensor
+    * `k` - [batch, heads, seq_len, head_dim] f32 tensor
+    * `v` - [batch, heads, seq_len, head_dim] f32 tensor
+    * `v_max` - [batch, heads, 1, head_dim] f32 tensor
+    * `causal` - scalar i32 tensor (0 = full, 1 = causal mask)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, heads, seq_len, head_dim})`
+  """
+  def fused_laser_attention(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = v_max,
+        out_typespec
+      ) do
+    operands = [q, k, v, v_max]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_laser_attention_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  FoX flash attention custom call.
+
+  Computes `softmax(QK^T / sqrt(d) + forget_bias) @ V` with
+  cumulative log-forget bias fused into the tiled sweep.
+
+  ## Operands
+    * `q` - [batch, heads, seq_len, head_dim] f32 tensor
+    * `k` - [batch, heads, seq_len, head_dim] f32 tensor
+    * `v` - [batch, heads, seq_len, head_dim] f32 tensor
+    * `cs` - [batch, heads, seq_len] f32 tensor (cumulative log-forget)
+    * `out_typespec` - `Typespec.tensor({:f, 32}, {batch, heads, seq_len, head_dim})`
+  """
+  def fused_fox_attention(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = cs,
+        out_typespec
+      ) do
+    operands = [q, k, v, cs]
+    result_types = typespecs_to_mlir_types([out_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_fox_attention_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  @doc """
+  Fused Flash Attention backward via CUDA custom call.
+
+  Multi-output: returns {dQ, dK, dV}.
+  """
+  def fused_flash_attention_backward(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = o,
+        %Value{function: func} = grad_o,
+        dq_typespec, dk_typespec, dv_typespec
+      ) do
+    operands = [q, k, v, o, grad_o]
+    result_types = typespecs_to_mlir_types([dq_typespec, dk_typespec, dv_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_flash_attention_backward_" <> fused_precision_suffix(dq_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [dq, dk, dv] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {dq, dk, dv}
+  end
+
+  @doc """
+  Fused LASER Attention backward via CUDA custom call.
+
+  Multi-output: returns {dQ, dK, dV}.
+  """
+  def fused_laser_attention_backward(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = v_max,
+        %Value{function: func} = o,
+        %Value{function: func} = grad_o,
+        dq_typespec, dk_typespec, dv_typespec
+      ) do
+    operands = [q, k, v, v_max, o, grad_o]
+    result_types = typespecs_to_mlir_types([dq_typespec, dk_typespec, dv_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_laser_attention_backward_" <> fused_precision_suffix(dq_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [dq, dk, dv] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {dq, dk, dv}
+  end
+
+  @doc """
+  Fused FoX Attention backward via CUDA custom call.
+
+  Multi-output: returns {dQ, dK, dV, grad_cs}.
+  """
+  def fused_fox_attention_backward(
+        %Value{function: func} = q,
+        %Value{function: func} = k,
+        %Value{function: func} = v,
+        %Value{function: func} = cs,
+        %Value{function: func} = o,
+        %Value{function: func} = grad_o,
+        dq_typespec, dk_typespec, dv_typespec, dcs_typespec
+      ) do
+    operands = [q, k, v, cs, o, grad_o]
+    result_types = typespecs_to_mlir_types([dq_typespec, dk_typespec, dv_typespec, dcs_typespec])
+
+    attributes = [
+      call_target_name: attr_string("exla_fused_fox_attention_backward_" <> fused_precision_suffix(dq_typespec)),
+      api_version: attr_i32(4)
+    ]
+
+    [dq, dk, dv, dcs] =
+      op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+
+    {dq, dk, dv, dcs}
+  end
+
+  def fused_reservoir_scan(
+        %Value{function: func} = wx,
+        %Value{function: func} = w_res,
+        %Value{function: func} = h0,
+        out_typespec
+      ) do
+    operands = [wx, w_res, h0]
+    result_types = typespecs_to_mlir_types([out_typespec])
+    attributes = [
+      call_target_name: attr_string("exla_fused_reservoir_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  def fused_titans_scan(
+        %Value{function: func} = combined,
+        out_typespec
+      ) do
+    operands = [combined]
+    result_types = typespecs_to_mlir_types([out_typespec])
+    attributes = [
+      call_target_name: attr_string("exla_fused_titans_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  def fused_miras_scan(
+        %Value{function: func} = combined,
+        out_typespec
+      ) do
+    operands = [combined]
+    result_types = typespecs_to_mlir_types([out_typespec])
+    attributes = [
+      call_target_name: attr_string("exla_fused_miras_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
+    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
+  end
+
+  def fused_gsa_scan(
+        %Value{function: func} = q,
+        %Value{function: func} = k_slot,
+        %Value{function: func} = v,
+        %Value{function: func} = alpha,
+        out_typespec
+      ) do
+    operands = [q, k_slot, v, alpha]
+    result_types = typespecs_to_mlir_types([out_typespec])
+    attributes = [
+      call_target_name: attr_string("exla_fused_gsa_scan_" <> fused_precision_suffix(out_typespec)),
+      api_version: attr_i32(4)
+    ]
     op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes) |> one!()
   end
 
@@ -1570,6 +2471,7 @@ defmodule EXLA.MLIR.Value do
   defp attr_boolean(false), do: "false"
 
   defp attr_i32(number), do: "#{number} : i32"
+
   defp attr_i64(number), do: "#{number} : i64"
   defp attr_ui64(number), do: "#{number} : ui64"
 

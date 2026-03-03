@@ -32,6 +32,7 @@
 //   Total: ~17KB — well within 48KB limit
 
 #include <cuda_runtime.h>
+#include "precision.cuh"
 
 constexpr float NORM_EPS = 1.0e-6f;
 
@@ -40,11 +41,11 @@ constexpr float NORM_EPS = 1.0e-6f;
 // ============================================================================
 
 __global__ void fused_delta_product_scan_kernel(
-    const float* __restrict__ q,       // [B, T, H, d]
-    const float* __restrict__ k,       // [B, T, n_h, H, d]
-    const float* __restrict__ v,       // [B, T, n_h, H, d]
-    const float* __restrict__ beta,    // [B, T, n_h, H]
-    float* __restrict__ output,        // [B, T, H, d]
+    const io_type* __restrict__ q,       // [B, T, H, d]
+    const io_type* __restrict__ k,       // [B, T, n_h, H, d]
+    const io_type* __restrict__ v,       // [B, T, n_h, H, d]
+    const io_type* __restrict__ beta,    // [B, T, n_h, H]
+    io_type* __restrict__ output,        // [B, T, H, d]
     int seq_len,
     int num_householder,
     int num_heads,
@@ -96,17 +97,13 @@ __global__ void fused_delta_product_scan_kernel(
             int beta_offset = beta_base + t * beta_stride_T + j * beta_stride_J;
 
             // Load k_{t,j}[i] into shared + register
-            float k_i = k[kv_offset + i];
+            float k_i = IO_LOAD(k, kv_offset + i);
             k_shared[i] = k_i;
             __syncthreads();
 
             // L2 normalize k: compute ||k||^2 via shared memory reduction
-            // Each thread computes k_i^2, then we sum across threads
             float k_sq = k_i * k_i;
 
-            // Simple shared memory reduction for L2 norm
-            // Reuse rms_shared buffer for the partial sum
-            // Use atomicAdd since head_dim may not be power of 2
             if (i == 0) rms_shared[0] = 0.0f;
             __syncthreads();
             atomicAdd(rms_shared, k_sq);
@@ -117,126 +114,9 @@ __global__ void fused_delta_product_scan_kernel(
             k_shared[i] = k_normed_i;  // Store normalized k
             __syncthreads();
 
-            float beta_val = beta[beta_offset];
-
-            // S = S - beta * (k*k^T @ S) + beta * (k*v^T)
-            //
-            // For row i of S:
-            //   S[i][j] -= beta * k[i] * sum_l(k[l] * S[l][j])   (k*k^T @ S term)
-            //   S[i][j] += beta * k[i] * v[j]                      (k*v^T term)
-            //
-            // But k*k^T @ S requires reading column j across all rows → needs sync.
-            // Instead: retrieval[i] = sum_j(S[i][j] * k[j]), then:
-            //   S[i][j] = S[i][j] - beta * k[i] * (S @ k)[i]'s contribution... no.
-            //
-            // Let's think about this differently:
-            //   (k*k^T @ S)[i][j] = k[i] * sum_l(k[l] * S[l][j])
-            //
-            // We need sum_l(k[l] * S[l][j]) for each column j.
-            // Each thread i has row S[i][*]. Thread i contributes k[i]*S[i][j] to column j's sum.
-            // This requires a cross-thread reduction per column — expensive.
-            //
-            // Alternative formulation:
-            //   S_new = S - beta*(k @ k^T @ S) + beta*(k @ v^T)
-            //         = S + beta*k @ (v^T - k^T @ S)
-            //         = S + beta*k @ (v - S^T @ k)^T
-            //
-            // Let error = v - S^T @ k (same as DeltaNet!)
-            // S_new[i][j] = S[i][j] + beta * k[i] * error[j]
-            //
-            // But error[j] = v[j] - sum_l(S[l][j] * k[l]) = v[j] - (S^T @ k)[j]
-            //
-            // Since each thread owns row i, computing S^T @ k needs:
-            //   (S^T @ k)[j] = sum_i(S[i][j] * k[i])
-            // Each thread can compute its contribution: S[i][j] * k[i] for all j,
-            // then reduce across threads.
-            //
-            // Simpler approach using the thread-per-row layout:
-            // Thread i computes: retrieval_i = sum_j(S[i][j] * k[j])  (S @ k)
-            // Then:
-            //   S_new[i][j] = S[i][j] - beta * k_normed[i] * retrieval_i * k_normed[j]
-            //                          + beta * k_normed[i] * v[j]
-            //              = S[i][j] + beta * k_normed[i] * (v[j] - retrieval_i * k_normed[j])
-            //
-            // Wait — this isn't right either. Let me reconsider:
-            // (I - beta*k*k^T) @ S means we apply (I - beta*k*k^T) to each COLUMN of S.
-            // For column j: S_new[:,j] = S[:,j] - beta*(k*k^T)@S[:,j]
-            //             = S[:,j] - beta*k*(k^T @ S[:,j])
-            //             = S[:,j] - beta*k * sum_l(k[l]*S[l,j])
-            //
-            // So S_new[i][j] = S[i][j] - beta*k[i]*sum_l(k[l]*S[l,j]) + beta*k[i]*v[j]
-            //
-            // The sum_l(k[l]*S[l,j]) is a dot product of k with column j of S.
-            // Thread i owns row i, so it knows S[i,j] for all j.
-            // For column j, we need contributions from all threads (all rows).
-            //
-            // Efficient approach: each thread i computes partial = k[i] * S[i,j] for each j,
-            // then we need sum across i. This is a parallel reduction.
-            //
-            // With head_dim threads, we can do this column-by-column but that's O(d^2) syncs.
-            //
-            // Better: Thread i computes retrieval_i = S[i,:] @ k = sum_j(S[i,j]*k[j]).
-            // Then S^T @ k has element j = sum_i(S[i,j]*k[i]).
-            // But S[i,:] @ k is NOT the same as (S^T @ k)[i].
-            //
-            // S @ k gives us: (S@k)[i] = sum_j(S[i,j]*k[j]) — thread i can compute this.
-            // S^T @ k gives us: (S^T@k)[j] = sum_i(S[i,j]*k[i]) — needs cross-thread reduction.
-            //
-            // The Householder update needs (k*k^T) @ S, which applied to column j:
-            //   ((k*k^T) @ S)[:,j] = k * (k^T @ S[:,j])
-            //
-            // k^T @ S[:,j] = sum_i(k[i]*S[i,j]) — this is (S^T @ k)[j], same reduction issue.
-            //
-            // SOLUTION: Use the reformulation from the DeltaNet kernel!
-            //   S_new = S + beta * outer(k, v - S^T@k)
-            //
-            // But S^T@k requires cross-thread communication.
-            //
-            // ALTERNATIVE: Store S in COLUMN-major in shared memory.
-            // Thread i then owns COLUMN i of S: S[:,i].
-            // Then (S^T @ k)[i] = sum_j(S[j,i]*k[j]) = S[:,i] dot k = thread i can compute!
-            //
-            // Let me use column-major storage:
-            // S stored as S_col[col][row], thread i owns column i.
-
-            // Using row-major with a different formulation:
-            // Actually let's just compute S@k (each thread does its own row dot product),
-            // then share the result, and use it.
-            //
-            // For the Householder reflector (I - beta*k*k^T) applied to S:
-            //   S_new = S - beta * k * k^T @ S + beta * k * v^T
-            //
-            // Row i of S_new:
-            //   S_new[i,:] = S[i,:] - beta*k[i]*(k^T @ S)[1,:] ... no, this is wrong too.
-            //
-            //   (k*k^T @ S)[i,j] = k[i] * (k^T @ S[*,j])
-            //                     = k[i] * sum_l(k[l] * S[l,j])
-            //
-            // Each thread i can compute its OWN contribution to (k^T @ S)[for each col j]:
-            //   contrib_i_j = k[i] * S[i,j]
-            // Then (k^T @ S)[*,j] = sum_i(contrib_i_j)
-            //
-            // This is equivalent to: for each j, reduce k[i]*S[i,j] across all threads i.
-            // That's d reductions of d values each = O(d^2 log d) total. Too expensive.
-            //
-            // PRACTICAL APPROACH: Just compute S@k per thread (O(d) per thread),
-            // this gives us (S@k)[i]. Then use:
-            //
-            // Actually, let me reconsider the math:
-            //   S = (I - beta*k*k^T) @ S + beta*k*v^T
-            //
-            // Row i: S_new[i,:] = S[i,:] - beta*k[i]*(sum_l k[l]*S[l,:]) + beta*k[i]*v[:]
-            //
-            // The term sum_l(k[l]*S[l,:]) is a weighted sum of ALL rows of S.
-            // This is fundamentally a cross-row operation.
-            //
-            // MOST PRACTICAL: Use atomicAdd to accumulate k[i]*S[i,j] into shared buffer.
-            // We need a shared buffer of size head_dim for the result.
+            float beta_val = IO_LOAD(beta, beta_offset);
 
             // Phase 1: Compute S^T @ k via shared memory accumulation
-            // (S^T @ k)[j] = sum_i(S[i,j] * k[i])
-            // Reuse q_shared as temp buffer for this
-            // First zero it out
             if (i == 0) {
                 for (int jj = 0; jj < head_dim; jj++) {
                     q_shared[jj] = 0.0f;
@@ -251,18 +131,10 @@ __global__ void fused_delta_product_scan_kernel(
             __syncthreads();
 
             // Now q_shared[j] = (S^T @ k)[j]
-            // S_new[i][j] = S[i][j] - beta * k[i] * (S^T @ k)[j] + beta * k[i] * v[j]
-            //             = S[i][j] + beta * k[i] * (v[j] - (S^T @ k)[j])
-            float v_i_val = v[kv_offset + i];
-
-            // Load v into shared for the update (but we need v[j] not v[i])
-            // Thread i can only write v[i] to shared, then read v[j] from shared
-            // Reuse another shared buffer... but we're running low.
-            // Alternative: each thread reads v[j] directly from global memory.
-            // This is fine — v is only read once per Householder step.
+            // S_new[i][j] = S[i][j] + beta * k[i] * (v[j] - (S^T @ k)[j])
             float beta_k_i = beta_val * k_normed_i;
             for (int jj = 0; jj < head_dim; jj++) {
-                float v_j = v[kv_offset + jj];
+                float v_j = IO_LOAD(v, kv_offset + jj);
                 S[i * head_dim + jj] += beta_k_i * (v_j - q_shared[jj]);
             }
             __syncthreads();
@@ -272,7 +144,7 @@ __global__ void fused_delta_product_scan_kernel(
         int q_offset = q_base + t * q_stride_T;
 
         // Load q_t into shared
-        q_shared[i] = q[q_offset + i];
+        q_shared[i] = IO_LOAD(q, q_offset + i);
         __syncthreads();
 
         // Compute o_i = sum_j(S[i][j] * q[j])
@@ -282,7 +154,6 @@ __global__ void fused_delta_product_scan_kernel(
         }
 
         // RMS normalization: rms = sqrt(mean(o^2) + eps)
-        // Accumulate o_i^2 into shared
         if (i == 0) rms_shared[0] = 0.0f;
         __syncthreads();
         atomicAdd(rms_shared, o_i * o_i);
@@ -292,7 +163,7 @@ __global__ void fused_delta_product_scan_kernel(
         float o_normed = o_i * rms_inv;
 
         // Write output
-        output[q_offset + i] = o_normed;
+        IO_STORE(output, q_offset + i, o_normed);
         __syncthreads();
     }
 }
@@ -307,8 +178,8 @@ extern "C" {
 
 int fused_delta_product_scan_launch(
     cudaStream_t stream,
-    const float* q, const float* k, const float* v, const float* beta,
-    float* output,
+    const io_type* q, const io_type* k, const io_type* v, const io_type* beta,
+    io_type* output,
     int batch, int seq_len, int num_householder, int num_heads, int head_dim
 ) {
     dim3 grid(batch, num_heads);
@@ -343,11 +214,11 @@ namespace ffi = xla::ffi;
 
 ffi::Error fused_delta_product_scan_ffi_impl(
     cudaStream_t stream,
-    ffi::Buffer<ffi::F32> q,       // [B, T, H, d]
-    ffi::Buffer<ffi::F32> k,       // [B, T, n_h, H, d]
-    ffi::Buffer<ffi::F32> v,       // [B, T, n_h, H, d]
-    ffi::Buffer<ffi::F32> beta,    // [B, T, n_h, H]
-    ffi::ResultBuffer<ffi::F32> output  // [B, T, H, d]
+    ffi::Buffer<FFI_IO_TYPE> q,       // [B, T, H, d]
+    ffi::Buffer<FFI_IO_TYPE> k,       // [B, T, n_h, H, d]
+    ffi::Buffer<FFI_IO_TYPE> v,       // [B, T, n_h, H, d]
+    ffi::Buffer<FFI_IO_TYPE> beta,    // [B, T, n_h, H]
+    ffi::ResultBuffer<FFI_IO_TYPE> output  // [B, T, H, d]
 ) {
     // Extract dims from q: [B, T, H, d]
     auto q_dims = q.dimensions();
@@ -367,11 +238,11 @@ ffi::Error fused_delta_product_scan_ffi_impl(
                       + sizeof(float);
 
     fused_delta_product_scan_kernel<<<grid, block, smem_bytes, stream>>>(
-        reinterpret_cast<const float*>(q.untyped_data()),
-        reinterpret_cast<const float*>(k.untyped_data()),
-        reinterpret_cast<const float*>(v.untyped_data()),
-        reinterpret_cast<const float*>(beta.untyped_data()),
-        reinterpret_cast<float*>(output->untyped_data()),
+        reinterpret_cast<const io_type*>(q.untyped_data()),
+        reinterpret_cast<const io_type*>(k.untyped_data()),
+        reinterpret_cast<const io_type*>(v.untyped_data()),
+        reinterpret_cast<const io_type*>(beta.untyped_data()),
+        reinterpret_cast<io_type*>(output->untyped_data()),
         seq_len, num_householder, num_heads, head_dim
     );
 
@@ -387,14 +258,14 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
     fused_delta_product_scan, fused_delta_product_scan_ffi_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
-        .Arg<ffi::Buffer<ffi::F32>>()   // q
-        .Arg<ffi::Buffer<ffi::F32>>()   // k
-        .Arg<ffi::Buffer<ffi::F32>>()   // v
-        .Arg<ffi::Buffer<ffi::F32>>()   // beta
-        .Ret<ffi::Buffer<ffi::F32>>()   // output
+        .Arg<ffi::Buffer<FFI_IO_TYPE>>()   // q
+        .Arg<ffi::Buffer<FFI_IO_TYPE>>()   // k
+        .Arg<ffi::Buffer<FFI_IO_TYPE>>()   // v
+        .Arg<ffi::Buffer<FFI_IO_TYPE>>()   // beta
+        .Ret<ffi::Buffer<FFI_IO_TYPE>>()   // output
 );
 
 XLA_FFI_REGISTER_HANDLER(XLA_FFI_GetApi(),
-    "exla_fused_delta_product_scan_f32", "CUDA", fused_delta_product_scan);
+    "exla_fused_delta_product_scan_" PRECISION_SUFFIX, "CUDA", fused_delta_product_scan);
 
 #endif  // EXLA_FFI
