@@ -24,3 +24,10 @@ exla-*.tar
 /priv/
 /cache/
 /tmp/
+
+# Nix build artifacts
+/.cuda-compat
+/.nccl
+/.nix-hex/
+/.nix-mix/
+/.nvshmem
