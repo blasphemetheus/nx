@@ -1120,6 +1120,7 @@ defmodule Nx.Defn.Grad do
        when op in [:window_scatter_max, :window_scatter_min] do
     padding_config = opts[:padding]
     strides = opts[:strides]
+    window_dilations = opts[:window_dilations] || List.duplicate(1, tuple_size(window_dimensions))
 
     nx_function =
       case op do
@@ -1128,7 +1129,13 @@ defmodule Nx.Defn.Grad do
       end
 
     windows =
-      grad_scatter_window__gather_windows(tensor, window_dimensions, strides, padding_config)
+      grad_scatter_window__gather_windows(
+        tensor,
+        window_dimensions,
+        strides,
+        padding_config,
+        window_dilations
+      )
 
     arg_idx = nx_function.(windows)
 
@@ -1139,7 +1146,12 @@ defmodule Nx.Defn.Grad do
         tensor
         |> Nx.shape()
         |> Nx.iota(axis: axis)
-        |> grad_scatter_window__gather_windows(window_dimensions, strides, padding_config)
+        |> grad_scatter_window__gather_windows(
+          window_dimensions,
+          strides,
+          padding_config,
+          window_dilations
+        )
         |> Nx.take_along_axis(Nx.new_axis(arg_idx, -1), axis: -1)
       end)
       |> Nx.concatenate(axis: -1)
@@ -1478,7 +1490,13 @@ defmodule Nx.Defn.Grad do
     [{t, formatted_grad}]
   end
 
-  defp grad_scatter_window__gather_windows(tensor, window_dimensions, strides, padding) do
+  defp grad_scatter_window__gather_windows(
+         tensor,
+         window_dimensions,
+         strides,
+         padding,
+         window_dilations
+       ) do
     tensor = Nx.pad(tensor, 0, Enum.map(padding, &Nx.Shared.tuple_append(&1, 0)))
 
     shape_l = Tuple.to_list(tensor.shape)
@@ -1492,21 +1510,22 @@ defmodule Nx.Defn.Grad do
       end)
       |> grad_scatter_window__generate_window_start_indices()
 
-    # filter start indices given the shape and window length
+    # filter start indices given the shape, window length, and dilation
     starts =
       Enum.filter(starts, fn starts ->
-        [starts, window_dims_l, shape_l]
-        |> Enum.zip_with(fn [start, length, size] ->
-          start + length - 1 < size
+        [starts, window_dims_l, shape_l, window_dilations]
+        |> Enum.zip_with(fn [start, length, size, dilation] ->
+          start + (length - 1) * dilation < size
         end)
         |> Enum.all?()
       end)
 
     # get a tensor of {num_windows, elements_per_window}
+    # use dilations as strides in Nx.slice to sample elements at dilation spacing
     starts
     |> Enum.map(fn starts ->
       tensor
-      |> Nx.slice(starts, window_dims_l)
+      |> Nx.slice(starts, window_dims_l, strides: window_dilations)
       |> Nx.flatten()
     end)
     |> Nx.stack()

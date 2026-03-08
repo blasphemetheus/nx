@@ -4886,6 +4886,94 @@ defmodule Nx.Defn.GradTest do
       # the acummulated grad is 2 * 24 + 20 1s for the scattered values + the source grad for the positions where source was added
       assert init_value_grad == Nx.tensor(2 * 24 + 20) |> Nx.add(Nx.sum(expected_source_grad))
     end
+
+    defn grad_window_scatter_max_dilations(t, source, init) do
+      grad({t, source, init}, fn {t, source, init} ->
+        Nx.window_scatter_max(t, source, init, {2},
+          strides: [1],
+          padding: :valid,
+          window_dilations: [2]
+        )
+      end)
+    end
+
+    defn grad_window_scatter_min_dilations(t, source, init) do
+      grad({t, source, init}, fn {t, source, init} ->
+        Nx.window_scatter_min(t, source, init, {2},
+          strides: [1],
+          padding: :valid,
+          window_dilations: [2]
+        )
+      end)
+    end
+
+    test "window_scatter_max with window_dilations" do
+      # 1D: tensor [5, 1, 3, 2, 4], window {2}, dilation [2], stride [1]
+      # Dilated windows: [t[0],t[2]], [t[1],t[3]], [t[2],t[4]] => [5,3], [1,2], [3,4]
+      # Max indices in each window: 0, 1, 1 => positions 0, 3, 4
+      # Source [10, 20, 30] scattered to positions 0, 3, 4
+      t = Nx.tensor([5.0, 1.0, 3.0, 2.0, 4.0])
+      source = Nx.tensor([10.0, 20.0, 30.0])
+      init = Nx.tensor(0.0)
+
+      assert {input_grad, source_grad, init_value_grad} =
+               grad_window_scatter_max_dilations(t, source, init)
+
+      assert input_grad == Nx.broadcast(0, t)
+      assert source_grad == Nx.broadcast(1.0, source)
+      # 5 output positions, 3 filled by source, 2 filled by init => sum(g) = 5
+      assert init_value_grad == Nx.tensor(5.0)
+    end
+
+    test "window_scatter_min with window_dilations" do
+      # Same setup but min: windows [5,3], [1,2], [3,4]
+      # Min indices: 1, 0, 0 => positions 2, 1, 2
+      # Source [10, 20, 30] scattered to positions 2, 1, 2 (30 overwrites 10 at pos 2)
+      t = Nx.tensor([5.0, 1.0, 3.0, 2.0, 4.0])
+      source = Nx.tensor([10.0, 20.0, 30.0])
+      init = Nx.tensor(0.0)
+
+      assert {input_grad, source_grad, init_value_grad} =
+               grad_window_scatter_min_dilations(t, source, init)
+
+      assert input_grad == Nx.broadcast(0, t)
+      assert source_grad == Nx.broadcast(1.0, source)
+      assert init_value_grad == Nx.tensor(5.0)
+    end
+
+    defn grad_window_scatter_max_dilations_2d(t, source, init) do
+      grad({t, source, init}, fn {t, source, init} ->
+        Nx.window_scatter_max(t, source, init, {2, 2},
+          strides: [2, 2],
+          padding: :valid,
+          window_dilations: [2, 2]
+        )
+      end)
+    end
+
+    test "window_scatter_max with window_dilations 2D" do
+      # 5x5 input, window {2,2}, dilation [2,2], stride [2,2], padding :valid
+      # Effective window span: (2-1)*2+1 = 3 per dim
+      # Valid windows: floor((5-3)/2)+1 = 2 per dim => source is {2,2}
+      t = Nx.tensor([
+        [9.0, 1.0, 8.0, 2.0, 7.0],
+        [3.0, 4.0, 5.0, 6.0, 0.0],
+        [2.0, 8.0, 1.0, 7.0, 3.0],
+        [6.0, 0.0, 4.0, 5.0, 9.0],
+        [1.0, 3.0, 2.0, 8.0, 4.0]
+      ])
+
+      source = Nx.tensor([[10.0, 20.0], [30.0, 40.0]])
+      init = Nx.tensor(0.0)
+
+      assert {input_grad, source_grad, init_value_grad} =
+               grad_window_scatter_max_dilations_2d(t, source, init)
+
+      assert input_grad == Nx.broadcast(0, t)
+      assert source_grad == Nx.broadcast(1.0, source)
+      # 25 output positions, 4 from source, 21 from init => sum(g) = 25
+      assert init_value_grad == Nx.tensor(25.0)
+    end
   end
 
   describe "vectorization" do
