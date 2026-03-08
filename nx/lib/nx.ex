@@ -7425,7 +7425,7 @@ defmodule Nx do
   """
   @doc type: :window
   def window_scatter_max(tensor, source, init_value, window_dimensions, opts \\ []) do
-    opts = keyword!(opts, padding: :valid, strides: 1)
+    opts = keyword!(opts, padding: :valid, strides: 1, window_dilations: 1)
     Nx.Shape.validate!(window_dimensions, :window_dimensions)
 
     [tensor, source] = broadcast_vectors([tensor, source], align_ranks: true)
@@ -7443,13 +7443,17 @@ defmodule Nx do
 
     padding = opts[:padding]
     strides = opts[:strides]
+    window_dilations = opts[:window_dilations]
 
     strides =
       if is_integer(strides),
         do: List.duplicate(strides, rank(input_shape)),
         else: strides
 
-    dilations = List.duplicate(1, rank(input_shape))
+    dilations =
+      if is_integer(window_dilations),
+        do: List.duplicate(window_dilations, rank(input_shape)),
+        else: window_dilations
 
     {output_window_shape, padding_config} =
       Nx.Shape.pool(input_shape, window_dimensions, strides, padding, dilations)
@@ -7463,6 +7467,7 @@ defmodule Nx do
 
     padding_config = List.duplicate({0, 0}, offset) ++ padding_config
     strides = List.duplicate(1, offset) ++ strides
+    dilations = List.duplicate(1, offset) ++ dilations
 
     window_dimensions =
       if offset != 0 do
@@ -7482,7 +7487,8 @@ defmodule Nx do
         init_value,
         window_dimensions,
         padding: padding_config,
-        strides: strides
+        strides: strides,
+        window_dilations: dilations
       )
 
     vectorize(result, vectorized_axes)
@@ -7588,7 +7594,7 @@ defmodule Nx do
   """
   @doc type: :window
   def window_scatter_min(tensor, source, init_value, window_dimensions, opts \\ []) do
-    opts = keyword!(opts, padding: :valid, strides: 1)
+    opts = keyword!(opts, padding: :valid, strides: 1, window_dilations: 1)
 
     [tensor, source] = broadcast_vectors([tensor, source])
     %T{shape: input_shape, vectorized_axes: vectorized_axes} = tensor
@@ -7605,13 +7611,17 @@ defmodule Nx do
 
     padding = opts[:padding]
     strides = opts[:strides]
+    window_dilations = opts[:window_dilations]
 
     strides =
       if is_integer(strides),
         do: List.duplicate(strides, rank(input_shape)),
         else: strides
 
-    dilations = List.duplicate(1, rank(input_shape))
+    dilations =
+      if is_integer(window_dilations),
+        do: List.duplicate(window_dilations, rank(input_shape)),
+        else: window_dilations
 
     {output_window_shape, padding_config} =
       Nx.Shape.pool(input_shape, window_dimensions, strides, padding, dilations)
@@ -7625,6 +7635,7 @@ defmodule Nx do
 
     padding_config = List.duplicate({0, 0}, offset) ++ padding_config
     strides = List.duplicate(1, offset) ++ strides
+    dilations = List.duplicate(1, offset) ++ dilations
 
     window_dimensions =
       if offset != 0 do
@@ -7644,7 +7655,8 @@ defmodule Nx do
         init_value,
         window_dimensions,
         padding: padding_config,
-        strides: strides
+        strides: strides,
+        window_dilations: dilations
       )
 
     vectorize(result, vectorized_axes)

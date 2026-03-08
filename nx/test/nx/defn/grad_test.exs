@@ -1506,6 +1506,126 @@ defmodule Nx.Defn.GradTest do
       assert_all_close(lhs, rhs)
     end
 
+    defn grad_sum_window_max_dilations(t) do
+      grad(
+        t,
+        &Nx.sum(Nx.window_max(&1, {1, 2, 2, 1}, padding: :same, window_dilations: [1, 2, 2, 1]))
+      )
+    end
+
+    test "works with window max, same padding, window dilations (#1679)" do
+      x = Nx.iota({1, 4, 4, 1}, type: {:f, 32})
+      lhs = grad_sum_window_max_dilations(x)
+
+      rhs =
+        Nx.tensor([
+          [
+            [[0.0], [0.0], [0.0], [0.0]],
+            [[0.0], [1.0], [2.0], [1.0]],
+            [[0.0], [2.0], [4.0], [2.0]],
+            [[0.0], [1.0], [2.0], [1.0]]
+          ]
+        ])
+
+      assert_all_close(lhs, rhs)
+    end
+
+    defn grad_sum_window_max_dilations_strides(t) do
+      grad(
+        t,
+        &Nx.sum(
+          Nx.window_max(&1, {1, 2, 2, 1},
+            padding: :same,
+            strides: [1, 2, 2, 1],
+            window_dilations: [1, 2, 2, 1]
+          )
+        )
+      )
+    end
+
+    test "works with window max, dilations + strides + same padding (#1679)" do
+      x = Nx.iota({1, 4, 4, 1}, type: {:f, 32})
+      lhs = grad_sum_window_max_dilations_strides(x)
+
+      rhs =
+        Nx.tensor([
+          [
+            [[0.0], [0.0], [0.0], [0.0]],
+            [[0.0], [1.0], [0.0], [1.0]],
+            [[0.0], [0.0], [0.0], [0.0]],
+            [[0.0], [1.0], [0.0], [1.0]]
+          ]
+        ])
+
+      assert_all_close(lhs, rhs)
+    end
+
+    defn grad_sum_window_min_dilations(t) do
+      grad(
+        t,
+        &Nx.sum(Nx.window_min(&1, {1, 2, 2, 1}, padding: :same, window_dilations: [1, 2, 2, 1]))
+      )
+    end
+
+    test "works with window min, same padding, window dilations (#1679)" do
+      x = Nx.iota({1, 4, 4, 1}, type: {:f, 32})
+      lhs = grad_sum_window_min_dilations(x)
+
+      rhs =
+        Nx.tensor([
+          [
+            [[1.0], [1.0], [0.0], [0.0]],
+            [[1.0], [1.0], [0.0], [0.0]],
+            [[0.0], [0.0], [0.0], [0.0]],
+            [[0.0], [0.0], [0.0], [0.0]]
+          ]
+        ])
+
+      assert_all_close(lhs, rhs)
+    end
+
+    defn grad_sum_window_max_1d_dilations(t) do
+      grad(t, &Nx.sum(Nx.window_max(&1, {3}, padding: :same, window_dilations: [2])))
+    end
+
+    test "works with window max, 1D dilations (#1679)" do
+      x = Nx.iota({8}, type: {:f, 32})
+      lhs = grad_sum_window_max_1d_dilations(x)
+      rhs = Nx.tensor([0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 2.0, 2.0])
+      assert_all_close(lhs, rhs)
+    end
+
+    defn grad_sum_sin_window_max_cos_dilations(t) do
+      grad(
+        t,
+        &Nx.sum(
+          Nx.sin(
+            Nx.window_max(Nx.cos(&1), {1, 2, 2, 1},
+              padding: :same,
+              window_dilations: [1, 2, 2, 1]
+            )
+          )
+        )
+      )
+    end
+
+    test "works with window max, non-linear composition, dilations (#1679)" do
+      x = Nx.iota({1, 4, 4, 1}, type: {:f, 32})
+      lhs = grad_sum_sin_window_max_cos_dilations(x)
+
+      rhs =
+        Nx.tensor([
+          [
+            [[-0.0], [-1.4432123], [-0.0], [-0.0]],
+            [[0.0], [0.92060274], [0.64084554], [-0.4789586]],
+            [[-0.0], [-0.0], [0.0], [0.99998045]],
+            [[0.0], [-0.51744366], [-0.0], [-0.0]]
+          ]
+        ])
+
+      assert_all_close(lhs, rhs)
+    end
+
     defn grad_sum_window_min_same_large_kernel(t) do
       grad(
         t,

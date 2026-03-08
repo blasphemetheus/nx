@@ -1585,6 +1585,7 @@ defmodule Nx.BinaryBackend do
        ) do
     padding = opts[:padding]
     strides = opts[:strides]
+    dilations = opts[:window_dilations] || List.duplicate(1, tuple_size(window_dimensions))
 
     init_value = scalar_to_number(init_value)
 
@@ -1596,15 +1597,15 @@ defmodule Nx.BinaryBackend do
       tensor = Nx.pad(t, init_value, Enum.map(padding, &tuple_append(&1, 0)))
 
     input_data = to_binary(tensor)
-    input_weighted_shape = weighted_shape(padded_shape, size, window_dimensions)
-    input_anchors = Enum.sort(make_anchors(padded_shape, strides, window_dimensions))
+    input_weighted_shape = weighted_shape(padded_shape, size, window_dimensions, dilations)
+    input_anchors = Enum.sort(make_anchors(padded_shape, strides, window_dimensions, dilations))
 
     %T{type: {_, source_size} = source_type} = source
     source_data = to_binary(source)
 
     output_windows =
       for {anchor, i} <- Enum.with_index(input_anchors) do
-        offset = weighted_offset(input_weighted_shape, anchor)
+        offset = weighted_offset(input_weighted_shape, anchor, dilations)
 
         window =
           :erlang.list_to_bitstring(
@@ -1630,11 +1631,12 @@ defmodule Nx.BinaryBackend do
           flattened_index_to_offset(index, Tuple.to_list(window_dimensions), 0, [])
 
         # Compute absolute index in padded space, then adjust back to
-        # original (unpadded) coordinates by subtracting low-padding
+        # original (unpadded) coordinates by subtracting low-padding.
+        # Dilations scale the offset within the window.
         padded_absolute_index =
-          anchor
-          |> Enum.zip(offset_from_anchor)
-          |> Enum.map(fn {x, y} -> x + y end)
+          [anchor, offset_from_anchor, dilations]
+          |> Enum.zip()
+          |> Enum.map(fn {a, o, d} -> a + o * d end)
 
         absolute_index = Enum.zip_with(padded_absolute_index, low_pads, &-/2)
 

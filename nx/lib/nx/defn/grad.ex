@@ -641,13 +641,20 @@ defmodule Nx.Defn.Grad do
   defp grad(op, [x, window_dimensions, opts], _ans, g) when op in @window_chooser_op do
     padding = opts[:padding]
     strides = opts[:strides]
+    window_dilations = opts[:window_dilations]
 
     fun =
       if op == :window_min,
         do: &Nx.window_scatter_min/5,
         else: &Nx.window_scatter_max/5
 
-    g = fun.(x, g, 0, window_dimensions, padding: padding, strides: strides)
+    g =
+      fun.(x, g, 0, window_dimensions,
+        padding: padding,
+        strides: strides,
+        window_dilations: window_dilations
+      )
+
     [{x, g}]
   end
 
