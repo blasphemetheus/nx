@@ -501,9 +501,15 @@ fine::ResourcePtr<ExlaClient> get_host_client(ErlNifEnv *env) {
 FINE_NIF(get_host_client, 0);
 
 fine::ResourcePtr<ExlaClient>
-get_gpu_client(ErlNifEnv *env, double memory_fraction, bool preallocate) {
-  return unwrap(GetGpuClient(memory_fraction, preallocate,
-                             xla::GpuAllocatorConfig::Kind::kBFC));
+get_gpu_client(ErlNifEnv *env, double memory_fraction, bool preallocate,
+               int64_t allocator_kind) {
+  xla::GpuAllocatorConfig::Kind kind;
+  switch (allocator_kind) {
+    case 1: kind = xla::GpuAllocatorConfig::Kind::kBFC; break;
+    case 2: kind = xla::GpuAllocatorConfig::Kind::kCudaAsync; break;
+    default: kind = xla::GpuAllocatorConfig::Kind::kDefault; break;
+  }
+  return unwrap(GetGpuClient(memory_fraction, preallocate, kind));
 }
 
 FINE_NIF(get_gpu_client, 0);
