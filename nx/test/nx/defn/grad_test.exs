@@ -4948,5 +4948,77 @@ defmodule Nx.Defn.GradTest do
 
       assert grad_y_vec == Nx.tensor([6.0, 15.0]) |> Nx.vectorize(y_vec.vectorized_axes)
     end
+
+    test "grad of vectorized sum" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([4.0, 5.0, 6.0])] do
+          Nx.Defn.grad(row, &Nx.sum/1)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, &Nx.sum/1)
+      assert actual == expected
+    end
+
+    test "grad of vectorized mean" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([4.0, 5.0, 6.0])] do
+          Nx.Defn.grad(row, &Nx.mean/1)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, &Nx.mean/1)
+      assert actual == expected
+    end
+
+    test "grad of vectorized product" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [2.0, 3.0, 4.0]]) |> Nx.vectorize(:batch)
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([2.0, 3.0, 4.0])] do
+          Nx.Defn.grad(row, &Nx.product/1)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, &Nx.product/1)
+      assert actual == expected
+    end
+
+    test "grad of vectorized reduce_max" do
+      x = Nx.tensor([[1.0, 3.0, 2.0], [6.0, 4.0, 5.0]]) |> Nx.vectorize(:batch)
+
+      expected =
+        for row <- [Nx.tensor([1.0, 3.0, 2.0]), Nx.tensor([6.0, 4.0, 5.0])] do
+          Nx.Defn.grad(row, &Nx.reduce_max/1)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, &Nx.reduce_max/1)
+      assert actual == expected
+    end
+
+    test "grad of vectorized composed reduction" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.multiply(x, x)) end
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([4.0, 5.0, 6.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
   end
 end
