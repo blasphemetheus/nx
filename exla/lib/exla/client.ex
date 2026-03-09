@@ -162,11 +162,7 @@ defmodule EXLA.Client do
     memory_fraction = Keyword.get(options, :memory_fraction, 0.9)
     preallocate = Keyword.get(options, :preallocate, true)
     allocator = Keyword.get(options, :allocator, :cuda_async)
-    allocator_kind = case allocator do
-      :bfc -> 1
-      :cuda_async -> 2
-      _ -> 0  # kDefault
-    end
+    allocator_kind = allocator_to_kind(allocator)
     platforms = Map.keys(EXLA.Client.get_supported_platforms())
 
     ref =
@@ -212,5 +208,16 @@ defmodule EXLA.Client do
       default_device_id: default_device_id,
       automatic_transfers: automatic_transfers
     }
+  end
+
+  @valid_allocators [:bfc, :cuda_async, :default]
+
+  defp allocator_to_kind(:bfc), do: 1
+  defp allocator_to_kind(:cuda_async), do: 2
+  defp allocator_to_kind(:default), do: 0
+
+  defp allocator_to_kind(other) do
+    raise ArgumentError,
+          "invalid :allocator option #{inspect(other)}, expected one of #{inspect(@valid_allocators)}"
   end
 end

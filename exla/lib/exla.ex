@@ -131,6 +131,16 @@ defmodule EXLA do
     * `:memory_fraction` - how much memory of a GPU device to
       allocate. Defaults to `0.9`.
 
+    * `:allocator` - the GPU memory allocator to use. Can be:
+      * `:cuda_async` - uses CUDA's built-in asynchronous memory pool
+        (`cudaMallocAsync`). Generally faster for workloads with frequent
+        allocations and deallocations. Default.
+      * `:bfc` - XLA's Best-Fit with Coalescing allocator. The legacy
+        default. Manages a memory pool with its own allocation strategy.
+      * `:default` - lets XLA choose the allocator.
+
+      Only applies to `:cuda` and `:rocm` platforms. Ignored for `:host`.
+
   ### Memory preallocation
 
   XLA preallocates memory in GPU devices. This means that, if you are to
