@@ -214,7 +214,22 @@ defmodule Nx.Defn.Grad do
     {nodes, grads} = acc
 
     res = sum_grad(Map.get(grads, id, []))
-    {Nx.broadcast(res, arg), {nodes, grads}}
+
+    res =
+      case {arg.vectorized_axes, res.vectorized_axes} do
+        {[], _} ->
+          Nx.broadcast(res, arg)
+
+        {vectorized_axes, []} ->
+          devec_arg = Nx.devectorize(arg, keep_names: true)
+          res = Nx.broadcast(res, devec_arg)
+          Nx.vectorize(res, vectorized_axes)
+
+        {_, _} ->
+          Nx.broadcast(res, arg)
+      end
+
+    {res, {nodes, grads}}
   end
 
   defp sum_grad([]), do: Expr.tensor(0.0)
@@ -257,16 +272,35 @@ defmodule Nx.Defn.Grad do
 
           [_ | _] ->
             g = Enum.reduce(gs, &Nx.add/2)
+            g = maybe_vectorize_grad(g, vectorized_names, ans)
             {nodes, update_grads(op, args, ans, g, to_grad_ids, grads)}
 
           _ ->
-            g = gs |> Tuple.to_list() |> Enum.map(&sum_grad/1)
+            g =
+              gs
+              |> Tuple.to_list()
+              |> Enum.map(fn gs ->
+                gs |> sum_grad() |> maybe_vectorize_grad(vectorized_names, ans)
+              end)
+
             {nodes, update_grads(op, args, ans, g, to_grad_ids, grads)}
         end
 
       %{} ->
         {nodes, grads}
     end
+  end
+
+  defp maybe_vectorize_grad(g, [], _ans), do: g
+  defp maybe_vectorize_grad(%T{vectorized_axes: [_ | _]} = g, _vectorized_names, _ans), do: g
+
+  defp maybe_vectorize_grad(%T{vectorized_axes: []} = g, vectorized_names, ans) do
+    # The gradient has no vectorized axes but the node does.
+    # Broadcast g to match the devectorized shape of ans,
+    # then vectorize to match ans's vectorized axes.
+    devec_ans = Nx.devectorize(ans, keep_names: true)
+    g = Nx.broadcast(g, devec_ans)
+    Nx.vectorize(g, vectorized_names)
   end
 
   defp compute_arg_vectorized_names(%{vectorized_axes: vectorized_axes}, []),
@@ -1431,8 +1465,18 @@ defmodule Nx.Defn.Grad do
     if keep_axes || !axes do
       Nx.broadcast(g, x)
     else
-      axes = Nx.axes(x.shape) -- axes
-      Nx.broadcast(g, x, axes: axes)
+      # Adjust axes for vectorized dimensions: opts[:axes] may reference
+      # axes from the devectorized shape, but x may be re-vectorized.
+      # Shift axes down by the number of vectorized dimensions.
+      vec_offset = length(x.vectorized_axes)
+
+      adjusted_axes =
+        axes
+        |> Enum.map(&(&1 - vec_offset))
+        |> Enum.filter(&(&1 >= 0))
+
+      broadcast_axes = Nx.axes(x.shape) -- adjusted_axes
+      Nx.broadcast(g, x, axes: broadcast_axes)
     end
   end
 
