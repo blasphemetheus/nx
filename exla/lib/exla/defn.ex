@@ -151,22 +151,16 @@ defmodule EXLA.Defn do
     {run_options, compile_options} = Keyword.pop(options, :run_options, [])
     debug? = Keyword.get(compile_options, :debug, false)
 
-    # We start the callback server regardless if it's needed
-    # as it's relatively cheap to start it.
-    callback_server_pid =
-      case DynamicSupervisor.start_child(
-             EXLA.CallbackServer.Supervisor,
-             {EXLA.CallbackServer, []}
-           ) do
-        {:ok, pid} -> pid
-        {:error, reason} -> raise "Failed to start EXLA.CallbackServer: #{inspect(reason)}"
-      end
+    # The CallbackServer is started lazily — only when the compiled graph
+    # actually contains :runtime_call nodes (see ensure_callback_server/1).
+    # This avoids leaking a process per __compile__ call, which previously
+    # exhausted the BEAM process limit after ~25K JIT calls in a loop.
 
     try do
-      callback = &to_computation(&1, &2, &3, &4, &5, compile_options, callback_server_pid)
+      callback = &to_computation(&1, &2, &3, &4, &5, compile_options, :lazy)
 
       {executable, {used_inputs, outputs, outfeed, _input_typespecs?}} =
-        compile(key, vars, fun, compile_options, 0, [], callback, callback_server_pid)
+        compile(key, vars, fun, compile_options, 0, [], callback, :lazy)
 
       if compile_options[:module_compilation] == :to_mlir do
         throw({:mlir_module, executable.ref, MapSet.new(Map.keys(used_inputs)), outputs})
@@ -201,8 +195,16 @@ defmodule EXLA.Defn do
       end
     catch
       kind, reason ->
-        DynamicSupervisor.terminate_child(EXLA.CallbackServer.Supervisor, callback_server_pid)
+        # Terminate the lazily-started callback server on error since no
+        # executable will reference it. On success, the server stays alive
+        # and self-terminates when the executable is GC'd.
+        if pid = Process.get(:exla_lazy_callback_server) do
+          DynamicSupervisor.terminate_child(EXLA.CallbackServer.Supervisor, pid)
+        end
+
         :erlang.raise(kind, reason, __STACKTRACE__)
+    after
+      Process.delete(:exla_lazy_callback_server)
     end
   end
 
@@ -769,10 +771,15 @@ defmodule EXLA.Defn do
   defp cached_recur_operator(
          :runtime_call,
          %T{data: %Expr{id: id, args: [tensor_expr, fun, out_template]}} = expr,
-         %{client: %EXLA.Client{platform: :host}, callback_server_pid: callback_server_pid} =
+         %{client: %EXLA.Client{platform: :host}, callback_server_pid: callback_server} =
            state,
          cache
        ) do
+    # Lazily start the CallbackServer on the first :runtime_call node.
+    # The PID is cached in the process dictionary so subsequent :runtime_call
+    # nodes in the same compilation reuse the same server.
+    callback_server_pid = ensure_callback_server(callback_server)
+
     # Flatten the tensor_or_container expression into its tensor leaves so we
     # can compile each as an independent operand to the host callback.
     tensor_exprs = Composite.flatten_list([tensor_expr])
@@ -801,10 +808,11 @@ defmodule EXLA.Defn do
   defp cached_recur_operator(
          :runtime_call,
          %T{data: %Expr{id: id, args: [tensor_expr, fun, out_template]}} = expr,
-         %{client: %EXLA.Client{platform: :cuda}, callback_server_pid: callback_server_pid} =
+         %{client: %EXLA.Client{platform: :cuda}, callback_server_pid: callback_server} =
            state,
          cache
        ) do
+    callback_server_pid = ensure_callback_server(callback_server)
     tensor_exprs = Composite.flatten_list([tensor_expr])
 
     {arg_values, cache} =
@@ -897,6 +905,31 @@ defmodule EXLA.Defn do
     {args, cache} = Tree.apply_args(expr, cache, &recur_operator(&1, state, &2))
     {to_operator(op, args, expr, state), cache}
   end
+
+  # Lazily starts a CallbackServer when the first :runtime_call node is
+  # encountered during compilation. The PID is cached in the process
+  # dictionary so all :runtime_call nodes in one compilation share the
+  # same server. The server stays alive after compilation — it
+  # self-terminates when the executable is garbage-collected (via the
+  # :exla_runtime_call_executable_dropped message from C++).
+  defp ensure_callback_server(:lazy) do
+    case Process.get(:exla_lazy_callback_server) do
+      pid when is_pid(pid) ->
+        pid
+
+      nil ->
+        {:ok, pid} =
+          DynamicSupervisor.start_child(
+            EXLA.CallbackServer.Supervisor,
+            {EXLA.CallbackServer, []}
+          )
+
+        Process.put(:exla_lazy_callback_server, pid)
+        pid
+    end
+  end
+
+  defp ensure_callback_server(pid) when is_pid(pid), do: pid
 
   ## to_operator creation
 
