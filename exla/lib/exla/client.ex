@@ -161,7 +161,7 @@ defmodule EXLA.Client do
     platform = Keyword.get(options, :platform)
     memory_fraction = Keyword.get(options, :memory_fraction, 0.9)
     preallocate = Keyword.get(options, :preallocate, true)
-    allocator = Keyword.get(options, :allocator, :cuda_async)
+    allocator = Keyword.get(options, :allocator, :bfc)
     allocator_kind = allocator_to_kind(allocator)
     platforms = Map.keys(EXLA.Client.get_supported_platforms())
 

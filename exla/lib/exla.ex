@@ -132,11 +132,11 @@ defmodule EXLA do
       allocate. Defaults to `0.9`.
 
     * `:allocator` - the GPU memory allocator to use. Can be:
+      * `:bfc` - XLA's Best-Fit with Coalescing allocator. Manages a
+        memory pool with its own allocation strategy. Default.
       * `:cuda_async` - uses CUDA's built-in asynchronous memory pool
-        (`cudaMallocAsync`). Generally faster for workloads with frequent
-        allocations and deallocations. Default.
-      * `:bfc` - XLA's Best-Fit with Coalescing allocator. The legacy
-        default. Manages a memory pool with its own allocation strategy.
+        (`cudaMallocAsync`). Can be faster for workloads with frequent
+        allocations and deallocations. Requires CUDA 11.2+.
       * `:default` - lets XLA choose the allocator.
 
       Only applies to `:cuda` and `:rocm` platforms. Ignored for `:host`.
