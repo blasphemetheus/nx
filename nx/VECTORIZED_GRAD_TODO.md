@@ -2,6 +2,75 @@
 
 Partial fix on branch `fix/vectorized-grad-1533`. Tracks what's done and what's left for #1533.
 
+## Background & Glossary
+
+This section explains the key concepts needed to understand this document.
+
+### Tensors, Shape, Rank, and Axes
+
+A **tensor** is an n-dimensional array of numbers — the fundamental data structure in numerical computing and ML. Tensors generalize scalars (0D), vectors (1D), matrices (2D), and so on to arbitrary dimensions.
+
+- **Shape**: A tuple describing the size of each dimension. A tensor with shape `{2, 3}` has 2 rows and 3 columns (6 elements total). A scalar has shape `{}`.
+- **Rank**: The number of dimensions. Shape `{2, 3}` has rank 2. Shape `{5}` has rank 1. Shape `{}` has rank 0.
+- **Axis**: A specific dimension, referenced by its integer index (0-based). In shape `{2, 3, 4}`, axis 0 has size 2, axis 1 has size 3, axis 2 has size 4.
+
+### Vectorization (Batching)
+
+**Vectorization** in Nx is a mechanism for applying the same operation across a "batch" of inputs simultaneously, without the operation needing to know about the batch dimension. Think of it like a `for` loop over independent computations, but expressed as a single batched operation for efficiency.
+
+When you **vectorize** a tensor, you move one or more leading dimensions into a special `vectorized_axes` field. This makes them invisible to most operations:
+
+```elixir
+x = Nx.tensor([[1, 2, 3], [4, 5, 6]])  # shape {2, 3}
+v = Nx.vectorize(x, :batch)             # vectorized[batch: 2] shape {3}
+```
+
+After vectorization, `v.shape` returns `{3}` (the **inner shape** — just the non-batch dimensions), and `v.vectorized_axes` returns `[batch: 2]`. Operations on `v` automatically apply independently to each of the 2 batch elements.
+
+**Devectorization** (`Nx.devectorize/2`) is the reverse: it merges the vectorized axes back into the shape as leading dimensions, producing a normal tensor with shape `{2, 3}` again.
+
+### Gradients and Automatic Differentiation (Autodiff)
+
+A **gradient** measures how much a function's output changes when you nudge each input slightly. If `f(x) = x²`, the gradient is `f'(x) = 2x` — at `x = 3`, the gradient is 6, meaning a tiny increase in `x` causes the output to increase ~6x as much.
+
+For multi-dimensional inputs, the gradient is a tensor of the same shape as the input, where each element says "how much does the output change if I nudge this specific element?"
+
+**Automatic differentiation (autodiff)** computes gradients mechanically by applying the chain rule through a computation graph. Nx uses **reverse-mode autodiff** (also called **backpropagation** in ML), which works by:
+
+1. **Forward pass**: Run the computation normally, recording each operation in a graph.
+2. **Backward pass**: Walk the graph in reverse, propagating gradients from output back to inputs using the chain rule.
+
+In `grad.ex`, each operation (sum, multiply, dot, etc.) has a **grad clause** — a rule for how gradients flow backward through it. For example, the gradient of `sum(x)` is broadcasting the output gradient back to the shape of `x`.
+
+### Operations Referenced in This Document
+
+- **Elementwise ops** (`sin`, `cos`, `exp`, `add`, `multiply`): Apply independently to each element. Gradient is straightforward (e.g., grad of `sin(x)` is `cos(x)`).
+- **Reduction ops** (`sum`, `mean`, `product`, `reduce_max`): Collapse one or more axes into a single value (e.g., summing all elements along axis 1). The `axes` option specifies which dimensions to reduce.
+- **Broadcasting**: Automatically expanding a smaller tensor to match a larger one's shape for element-wise operations. E.g., adding a shape-`{3}` tensor to a shape-`{2, 3}` tensor broadcasts the smaller one across the first dimension.
+- **Padding**: Adding values (usually zeros) around the edges of a tensor. `padding_config` specifies how much to add on each side of each axis.
+- **Strides**: Step size when sliding a window or sampling elements. A stride of 2 means "skip every other element."
+- **Window operations** (`window_sum`, `window_max`): Slide a fixed-size window across the tensor, computing a result for each window position. Like a convolution but with simpler aggregation.
+- **Dot product** (`dot`): Generalized matrix multiplication with specified batch and contraction axes.
+- **Squeeze**: Remove axes of size 1 from a tensor's shape.
+- **Stack/Concatenate**: Combine multiple tensors along a new or existing axis.
+- **Gather**: Index into a tensor to extract elements at specified positions.
+- **FFT/IFFT**: Fast Fourier Transform — converts between time and frequency domains.
+
+### The `vec_offset` Pattern
+
+This is the core fix pattern used throughout this document:
+
+- **`vec_offset`**: `length(x.vectorized_axes)` — the number of vectorized (batch) dimensions. This is 0 for normal tensors.
+- **Why it matters**: During the backward pass, `grad.ex` devectorizes all tensors (merging batch dims into the shape), computes the forward expression, then re-vectorizes the tensors for the grad clause. But the **opts** (axis indices, padding configs, etc.) were computed on the devectorized shape and are NOT adjusted. So axis index `1` in opts might actually refer to axis `0` in the re-vectorized tensor's inner shape.
+- **The fix**: Subtract `vec_offset` from axis indices in opts, and/or slice configs to skip the first `vec_offset` entries.
+
+### Code Locations
+
+- **`grad.ex`**: `nx/lib/nx/defn/grad.ex` — the entire gradient computation engine
+- **`recur_to_grad/4`**: The main backward-pass function that processes each operation node. Line ~252 is where it re-vectorizes tensors but not opts.
+- **`to_grad/4`**: Handles leaf variable nodes — where the gradient is finally assigned to input variables.
+- **`reduce_g/3`**: Helper that broadcasts a gradient back to a tensor's shape after a reduction operation.
+
 ## What Works Now
 
 - `grad(vectorized_x, &Nx.sum/1)`
