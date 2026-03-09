@@ -161,6 +161,12 @@ defmodule EXLA.Client do
     platform = Keyword.get(options, :platform)
     memory_fraction = Keyword.get(options, :memory_fraction, 0.9)
     preallocate = Keyword.get(options, :preallocate, true)
+    allocator = Keyword.get(options, :allocator, :cuda_async)
+    allocator_kind = case allocator do
+      :bfc -> 1
+      :cuda_async -> 2
+      _ -> 0  # kDefault
+    end
     platforms = Map.keys(EXLA.Client.get_supported_platforms())
 
     ref =
@@ -177,10 +183,10 @@ defmodule EXLA.Client do
           EXLA.NIF.get_host_client()
 
         :cuda ->
-          EXLA.NIF.get_gpu_client(memory_fraction, preallocate)
+          EXLA.NIF.get_gpu_client(memory_fraction, preallocate, allocator_kind)
 
         :rocm ->
-          EXLA.NIF.get_gpu_client(memory_fraction, preallocate)
+          EXLA.NIF.get_gpu_client(memory_fraction, preallocate, allocator_kind)
 
         :tpu ->
           EXLA.NIF.get_tpu_client()

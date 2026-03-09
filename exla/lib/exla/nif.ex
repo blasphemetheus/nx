@@ -74,7 +74,7 @@ defmodule EXLA.NIF do
   def transfer_from_outfeed(_client, _device, _typespecs, _pid, _ref), do: err!()
   def copy_buffer_to_device(_client, _buffer, _device), do: err!()
   def get_host_client(), do: err!()
-  def get_gpu_client(_memory_fraction, _preallocate), do: err!()
+  def get_gpu_client(_memory_fraction, _preallocate, _allocator_kind), do: err!()
   def get_tpu_client(), do: err!()
   def get_c_api_client(_device_type), do: err!()
   def load_pjrt_plugin(_device_type, _library_path), do: err!()
