@@ -329,7 +329,19 @@ defmodule Nx.Defn.Grad do
   # subtracting vec_offset so they reference the correct inner-shape axes.
 
   # Aggregate ops with keyword opts containing :axes
-  @axes_in_opts_ops [:sum, :product, :reduce_max, :reduce_min, :gather, :sort]
+  # For ops with args [x | rest], adjusts :axes key in any keyword list in rest.
+  # Works for indexed_put/indexed_add because their non-tensor args (opts) are keyword
+  # lists while tensor args pass through the `other -> other` clause.
+  @axes_in_opts_ops [
+    :sum,
+    :product,
+    :reduce_max,
+    :reduce_min,
+    :gather,
+    :sort,
+    :indexed_put,
+    :indexed_add
+  ]
 
   defp adjust_vectorized_args(op, [x | rest], offset) when op in @axes_in_opts_ops do
     [x | adjust_keyword_axes(rest, offset)]
@@ -345,9 +357,16 @@ defmodule Nx.Defn.Grad do
     [x, offset_axes(axes, offset)]
   end
 
-  # broadcast: [x, shape, axes] where axes maps x dims to broadcast shape dims
+  # broadcast: [x, shape, axes] where axes maps x dims to broadcast shape dims.
+  # shape is the devectorized output shape; drop leading vec dims to match inner shape.
   defp adjust_vectorized_args(:broadcast, [x, shape, axes], offset) do
-    [x, shape, offset_axes(axes, offset)]
+    adjusted_shape =
+      shape
+      |> Tuple.to_list()
+      |> Enum.drop(offset)
+      |> List.to_tuple()
+
+    [x, adjusted_shape, offset_axes(axes, offset)]
   end
 
   # stack/concatenate: [tensors, axis] where axis is an integer
@@ -366,6 +385,21 @@ defmodule Nx.Defn.Grad do
       offset_axes(axes_y, offset),
       offset_axes(batch_y, offset)
     ]
+  end
+
+  # reverse: [x, axes] where axes is a plain list of axis indices
+  defp adjust_vectorized_args(:reverse, [x, axes], offset) do
+    [x, offset_axes(axes, offset)]
+  end
+
+  # slice: [x, start_indices, lengths, strides] — all per-dimension lists
+  defp adjust_vectorized_args(:slice, [x, start_indices, lengths, strides], offset) do
+    [x, Enum.drop(start_indices, offset), Enum.drop(lengths, offset), Enum.drop(strides, offset)]
+  end
+
+  # put_slice: [x, start_indices, update] — start_indices is per-dimension
+  defp adjust_vectorized_args(:put_slice, [x, start_indices, update], offset) do
+    [x, Enum.drop(start_indices, offset), update]
   end
 
   # pad: [x, value, padding_config] — drop leading vec_offset entries from config
@@ -393,12 +427,35 @@ defmodule Nx.Defn.Grad do
     [x, adjusted_dims, adjusted_opts]
   end
 
+  # window_scatter ops: [tensor, source, init_value, window_dimensions, opts]
+  @window_scatter_ops [:window_scatter_max, :window_scatter_min]
+
+  defp adjust_vectorized_args(op, [tensor, source, init_value, window_dimensions, opts], offset)
+       when op in @window_scatter_ops do
+    adjusted_dims =
+      window_dimensions
+      |> Tuple.to_list()
+      |> Enum.drop(offset)
+      |> List.to_tuple()
+
+    adjusted_opts =
+      opts
+      |> adjust_keyword_drop(:strides, offset)
+      |> adjust_keyword_padding(:padding, offset)
+
+    [tensor, source, init_value, adjusted_dims, adjusted_opts]
+  end
+
   # fft/ifft: [t, opts] — length refers to last axis, needs no axis adjustment
   # but Nx.rank(t) is used in the grad clause (returns inner rank, which is correct)
   defp adjust_vectorized_args(:fft, args, _offset), do: args
   defp adjust_vectorized_args(:ifft, args, _offset), do: args
 
-  # conv: complex, skip for now
+  # conv: vectorization is handled by collapsing vec dims into batch (conv_collapse_into_batch_axes),
+  # NOT by prepending extra leading dims. Opts reference the collapsed shape, not an offset shape.
+  # Additionally, the forward pass conflates batch_group_count with vectorized_size, causing
+  # grad_conv's reshape logic to fail. Fixing conv + vectorized gradients requires changes to
+  # the forward pass vectorization strategy (a separate issue from axis offset adjustment).
   defp adjust_vectorized_args(:conv, args, _offset), do: args
 
   # Default: no adjustment needed (elementwise ops, etc.)
@@ -838,7 +895,7 @@ defmodule Nx.Defn.Grad do
         g,
         window_dimensions,
         strides: base_dilation,
-        padding: List.duplicate({0, 0}, Nx.rank(x)),
+        padding: :valid,
         window_dilations: window_dilation
       )
 
