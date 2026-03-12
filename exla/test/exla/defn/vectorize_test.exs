@@ -543,7 +543,10 @@ defmodule EXLA.Defn.VectorizeTest do
       {ra, rb} =
         hooked_container_cross_axis(
           Nx.vectorize(~VEC[1 0 1], :a),
-          10, 20, 30, 40,
+          10,
+          20,
+          30,
+          40,
           pid: self()
         )
 
@@ -567,8 +570,10 @@ defmodule EXLA.Defn.VectorizeTest do
       {ra, rb} =
         hooked_container_cross_axis(
           Nx.vectorize(~VEC[1 0], :a),
-          10, 20,
-          Nx.vectorize(~VEC[30 31 32], :b), 40,
+          10,
+          20,
+          Nx.vectorize(~VEC[30 31 32], :b),
+          40,
           pid: self()
         )
 
@@ -733,15 +738,15 @@ defmodule EXLA.Defn.VectorizeTest do
 
     # 7. While loop containing vectorized cond with hooks
     defn while_with_vectorized_cond(pred, n) do
-      {_, result} =
-        while {i = Nx.tensor(0), acc = Nx.tensor(0)}, Nx.less(i, n) do
+      {_, _, result} =
+        while {i = Nx.tensor(0), pred, acc = Nx.tensor(0)}, Nx.less(i, n) do
           val =
             cond do
               pred -> send_value(1, clause: "loop_if")
               true -> send_value(2, clause: "loop_else")
             end
 
-          {i + 1, acc + val}
+          {i + 1, pred, acc + val}
         end
 
       result
