@@ -1513,5 +1513,105 @@ defmodule EXLA.Defn.VectorizeTest do
         Task.await(task, 120_000)
       end
     end
+
+    # --- Focused reproduction test for #1689 ---
+    #
+    # This test combines all factors that trigger the cross-execution outfeed
+    # buffer interleaving race condition:
+    #
+    # 1. DIRTY SCHEDULER PRESSURE: Background Nx.dot work on dirty CPU schedulers
+    #    delays run_cpu NIF returns, widening the window between outfeed task exit
+    #    (lock release) and NIF completion.
+    #
+    # 2. MIXED BUFFER SIZES: Different hooked functions produce different outfeed
+    #    data sizes (scalar=4B, tensor=32B, multi-hook=different sequence lengths).
+    #    Cross-execution buffer interleaving is more likely to produce a detectable
+    #    size mismatch when buffer sizes vary.
+    #
+    # 3. BLAST MODE (NO ASSERTIONS): Removing assertion overhead from inner loops
+    #    minimizes inter-call latency, maximizing the rate of lock acquire/release
+    #    cycles and outfeed queue traffic.
+    #
+    # 4. HIGH CONCURRENCY: 20+ tasks all sharing device 0's global outfeed queue,
+    #    each doing many iterations.
+    #
+    # 5. HEAVY POST-OUTFEED COMPUTATION: hooked_cond_then_compute has Nx.dot after
+    #    the cond, keeping run_cpu alive on dirty CPU scheduler after flag=0.
+    #
+    # Evidence: On 2026-03-12, concurrent stress tests triggered the crash on
+    # 1.18.4/OTP 28.3 in the basic hooked cond test running alongside them.
+    # Error: "XLA runtime-managed outfeed buffer size 2 did not match the
+    # outfeed operation parameter buffer size 4" + SIGABRT from
+    # xfeed_manager.cc:62 CHECK(current_buffer_ == nullptr).
+    @tag timeout: 180_000
+    test "issue #1689 reproduction: cross-execution outfeed buffer interleaving" do
+      # Phase 1: Start background dirty CPU scheduler pressure.
+      # These keep dirty CPU schedulers busy, delaying run_cpu NIF returns.
+      pressure_tasks =
+        for _ <- 1..4 do
+          Task.async(fn ->
+            for _ <- 1..300 do
+              m = Nx.iota({64, 64})
+              Nx.sum(Nx.dot(m, m))
+            end
+          end)
+        end
+
+      # Phase 2: Blast mixed hooked cond workloads concurrently.
+      # No assertions in inner loops — pure outfeed queue pressure.
+      test_tasks =
+        for task_id <- 1..24 do
+          Task.async(fn ->
+            case rem(task_id, 4) do
+              0 ->
+                # Scalar hooks (flag=2B, data=4B)
+                for _ <- 1..80 do
+                  hooked_cond_different_axes(
+                    Nx.vectorize(~VEC[1 0], :a),
+                    Nx.vectorize(~VEC[0 1 0], :b)
+                  )
+                end
+
+              1 ->
+                # Tensor hooks (flag=2B, data=32B) — different data size
+                for _ <- 1..80 do
+                  hooked_cond_tensor_result(
+                    Nx.vectorize(~VEC[1 0], :a),
+                    Nx.vectorize(~VEC[0 1 0], :b)
+                  )
+                end
+
+              2 ->
+                # Heavy post-outfeed computation — widest race window
+                for _ <- 1..80 do
+                  hooked_cond_then_compute(
+                    Nx.vectorize(~VEC[1 0], :a),
+                    Nx.vectorize(~VEC[0 1 0], :b)
+                  )
+                end
+
+              3 ->
+                # Multi-hook branches (2 hooks per branch, longer outfeed sequence)
+                for _ <- 1..80 do
+                  multi_hook_branch(Nx.vectorize(~VEC[1 0 1], :a))
+                end
+            end
+          end)
+        end
+
+      # If the race triggers, run_cpu crashes with:
+      #   RuntimeError: XLA runtime-managed outfeed buffer size 2 did not match
+      #   the outfeed operation parameter buffer size 4
+      # This kills the runner GenServer, which causes the Task.await to receive
+      # an EXIT signal with the RuntimeError.
+
+      for task <- test_tasks do
+        Task.await(task, 120_000)
+      end
+
+      for task <- pressure_tasks do
+        Task.await(task, 120_000)
+      end
+    end
   end
 end
