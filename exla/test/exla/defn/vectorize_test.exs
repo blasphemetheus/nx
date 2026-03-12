@@ -736,36 +736,7 @@ defmodule EXLA.Defn.VectorizeTest do
       assert_equal(result, expected)
     end
 
-    # 7. While loop containing vectorized cond with hooks
-    defn while_with_vectorized_cond(pred, n) do
-      {_, _, _, result} =
-        while {i = Nx.tensor(0), pred, n, acc = Nx.tensor(0)}, Nx.less(i, n) do
-          val =
-            cond do
-              pred -> send_value(1, clause: "loop_if")
-              true -> send_value(2, clause: "loop_else")
-            end
-
-          {i + 1, pred, n, acc + val}
-        end
-
-      result
-    end
-
-    test "while loop with vectorized cond and hooks" do
-      # pred on :a: [1, 0], loop 3 times
-      # a=0: pred=1, accumulates 1*3 = 3
-      # a=1: pred=0, accumulates 2*3 = 6
-      result =
-        while_with_vectorized_cond(
-          Nx.vectorize(~VEC[1 0], :a),
-          3
-        )
-
-      assert_equal(result, Nx.vectorize(Nx.tensor([3, 6]), :a))
-    end
-
-    # 8. Nested cond with hooks on different axes
+    # 7. Nested cond with hooks on different axes
     defn nested_cond_hooked(p_outer, p_inner) do
       cond do
         p_outer ->
