@@ -1,0 +1,237 @@
+# Issue #1689 Analysis: Vectorized Cond + Hooks Outfeed Race Condition
+
+## Status: Under Investigation
+
+## Bug Summary
+
+When a `cond` with hooks (`send_value` / `Nx.Defn.Kernel.hook`) has vectorized
+predicates on **different axes**, repeated execution intermittently crashes with:
+
+```
+** (RuntimeError) XLA runtime-managed outfeed buffer size 2 did not match
+the outfeed operation parameter buffer size 4
+
+[FATAL] xla/backends/cpu/runtime/xfeed_manager.cc:62
+Check failed: current_buffer_ == nullptr
+```
+
+Exit code 134 (SIGABRT) — hard crash, kills the BEAM.
+
+## Reproduction
+
+Reproduced on main (not PR-specific) via 50-iteration repetition test on
+Elixir 1.17.3 / OTP 27.3, Linux CI (GitHub Actions):
+
+```elixir
+test "hooked cross-axis cond under repetition (flakiness detector)" do
+  for _ <- 1..50 do
+    result =
+      hooked_cond_different_axes(
+        Nx.vectorize(~VEC[1 0], :a),
+        Nx.vectorize(~VEC[0 1 0], :b)
+      )
+    assert_equal(result, expected)
+  end
+end
+```
+
+- Failed on 1.17.3/OTP 27.3, passed on 1.18.4/OTP 28.3 (same CI run)
+- Non-deterministic: does not fail every run
+
+## Outfeed Architecture
+
+### Execution Lifecycle (defn.ex:263-281)
+
+```
+1. Runner GenServer starts (holds lock, waits for signal)
+2. Outfeed Erlang task starts → calls from_outfeed(flag_typespec) [dirty IO NIF, blocks]
+3. Lock.transfer(lock, send_to_runner, outfeed_pid)
+   → runner receives lock → executes XLA
+4. XLA writes outfeed: flag → data → flag → data → ... → flag=0
+5. Outfeed task reads flags, dispatches hooks, loops
+6. Outfeed task reads flag=0 → returns :ok → process exits
+7. Lock releases (via :DOWN monitor in Lock GenServer)
+8. Main process gets :DOWN → reads runner results
+9. Next execution can now acquire lock
+```
+
+### Device Outfeed Queue (xfeed_manager.cc)
+
+- **Global per device ordinal** — one `XfeedManager` per device, shared across ALL executions
+- Backed by `std::deque<XfeedBuffer*>` (FIFO)
+- `EnqueueBuffersAtomically()` — Erlang side enqueues buffers (via from_outfeed NIF)
+- `BlockingDequeueBuffer()` — XLA side dequeues (blocks until buffer available)
+- `ReleaseCurrentBuffer()` — XLA releases after memcpy
+- Protected by `absl::Mutex mu_`
+- Invariant: `CHECK(current_buffer_ == nullptr)` before dequeue (line 62)
+
+### from_outfeed NIF (exla.cc:465-478)
+
+```cpp
+fine::Ok<> transfer_from_outfeed(..., std::vector<xla::Shape> shapes,
+                                  ErlNifPid pid, fine::Term ref) {
+  for (auto &shape : shapes) {
+    auto msg = client->TransferFromOutfeed(device_id, shape);
+    enif_send(env, &pid, msg_env, tuple(ref, msg));
+  }
+  return fine::Ok();
+}
+FINE_NIF(transfer_from_outfeed, ERL_NIF_DIRTY_JOB_IO_BOUND);
+```
+
+- Runs on dirty IO scheduler
+- Blocks per-shape on device queue
+- Sends results to Erlang PID via enif_send
+
+### Vectorized Cond Compilation (expr.ex:136-189)
+
+Vectorized cond with predicates on different axes compiles to:
+
+```
+then_selector = Nx.any(devec_pred)     # scalar: "any element true?"
+else_selector = Nx.all(devec_pred)     # scalar: "all elements true?"
+then_result = if(then_selector) { hook_true; expr }
+else_result = if(!else_selector) { hook_false; cond(rest) }
+final = Nx.select(pred, then_result, else_result)
+```
+
+**Both branches always execute** (any/all), both hooks always fire.
+`Nx.select` picks per-element after. Outfeed sequence is deterministic.
+
+## Outfeed Queue Protocol (Confirmed via XLA source)
+
+### Buffer Flow Direction
+
+The terminology is counterintuitive. The outfeed queue works like this:
+
+1. **Consumer (Erlang)** calls `TransferFromOutfeed` → `EnqueueBuffersAtomically`
+   - Enqueues an **empty buffer** of expected size onto the device queue
+2. **Producer (XLA)** calls `OutfeedThunk::Execute` → `BlockingDequeueBuffer`
+   - Dequeues the empty buffer, **checks size matches**, fills it via memcpy
+3. **Producer (XLA)** calls `ReleaseCurrentBuffer` → triggers `Done()` callback
+   - Consumer gets notification that data is ready
+
+So the consumer **pre-allocates** buffers and XLA **fills** them. The size check
+at step 2 verifies the pre-allocated buffer matches what XLA wants to write.
+
+### NIF Scheduler Assignments
+
+- `run_cpu` → `ERL_NIF_DIRTY_JOB_CPU_BOUND` (dirty CPU scheduler)
+- `from_outfeed` → `ERL_NIF_DIRTY_JOB_IO_BOUND` (dirty IO scheduler)
+- These run on **different** scheduler pools, concurrently
+
+### XLA Execution Synchrony
+
+`run_cpu` NIF is **synchronous** — blocks until XLA computation completes,
+including all OutfeedThunk executions. XLA's OutfeedThunk blocks on
+`BlockingDequeueBuffer` waiting for the consumer to enqueue a buffer.
+So XLA execution and outfeed consumption are **co-dependent**:
+- XLA blocks waiting for consumer to provide buffers
+- Consumer blocks waiting for XLA to fill buffers
+
+## Race Condition Analysis
+
+### The Buffer Size Mismatch (2 vs 4)
+
+- u16 flag = 2 bytes (pre-allocated by consumer for flag reads)
+- s32 scalar hook result = 4 bytes (pre-allocated by consumer for data reads)
+- **XLA dequeued a 2-byte flag buffer when it expected to fill a 4-byte data buffer**
+
+### Confirmed Race Mechanism
+
+The device outfeed queue (`enqueued_buffers_` deque) is **global per device**.
+All executions sharing the same device_id share the same FIFO queue.
+
+```
+Execution N (in progress):
+  - XLA is executing on dirty CPU scheduler
+  - Outfeed task N is enqueuing buffers on dirty IO scheduler
+  - XLA dequeues buffers, fills them, releases them
+  - Outfeed task N reads flag=0 → exits
+  - Lock releases (:DOWN in Lock GenServer)
+
+Execution N+1 (starts immediately):
+  - Outfeed task N+1 starts, calls from_outfeed(flag_typespec)
+  - from_outfeed NIF runs on dirty IO scheduler
+  - NIF calls EnqueueBuffersAtomically → puts 2-byte flag buffer on queue
+
+  BUT: Execution N's run_cpu NIF is still running on dirty CPU scheduler!
+  - N's OutfeedThunk calls BlockingDequeueBuffer()
+  - Gets N+1's 2-byte flag buffer (instead of a buffer from N's consumer)
+  - buffer->length() (2) != outfeed_buffer.slice.size() (4)
+  - → RuntimeError: "buffer size 2 did not match buffer size 4"
+  - → CHECK(current_buffer_ == nullptr) fails → SIGABRT
+```
+
+### Why The Lock Doesn't Prevent This
+
+The lock is transferred to `outfeed_pid` (defn.ex:271). When `outfeed_pid`
+exits, the lock releases via `:DOWN` handler in `Lock` GenServer. But:
+
+1. `outfeed_pid` exits when it reads flag=0
+2. The flag=0 outfeed write is the **last token-ordered** outfeed in the XLA graph
+3. But `run_cpu` NIF hasn't returned yet — it's still executing on the dirty
+   CPU scheduler (there may be post-outfeed computation like `Nx.select`)
+4. More critically: XLA's `OutfeedThunk::Execute` for the flag=0 write must:
+   a. Call `BlockingDequeueBuffer` (gets the consumer's 2-byte buffer)
+   b. Fill the buffer with `0x0000`
+   c. Call `ReleaseCurrentBuffer` (triggers Done callback → consumer gets data)
+   d. **Return from Execute**
+
+   The consumer reads the flag=0 and exits at step (c). But step (d) hasn't
+   completed yet. If there are more thunks after the outfeed close, XLA is
+   still running. Even if flag=0 is the last outfeed, `run_cpu` still needs
+   to return from the NIF call.
+
+5. The next execution's outfeed task starts and enqueues a buffer on the
+   same global device queue
+6. If any pending XLA operation from execution N tries to dequeue (shouldn't
+   happen if flag=0 is truly last), it gets N+1's buffer
+
+### Revised Theory: The Token Chain vs Thunk Execution Order
+
+The real question is whether the XLA ThunkExecutor guarantees that outfeed
+thunks execute in token-chain order. From the stack trace:
+
+```
+xla::cpu::ThunkExecutor::TracedExecute()
+xla::cpu::ThunkExecutor::ExecuteSequential()
+xla::cpu::ThunkExecutor::Execute()
+```
+
+`ExecuteSequential` suggests sequential execution, but `ThunkExecutor::Execute`
+may choose parallel execution for independent thunks. If two outfeed thunks
+(from if-true and if-false branches) are considered independent, they could
+execute in parallel or out-of-order, causing the consumer's pre-allocated
+buffers to be dequeued by the wrong outfeed thunk.
+
+### Open Questions
+
+- [ ] Can ThunkExecutor execute outfeed thunks out of token-chain order?
+      (Would explain same-execution buffer mismatch without cross-execution race)
+- [ ] Is there computation after the flag=0 outfeed in the vectorized cond graph?
+      (Would widen the cross-execution race window)
+- [ ] Does the dirty IO scheduler guarantee FIFO ordering for consecutive
+      from_outfeed NIF calls from different Erlang processes?
+- [ ] Could the lock release → next execution start happen fast enough on
+      1.17.3/OTP 27.3 but not on 1.18.4/OTP 28.3 (explaining version-specific
+      failure)?
+
+## CI Results
+
+| Commit | 1.17.3 | 1.18.4 | Notes |
+|--------|--------|--------|-------|
+| Expected value fix | pass | pass (rsqrt doctest only) | Basic tests correct |
+| Stress tests (3-axis, tensor, etc.) | pass | pass (rsqrt doctest only) | All pass |
+| Repetition + concurrency + evaluator | **CRASH** | pass | Reproduced #1689! |
+
+## Files of Interest
+
+- `exla/lib/exla/defn/outfeed.ex` — Outfeed task lifecycle, hook dispatch
+- `exla/lib/exla/defn.ex:263-281` — Execution coordination (runner + outfeed + lock)
+- `exla/lib/exla/defn/runner.ex` — Runner GenServer (executes XLA)
+- `exla/lib/exla/defn/lock.ex` — Device lock (per device_id, released on :DOWN)
+- `exla/c_src/exla/exla.cc:465-480` — from_outfeed NIF (dirty IO)
+- `xla/backends/cpu/runtime/xfeed_manager.cc` — XLA outfeed queue (global per device)
+- `xla/backends/cpu/runtime/outfeed_thunk.cc` — XLA outfeed execution (size check)
+- `nx/lib/nx/defn/expr.ex:136-189` — Vectorized cond compilation (any/all/select)

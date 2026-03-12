@@ -868,7 +868,7 @@ defmodule EXLA.Defn.VectorizeTest do
     # These target flaky failures caused by race conditions in the outfeed system.
 
     test "hooked cross-axis cond under repetition (flakiness detector)" do
-      for _ <- 1..50 do
+      for _ <- 1..200 do
         result =
           hooked_cond_different_axes(
             Nx.vectorize(~VEC[1 0], :a),
@@ -885,7 +885,7 @@ defmodule EXLA.Defn.VectorizeTest do
     end
 
     test "cond4 cross-axis with hooks under repetition (original #1689 scenario)" do
-      for _ <- 1..50 do
+      for _ <- 1..200 do
         assert_equal(
           cond4(
             Nx.vectorize(~VEC[0 1 0], :pred1),
@@ -911,7 +911,7 @@ defmodule EXLA.Defn.VectorizeTest do
 
     test "concurrent vectorized cond with hooks (outfeed routing stress)" do
       tasks =
-        for _ <- 1..10 do
+        for _ <- 1..30 do
           Task.async(fn ->
             hooked_cond_different_axes(
               Nx.vectorize(~VEC[1 0], :a),
@@ -926,14 +926,14 @@ defmodule EXLA.Defn.VectorizeTest do
         |> Nx.vectorize(:b)
 
       for task <- tasks do
-        result = Task.await(task, 30_000)
+        result = Task.await(task, 60_000)
         assert_equal(result, expected)
       end
     end
 
     test "concurrent cond4 cross-axis with hooks (original #1689 under concurrency)" do
       tasks =
-        for _ <- 1..10 do
+        for _ <- 1..30 do
           Task.async(fn ->
             cond4(
               Nx.vectorize(~VEC[0 1 0], :pred1),
@@ -959,7 +959,7 @@ defmodule EXLA.Defn.VectorizeTest do
         )
 
       for task <- tasks do
-        result = Task.await(task, 30_000)
+        result = Task.await(task, 60_000)
         assert_equal(result, expected)
       end
     end
