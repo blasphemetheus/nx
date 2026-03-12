@@ -405,6 +405,107 @@ defmodule EXLA.Defn.VectorizeTest do
       )
     end
 
+    # Stress tests: more complex vectorization scenarios for outfeed robustness
+
+    defn hooked_cond_3axes(p1, p2, p3) do
+      cond do
+        p1 -> send_value(1, clause: "p1")
+        p2 -> send_value(2, clause: "p2")
+        p3 -> send_value(3, clause: "p3")
+        true -> send_value(0, clause: "default")
+      end
+    end
+
+    test "hooked cond with 3 different vectorization axes" do
+      # p1: a=0 -> 1, a=1 -> 0
+      # p2: b=0 -> 0, b=1 -> 1
+      # p3: c=0 -> 0, c=1 -> 0, c=2 -> 1
+      #
+      # Result is vectorized[a: 2][b: 2][c: 3]
+      # a=0: p1=1 for all b,c → all 1s
+      # a=1, b=0: p1=0, p2=0, check p3 → c=0->0, c=1->0, c=2->3
+      # a=1, b=1: p1=0, p2=1 → all 2s
+      result =
+        hooked_cond_3axes(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1], :b),
+          Nx.vectorize(~VEC[0 0 1], :c)
+        )
+
+      expected =
+        Nx.tensor([
+          [[1, 1, 1], [1, 1, 1]],
+          [[0, 0, 3], [2, 2, 2]]
+        ])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+        |> Nx.vectorize(:c)
+
+      assert_equal(result, expected)
+    end
+
+    defn hooked_cond_tensor_result(p1, p2) do
+      cond do
+        p1 -> send_value(Nx.tensor([[1, 2], [3, 4]]), clause: "p1")
+        p2 -> send_value(Nx.tensor([[5, 6], [7, 8]]), clause: "p2")
+        true -> send_value(Nx.tensor([[0, 0], [0, 0]]), clause: "default")
+      end
+    end
+
+    test "hooked cond with higher-rank tensor results and different axes" do
+      # p1: a=0 -> 1, a=1 -> 0
+      # p2: b=0 -> 0, b=1 -> 1
+      #
+      # Result is vectorized[a: 2][b: 2] with inner shape {2, 2}
+      # a=0: p1=1 → [[1,2],[3,4]] for all b
+      # a=1, b=0: p1=0, p2=0 → [[0,0],[0,0]]
+      # a=1, b=1: p1=0, p2=1 → [[5,6],[7,8]]
+      result =
+        hooked_cond_tensor_result(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1], :b)
+        )
+
+      expected =
+        Nx.tensor([
+          [[[1, 2], [3, 4]], [[1, 2], [3, 4]]],
+          [[[0, 0], [0, 0]], [[5, 6], [7, 8]]]
+        ])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert_equal(result, expected)
+    end
+
+    defn unhook_cond_3axes(p1, p2, p3) do
+      cond do
+        p1 -> 1
+        p2 -> 2
+        p3 -> 3
+        true -> 0
+      end
+    end
+
+    test "unhook cond with 3 different vectorization axes" do
+      result =
+        unhook_cond_3axes(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1], :b),
+          Nx.vectorize(~VEC[0 0 1], :c)
+        )
+
+      expected =
+        Nx.tensor([
+          [[1, 1, 1], [1, 1, 1]],
+          [[0, 0, 3], [2, 2, 2]]
+        ])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+        |> Nx.vectorize(:c)
+
+      assert_equal(result, expected)
+    end
+
     test "2 vectorized preds with different axes + clauses that match either" do
       assert_equal(
         cond4(
