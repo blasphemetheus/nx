@@ -216,12 +216,38 @@ buffers to be dequeued by the wrong outfeed thunk.
       **NO.** Reproduced on 1.18.4/OTP 28.3 when sufficient dirty scheduler
       pressure exists. Not version-specific — timing-dependent.
 
-### Open Questions
-
-- [ ] Is there computation after the flag=0 outfeed in the vectorized cond graph?
-      (Would widen the cross-execution race window)
-- [ ] Does the dirty IO scheduler guarantee FIFO ordering for consecutive
+- [x] Is there computation after the flag=0 outfeed in the vectorized cond graph?
+      **YES.** The compilation flow in `exla/lib/exla/defn.ex:236-238` is:
+      ```
+      {res, cache} = recur_flatten(expr, state, new_cache(outfeed))
+      outfeed = cache |> get_outfeed() |> Outfeed.close(function)  # flag=0 here
+      Value.func_return(function, res)  # Nx.select result returned here
+      ```
+      The `Nx.select` (from vectorized cond, `expr.ex:185`) is part of `res`,
+      compiled before `close()` in Elixir code, BUT in the XLA graph the outfeed
+      close is a token-chain operation while `Nx.select` is a data operation.
+      Both are thunks in the final graph. The key point: `run_cpu` NIF does not
+      return until ALL thunks complete, including any data operations after the
+      close flag. This widens the race window.
+- [x] Does the dirty IO scheduler guarantee FIFO ordering for consecutive
       from_outfeed NIF calls from different Erlang processes?
+      **NO.** Dirty IO schedulers are a thread pool (default 10, configurable via
+      `+SDio`). Processes are enqueued on a shared run queue, but:
+      - Different normal schedulers may enqueue to dirty queue at different times
+      - OS thread scheduling determines actual execution order
+      - No cross-scheduler synchronization preserves caller ordering
+      - OTP docs make no ordering guarantees for dirty NIF dispatch
+      This means concurrent `from_outfeed` calls from different outfeed tasks
+      can enqueue buffers in arbitrary order on the global device queue.
+
+### All Questions Answered
+
+The complete picture:
+1. The bug is **cross-execution** buffer interleaving (not intra-execution thunk reordering)
+2. **Post-outfeed computation** (Nx.select) keeps `run_cpu` busy after flag=0, widening the race
+3. **No dirty IO ordering guarantees** means concurrent outfeed tasks can interleave freely
+4. The **device lock** releases too early (on outfeed task exit, before `run_cpu` returns)
+5. The fix should ensure the lock is not released until both outfeed AND runner complete
 
 ## Confirmed Reproduction (2026-03-12)
 
