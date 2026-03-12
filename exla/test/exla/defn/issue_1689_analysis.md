@@ -292,6 +292,44 @@ scheduler pressure tests) running simultaneously with basic hooked cond tests.
 ExUnit's `async: true` runs all tests concurrently, so the stress tests created
 background outfeed queue traffic that the basic test couldn't handle.
 
+## Vulnerability Scope
+
+| Code Path | Uses Outfeed Queue | Vulnerable | Notes |
+|-----------|-------------------|------------|-------|
+| Hooks (`send_value`, `hook`) | YES | **YES** | Same lock pattern |
+| Lazy transfers (`:always`) | YES (infeed) | **YES** | Same global queue, same lock |
+| `runtime_call` | NO | **NO** | Uses `custom_call` + `CallbackServer` bridge |
+| Normal execution (no hooks) | NO | **NO** | Synchronous `Lock.unlock` in `after` block |
+
+## Fix Attempt: Lock Chaining via `on_unlock`
+
+### Approach
+
+Chain the lock from `outfeed_pid` → `runner` so the lock holds until `run_cpu` NIF
+returns. Uses `Lock.on_unlock` to register a `{:transfer, runner}` callback before
+transferring the lock to `outfeed_pid`:
+
+```elixir
+# defn.ex — before the fix:
+_ = EXLA.Defn.Lock.transfer(lock, fn -> send(runner, lock) end, outfeed_pid)
+
+# defn.ex — after the fix:
+_ = EXLA.Defn.Lock.on_unlock(lock, fn -> :ok end, fn -> {:transfer, runner} end)
+_ = EXLA.Defn.Lock.transfer(lock, fn -> send(runner, lock) end, outfeed_pid)
+```
+
+`on_unlock` MUST be called before `transfer` — the `to_unlock` callback is preserved
+through transfer (Lock GenServer does `{{to_unlock, _pid}, queue} -> {{to_unlock, pid}, queue}}`).
+This avoids a race where outfeed exits before `on_unlock` is processed.
+
+### Results
+
+- Seeds 12345, 99999 (previously crashing): **PASS** with fix
+- Seeds 22222, 55555: **STILL CRASH** with fix (exit 134 / SIGABRT)
+- 8/10 seeds pass, 2/10 still crash
+
+The fix reduces but does not eliminate the race. Under investigation.
+
 ## CI Results
 
 | Commit | 1.17.3 | 1.18.4 | Notes |
@@ -300,6 +338,18 @@ background outfeed queue traffic that the basic test couldn't handle.
 | Stress tests (3-axis, tensor, etc.) | pass | pass (rsqrt doctest only) | All pass |
 | Repetition + concurrency + evaluator | **CRASH** | pass | Reproduced #1689! |
 | Blast mode + scheduler pressure | timeout (60s) | **CRASH** | Reproduced on 1.18.4! |
+
+## Local Reproduction
+
+| Seed | Without fix | With fix (on_unlock) |
+|------|------------|---------------------|
+| 12345 | CRASH (134) | pass |
+| 99999 | CRASH (139) | pass |
+| 22222 | not tested | CRASH (134) |
+| 55555 | not tested | CRASH (134) |
+| 990472 | pass | pass |
+| 286354 | pass | pass |
+| Others | pass | pass |
 
 ## Files of Interest
 
