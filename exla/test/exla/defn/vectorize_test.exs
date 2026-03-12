@@ -1332,5 +1332,185 @@ defmodule EXLA.Defn.VectorizeTest do
         Task.await(task, 120_000)
       end
     end
+
+    # --- Blast mode tests: minimize inter-call latency ---
+    # The race window is microseconds between outfeed exit and run_cpu NIF return.
+    # Assertion overhead adds significant delay between calls, potentially letting
+    # run_cpu finish before the next execution starts. These tests remove all
+    # assertions from the inner loop, running the function as fast as possible,
+    # and only verify results from the last iteration.
+
+    # Strategy 8: Blast mode — tight loop, no assertions, maximum call rate.
+    # 30 tasks x 100 iterations with no assertion overhead = pure outfeed queue pressure.
+    test "blast mode: 30 tasks x 100 iterations, no inner assertions (#1689 max rate)" do
+      tasks =
+        for _ <- 1..30 do
+          Task.async(fn ->
+            last =
+              Enum.reduce(1..100, nil, fn _, _ ->
+                hooked_cond_different_axes(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+              end)
+
+            # Only verify the last result
+            expected =
+              Nx.tensor([[1, 1, 1], [0, 2, 0]])
+              |> Nx.vectorize(:a)
+              |> Nx.vectorize(:b)
+
+            assert_equal(last, expected)
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 9: Blast mode with heavy post-computation.
+    # No assertions + heavy computation after cond = maximum race window exposure.
+    test "blast mode: heavy post-computation, 20 tasks x 100 iterations (#1689 wide window blast)" do
+      tasks =
+        for _ <- 1..20 do
+          Task.async(fn ->
+            last =
+              Enum.reduce(1..100, nil, fn _, _ ->
+                hooked_cond_then_compute(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+              end)
+
+            assert last.vectorized_axes == [a: 2, b: 3]
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 10: Blast mode mixed workloads — different functions interleaved
+    # with no assertion overhead. The mixed buffer sizes maximize the chance that
+    # a cross-execution buffer swap produces a detectable size mismatch.
+    test "blast mode: mixed workloads, 30 tasks x 80 iterations (#1689 chaos blast)" do
+      funs = [
+        fn ->
+          hooked_cond_different_axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+        end,
+        fn ->
+          hooked_cond_tensor_result(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+        end,
+        fn ->
+          hooked_cond_3axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b),
+            Nx.vectorize(~VEC[0 0 1 1], :c)
+          )
+        end,
+        fn ->
+          multi_hook_branch(Nx.vectorize(~VEC[1 0 1], :a))
+        end,
+        fn ->
+          hooked_cond_then_compute(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+        end
+      ]
+
+      tasks =
+        for task_id <- 1..30 do
+          fun = Enum.at(funs, rem(task_id, length(funs)))
+
+          Task.async(fn ->
+            for _ <- 1..80, do: fun.()
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 11: Dirty scheduler pressure.
+    # Spawn NIF-like busy work on dirty CPU schedulers to delay run_cpu returns,
+    # widening the window between outfeed exit and NIF completion.
+    test "dirty scheduler pressure + hooked cross-axis cond (#1689 scheduler contention)" do
+      # Spawn background processes that keep dirty CPU schedulers busy.
+      # Nx operations go through NIFs on dirty schedulers, so running many
+      # concurrent Nx computations creates scheduler contention.
+      pressure_tasks =
+        for _ <- 1..8 do
+          Task.async(fn ->
+            for _ <- 1..200 do
+              # Heavy Nx computation that runs on dirty CPU scheduler
+              m = Nx.iota({128, 128})
+              Nx.sum(Nx.dot(m, m))
+            end
+          end)
+        end
+
+      # While schedulers are under pressure, run hooked cond tests
+      test_tasks =
+        for _ <- 1..20 do
+          Task.async(fn ->
+            for _ <- 1..50 do
+              hooked_cond_different_axes(
+                Nx.vectorize(~VEC[1 0], :a),
+                Nx.vectorize(~VEC[0 1 0], :b)
+              )
+            end
+          end)
+        end
+
+      # Wait for test tasks first (they're the ones we care about)
+      for task <- test_tasks do
+        Task.await(task, 180_000)
+      end
+
+      # Clean up pressure tasks
+      for task <- pressure_tasks do
+        Task.await(task, 180_000)
+      end
+    end
+
+    # Strategy 12: Rapid alternation between hooked and unhooked.
+    # Unhooked calls have no outfeed (no lock held by outfeed_pid), so they
+    # complete faster. Rapid alternation between hooked (outfeed) and unhooked
+    # (no outfeed) means the lock cycling pattern is irregular, potentially
+    # catching the race at different phases.
+    test "rapid alternation hooked/unhooked cross-axis (#1689 irregular lock cycling)" do
+      tasks =
+        for _ <- 1..20 do
+          Task.async(fn ->
+            for i <- 1..100 do
+              if rem(i, 2) == 0 do
+                hooked_cond_different_axes(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+              else
+                unhook_cond_different_axes(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+              end
+            end
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
   end
 end
