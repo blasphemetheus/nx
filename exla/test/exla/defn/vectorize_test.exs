@@ -1197,8 +1197,9 @@ defmodule EXLA.Defn.VectorizeTest do
       p2 = Nx.tensor(p2_data) |> Nx.vectorize(:b)
       p3 = Nx.tensor(p3_data) |> Nx.vectorize(:c)
 
-      expected =
-        Nx.Defn.jit_apply(&eval_cond_3axes/3, [p1, p2, p3], compiler: Nx.Defn.Evaluator)
+      # Compute expected from a single (non-concurrent) call.
+      # Note: hooked_cond_3axes returns 1/2/3/0, NOT eval_cond_3axes's 10/20/30/0.
+      expected = hooked_cond_3axes(p1, p2, p3)
 
       tasks =
         for _ <- 1..8 do
