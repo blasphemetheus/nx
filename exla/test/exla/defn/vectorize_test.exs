@@ -800,5 +800,197 @@ defmodule EXLA.Defn.VectorizeTest do
 
       assert_equal(result, expected)
     end
+
+    # --- Evaluator comparison tests ---
+    # Compare EXLA against the reference evaluator to confirm normalize logic
+    # is correct without hand-computing expected values.
+
+    defn eval_cond_2axes(p1, p2) do
+      cond do
+        p1 -> 1
+        p2 -> 2
+        true -> 0
+      end
+    end
+
+    defn eval_cond_3axes(p1, p2, p3) do
+      cond do
+        p1 -> 10
+        p2 -> 20
+        p3 -> 30
+        true -> 0
+      end
+    end
+
+    defn eval_cond_computed(x, y) do
+      cond do
+        Nx.greater(x, 5) -> 1
+        Nx.greater(y, 3) -> 2
+        true -> 0
+      end
+    end
+
+    test "EXLA matches evaluator: 2-axis vectorized cond" do
+      p1 = Nx.vectorize(~VEC[1 0 0], :a)
+      p2 = Nx.vectorize(~VEC[0 1], :b)
+
+      expected =
+        Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: Nx.Defn.Evaluator)
+
+      result =
+        Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: EXLA)
+
+      assert_equal(result, expected)
+    end
+
+    test "EXLA matches evaluator: 3-axis vectorized cond" do
+      p1 = Nx.vectorize(~VEC[1 0], :a)
+      p2 = Nx.vectorize(~VEC[0 1 0], :b)
+      p3 = Nx.vectorize(~VEC[0 0 1 1], :c)
+
+      expected =
+        Nx.Defn.jit_apply(&eval_cond_3axes/3, [p1, p2, p3], compiler: Nx.Defn.Evaluator)
+
+      result =
+        Nx.Defn.jit_apply(&eval_cond_3axes/3, [p1, p2, p3], compiler: EXLA)
+
+      assert_equal(result, expected)
+    end
+
+    test "EXLA matches evaluator: computed predicates on different axes" do
+      x = Nx.vectorize(Nx.tensor([2, 8, 3, 6]), :a)
+      y = Nx.vectorize(Nx.tensor([1, 5, 4]), :b)
+
+      expected =
+        Nx.Defn.jit_apply(&eval_cond_computed/2, [x, y], compiler: Nx.Defn.Evaluator)
+
+      result =
+        Nx.Defn.jit_apply(&eval_cond_computed/2, [x, y], compiler: EXLA)
+
+      assert_equal(result, expected)
+    end
+
+    test "EXLA matches evaluator: varied predicate patterns" do
+      # Test several different predicate patterns to cover more broadcast cases
+      patterns = [
+        {~VEC[1 1], ~VEC[0 0 0]},
+        {~VEC[0 0], ~VEC[1 1 1]},
+        {~VEC[0 0], ~VEC[0 0 0]},
+        {~VEC[1 0 1 0], ~VEC[0 1]}
+      ]
+
+      for {p1_data, p2_data} <- patterns do
+        p1 = Nx.vectorize(p1_data, :a)
+        p2 = Nx.vectorize(p2_data, :b)
+
+        expected =
+          Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: Nx.Defn.Evaluator)
+
+        result =
+          Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: EXLA)
+
+        assert_equal(result, expected)
+      end
+    end
+
+    # --- Repetition and concurrency stress tests ---
+    # These target flaky failures caused by race conditions in the outfeed system.
+
+    test "hooked cross-axis cond under repetition (flakiness detector)" do
+      for _ <- 1..50 do
+        result =
+          hooked_cond_different_axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+
+        expected =
+          Nx.tensor([[1, 1, 1], [0, 2, 0]])
+          |> Nx.vectorize(:a)
+          |> Nx.vectorize(:b)
+
+        assert_equal(result, expected)
+      end
+    end
+
+    test "cond4 cross-axis with hooks under repetition (original #1689 scenario)" do
+      for _ <- 1..50 do
+        assert_equal(
+          cond4(
+            Nx.vectorize(~VEC[0 1 0], :pred1),
+            10,
+            Nx.vectorize(~VEC[1 0], :pred2),
+            20,
+            0,
+            30,
+            40
+          ),
+          Nx.vectorize(
+            ~MAT[
+              20 40
+              10 10
+              20 40
+            ],
+            pred1: 3,
+            pred2: 2
+          )
+        )
+      end
+    end
+
+    test "concurrent vectorized cond with hooks (outfeed routing stress)" do
+      tasks =
+        for _ <- 1..10 do
+          Task.async(fn ->
+            hooked_cond_different_axes(
+              Nx.vectorize(~VEC[1 0], :a),
+              Nx.vectorize(~VEC[0 1 0], :b)
+            )
+          end)
+        end
+
+      expected =
+        Nx.tensor([[1, 1, 1], [0, 2, 0]])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      for task <- tasks do
+        result = Task.await(task, 30_000)
+        assert_equal(result, expected)
+      end
+    end
+
+    test "concurrent cond4 cross-axis with hooks (original #1689 under concurrency)" do
+      tasks =
+        for _ <- 1..10 do
+          Task.async(fn ->
+            cond4(
+              Nx.vectorize(~VEC[0 1 0], :pred1),
+              10,
+              Nx.vectorize(~VEC[1 0], :pred2),
+              20,
+              0,
+              30,
+              40
+            )
+          end)
+        end
+
+      expected =
+        Nx.vectorize(
+          ~MAT[
+            20 40
+            10 10
+            20 40
+          ],
+          pred1: 3,
+          pred2: 2
+        )
+
+      for task <- tasks do
+        result = Task.await(task, 30_000)
+        assert_equal(result, expected)
+      end
+    end
   end
 end
