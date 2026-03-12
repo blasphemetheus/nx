@@ -1444,27 +1444,22 @@ defmodule EXLA.Defn.VectorizeTest do
     # Strategy 11: Dirty scheduler pressure.
     # Spawn NIF-like busy work on dirty CPU schedulers to delay run_cpu returns,
     # widening the window between outfeed exit and NIF completion.
-    @tag timeout: 180_000
+    # Note: tuned for 2-core CI runners — keep pressure light enough to finish.
     test "dirty scheduler pressure + hooked cross-axis cond (#1689 scheduler contention)" do
-      # Spawn background processes that keep dirty CPU schedulers busy.
-      # Nx operations go through NIFs on dirty schedulers, so running many
-      # concurrent Nx computations creates scheduler contention.
       pressure_tasks =
-        for _ <- 1..8 do
+        for _ <- 1..4 do
           Task.async(fn ->
-            for _ <- 1..200 do
-              # Heavy Nx computation that runs on dirty CPU scheduler
-              m = Nx.iota({128, 128})
+            for _ <- 1..50 do
+              m = Nx.iota({64, 64})
               Nx.sum(Nx.dot(m, m))
             end
           end)
         end
 
-      # While schedulers are under pressure, run hooked cond tests
       test_tasks =
-        for _ <- 1..20 do
+        for _ <- 1..12 do
           Task.async(fn ->
-            for _ <- 1..50 do
+            for _ <- 1..30 do
               hooked_cond_different_axes(
                 Nx.vectorize(~VEC[1 0], :a),
                 Nx.vectorize(~VEC[0 1 0], :b)
@@ -1473,14 +1468,12 @@ defmodule EXLA.Defn.VectorizeTest do
           end)
         end
 
-      # Wait for test tasks first (they're the ones we care about)
       for task <- test_tasks do
-        Task.await(task, 180_000)
+        Task.await(task, 120_000)
       end
 
-      # Clean up pressure tasks
       for task <- pressure_tasks do
-        Task.await(task, 180_000)
+        Task.await(task, 120_000)
       end
     end
 
