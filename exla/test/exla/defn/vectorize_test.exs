@@ -352,7 +352,7 @@ defmodule EXLA.Defn.VectorizeTest do
         result,
         Nx.vectorize(~MAT[
               1 1 1
-              2 0 2
+              0 2 0
             ], a: 2, b: 3)
       )
     end
@@ -381,7 +381,7 @@ defmodule EXLA.Defn.VectorizeTest do
         result,
         Nx.vectorize(~MAT[
               1 1 1
-              2 0 2
+              0 2 0
             ], a: 2, b: 3)
       )
     end
