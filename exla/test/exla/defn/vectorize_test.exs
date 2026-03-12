@@ -738,15 +738,15 @@ defmodule EXLA.Defn.VectorizeTest do
 
     # 7. While loop containing vectorized cond with hooks
     defn while_with_vectorized_cond(pred, n) do
-      {_, _, result} =
-        while {i = Nx.tensor(0), pred, acc = Nx.tensor(0)}, Nx.less(i, n) do
+      {_, _, _, result} =
+        while {i = Nx.tensor(0), pred, n, acc = Nx.tensor(0)}, Nx.less(i, n) do
           val =
             cond do
               pred -> send_value(1, clause: "loop_if")
               true -> send_value(2, clause: "loop_else")
             end
 
-          {i + 1, pred, acc + val}
+          {i + 1, pred, n, acc + val}
         end
 
       result
