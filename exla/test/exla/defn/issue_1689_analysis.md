@@ -205,17 +205,66 @@ may choose parallel execution for independent thunks. If two outfeed thunks
 execute in parallel or out-of-order, causing the consumer's pre-allocated
 buffers to be dequeued by the wrong outfeed thunk.
 
+### Answered Questions
+
+- [x] Can ThunkExecutor execute outfeed thunks out of token-chain order?
+      **NO.** Stack trace shows `ThunkExecutor::ExecuteSequential()` — thunks run
+      in order within a single execution. The bug is cross-execution, not intra.
+- [x] Could the lock release → next execution start happen fast enough on
+      1.17.3/OTP 27.3 but not on 1.18.4/OTP 28.3 (explaining version-specific
+      failure)?
+      **NO.** Reproduced on 1.18.4/OTP 28.3 when sufficient dirty scheduler
+      pressure exists. Not version-specific — timing-dependent.
+
 ### Open Questions
 
-- [ ] Can ThunkExecutor execute outfeed thunks out of token-chain order?
-      (Would explain same-execution buffer mismatch without cross-execution race)
 - [ ] Is there computation after the flag=0 outfeed in the vectorized cond graph?
       (Would widen the cross-execution race window)
 - [ ] Does the dirty IO scheduler guarantee FIFO ordering for consecutive
       from_outfeed NIF calls from different Erlang processes?
-- [ ] Could the lock release → next execution start happen fast enough on
-      1.17.3/OTP 27.3 but not on 1.18.4/OTP 28.3 (explaining version-specific
-      failure)?
+
+## Confirmed Reproduction (2026-03-12)
+
+**Crash reproduced on Elixir 1.18.4 / OTP 28.3** — previously only seen on 1.17.3.
+
+The crash occurred on the basic single-execution test (`test "hook inside cond with
+different vectorization axes"` at line 373) while concurrent stress tests were
+running in the same ExUnit session. This confirms:
+
+1. The bug is **cross-execution** — concurrent stress tests create enough outfeed
+   queue traffic that even a simple hooked cond execution hits interleaved buffers.
+2. The bug is **not OTP-version-specific** — it triggers on any version when dirty
+   scheduler pressure is sufficient.
+3. The key trigger is **concurrent hooked defn executions on the same device** —
+   the global per-device outfeed queue has no execution-scoped isolation.
+
+### Crash Details
+
+```
+F0312 22:55:01.563633  xfeed_manager.cc:62  Check failed: current_buffer_ == nullptr
+RuntimeError: XLA runtime-managed outfeed buffer size 2 did not match
+the outfeed operation parameter buffer size 4
+
+Stack trace:
+  xla::cpu::XfeedQueueManager::BlockingDequeueBuffer()
+  xla::cpu::OutfeedThunk::Execute()
+  xla::cpu::ThunkExecutor::TracedExecute()
+  xla::cpu::ThunkExecutor::ExecuteSequential()  ← sequential, not parallel
+  xla::cpu::ThunkExecutor::Execute()
+  xla::CpuPjRtRawLoadedExecutable::Execute()
+  exla::ExlaExecutable::Run()
+  exla::run()
+```
+
+The crash occurred in `run_cpu` NIF → `EXLA.Defn.Runner.handle_continue/2`.
+GenServer PID `#PID<0.897.0>` was the runner that got the wrong buffer.
+
+### Reproduction Strategy
+
+The most effective trigger was **concurrent mixed workloads** (blast mode tests,
+scheduler pressure tests) running simultaneously with basic hooked cond tests.
+ExUnit's `async: true` runs all tests concurrently, so the stress tests created
+background outfeed queue traffic that the basic test couldn't handle.
 
 ## CI Results
 
@@ -224,6 +273,7 @@ buffers to be dequeued by the wrong outfeed thunk.
 | Expected value fix | pass | pass (rsqrt doctest only) | Basic tests correct |
 | Stress tests (3-axis, tensor, etc.) | pass | pass (rsqrt doctest only) | All pass |
 | Repetition + concurrency + evaluator | **CRASH** | pass | Reproduced #1689! |
+| Blast mode + scheduler pressure | timeout (60s) | **CRASH** | Reproduced on 1.18.4! |
 
 ## Files of Interest
 

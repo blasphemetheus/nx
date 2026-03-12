@@ -1444,6 +1444,7 @@ defmodule EXLA.Defn.VectorizeTest do
     # Strategy 11: Dirty scheduler pressure.
     # Spawn NIF-like busy work on dirty CPU schedulers to delay run_cpu returns,
     # widening the window between outfeed exit and NIF completion.
+    @tag timeout: 180_000
     test "dirty scheduler pressure + hooked cross-axis cond (#1689 scheduler contention)" do
       # Spawn background processes that keep dirty CPU schedulers busy.
       # Nx operations go through NIFs on dirty schedulers, so running many
