@@ -963,5 +963,115 @@ defmodule EXLA.Defn.VectorizeTest do
         assert_equal(result, expected)
       end
     end
+
+    # --- Diagnostic tests: narrowing down the race condition ---
+
+    # Q1a: Does a single execution with many outfeed writes crash?
+    # If yes → intra-execution ordering bug. If no → cross-execution race.
+    test "single execution with large axes (intra-execution stress)" do
+      p1_data = for i <- 0..49, do: rem(i, 3)
+      p2_data = for i <- 0..69, do: rem(i, 5)
+
+      p1 = Nx.tensor(p1_data) |> Nx.vectorize(:a)
+      p2 = Nx.tensor(p2_data) |> Nx.vectorize(:b)
+
+      result = hooked_cond_different_axes(p1, p2)
+
+      expected =
+        Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: Nx.Defn.Evaluator)
+
+      assert_equal(result, expected)
+    end
+
+    # Q1b: Does adding a delay between iterations prevent the crash?
+    # If yes → cross-execution race window. If no → something else.
+    test "hooked cross-axis cond with delay between iterations" do
+      for _ <- 1..200 do
+        result =
+          hooked_cond_different_axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+
+        expected =
+          Nx.tensor([[1, 1, 1], [0, 2, 0]])
+          |> Nx.vectorize(:a)
+          |> Nx.vectorize(:b)
+
+        assert_equal(result, expected)
+        Process.sleep(5)
+      end
+    end
+
+    # Q2: Is the any/all/select pattern (different axes) required?
+    # Same-axis predicates don't use any/all/select, they use direct if_op.
+    # If this never crashes → the cross-axis compilation pattern matters.
+    defn hooked_cond_same_axis(p1, p2) do
+      cond do
+        p1 -> send_value(1, clause: "p1")
+        p2 -> send_value(2, clause: "p2")
+        true -> send_value(0, clause: "default")
+      end
+    end
+
+    test "hooked same-axis cond under repetition (control: no any/all/select)" do
+      for _ <- 1..200 do
+        result =
+          hooked_cond_same_axis(
+            Nx.vectorize(~VEC[1 0 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :a)
+          )
+
+        assert_equal(result, Nx.vectorize(~VEC[1 2 0], :a))
+      end
+    end
+
+    # Q3: Does unhook cross-axis cond crash under repetition?
+    # If no → outfeed is required, not just cond logic.
+    test "unhook cross-axis cond under repetition (control: no outfeed)" do
+      for _ <- 1..200 do
+        result =
+          unhook_cond_different_axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+
+        expected =
+          Nx.tensor([[1, 1, 1], [0, 2, 0]])
+          |> Nx.vectorize(:a)
+          |> Nx.vectorize(:b)
+
+        assert_equal(result, expected)
+      end
+    end
+
+    # Q4: Does adding heavy computation after cond widen the race window?
+    # If crashes more reliably → post-outfeed computation keeps XLA busy
+    # while the lock releases and next execution starts.
+    defn hooked_cond_then_compute(p1, p2) do
+      val =
+        cond do
+          p1 -> send_value(Nx.tensor(1.0), clause: "p1")
+          p2 -> send_value(Nx.tensor(2.0), clause: "p2")
+          true -> send_value(Nx.tensor(0.0), clause: "default")
+        end
+
+      # Heavy computation after the cond (outfeed already closed at this point)
+      m = Nx.broadcast(val, {64, 64})
+      Nx.sum(Nx.dot(m, m))
+    end
+
+    test "hooked cross-axis cond + heavy post-computation under repetition" do
+      for _ <- 1..200 do
+        result =
+          hooked_cond_then_compute(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+
+        # Just check it doesn't crash — exact values less important
+        assert result.vectorized_axes == [a: 2, b: 3]
+      end
+    end
   end
 end
