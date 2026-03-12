@@ -331,6 +331,61 @@ defmodule EXLA.Defn.VectorizeTest do
       )
     end
 
+    # Without hooks, vectorized cond with different axes works correctly.
+    # This confirms the bug is in the outfeed system, not the cond logic.
+    defn unhook_cond_different_axes(p1, p2) do
+      cond do
+        p1 -> 1
+        p2 -> 2
+        true -> 0
+      end
+    end
+
+    test "cond with different vectorization axes works without hooks" do
+      result =
+        unhook_cond_different_axes(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1 0], :b)
+        )
+
+      assert_equal(
+        result,
+        Nx.vectorize(~MAT[
+              1 1 1
+              2 0 2
+            ], a: 2, b: 3)
+      )
+    end
+
+    # Minimal reproduction for #1689: outfeed buffer size mismatch when
+    # hooks are used inside cond with predicates on different vectorization
+    # axes. The outfeed typespecs are computed from the devectorized shape
+    # at compile time, but at runtime the vectorized axes cause different
+    # buffer sizes in different branches, crashing XLA.
+    defn hooked_cond_different_axes(p1, p2) do
+      cond do
+        p1 -> send_value(1, clause: "p1")
+        p2 -> send_value(2, clause: "p2")
+        true -> send_value(0, clause: "default")
+      end
+    end
+
+    test "hook inside cond with different vectorization axes (issue #1689)" do
+      result =
+        hooked_cond_different_axes(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1 0], :b)
+        )
+
+      assert_equal(
+        result,
+        Nx.vectorize(~MAT[
+              1 1 1
+              2 0 2
+            ], a: 2, b: 3)
+      )
+    end
+
     test "2 vectorized preds with different axes" do
       assert_equal(
         cond4(
