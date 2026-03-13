@@ -260,6 +260,9 @@ defmodule EXLA.Defn do
         arg, i, _depth -> {i, EXLA.Defn.Buffers.from_nx!(arg, executable, false)}
       end)
 
+    device_id = executable.device_id
+    EXLA.Defn.OutfeedGuard.acquire(device_id, executable.client.name)
+
     {:ok, runner} =
       EXLA.Defn.Runner.start_link(lock, fn ->
         EXLA.Executable.run(executable, [Enum.reverse(buffers)], run_options)
@@ -267,6 +270,14 @@ defmodule EXLA.Defn do
 
     {:ok, outfeed_pid} =
       Outfeed.start_child(executable, outfeed, Process.group_leader(), Map.new(infeeds))
+
+    # Release the guard inside the lock's unlock callback so it happens
+    # atomically with lock release, before the next waiter is notified.
+    _ =
+      EXLA.Defn.Lock.on_unlock(lock, fn -> :ok end, fn ->
+        EXLA.Defn.OutfeedGuard.release(device_id)
+        :unlock
+      end)
 
     _ = EXLA.Defn.Lock.transfer(lock, fn -> send(runner, lock) end, outfeed_pid)
     ref = Process.monitor(outfeed_pid)
