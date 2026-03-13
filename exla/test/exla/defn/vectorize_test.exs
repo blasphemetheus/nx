@@ -368,5 +368,34 @@ defmodule EXLA.Defn.VectorizeTest do
             ], pred1: 3, pred2: 2)
       )
     end
+
+    defn hooked_cond_different_axes(p1, p2) do
+      cond do
+        p1 -> send_value(1, clause: "p1")
+        p2 -> send_value(2, clause: "p2")
+        true -> send_value(0, clause: "default")
+      end
+    end
+
+    test "concurrent hooked cond with different axes does not crash" do
+      # Concurrent hooked defn executions can interleave buffers on the global
+      # per-device XLA outfeed queue if the lock releases too early, causing
+      # a buffer size mismatch that kills the BEAM with SIGABRT (exit code 134).
+      tasks =
+        for _ <- 1..8 do
+          Task.async(fn ->
+            for _ <- 1..20 do
+              hooked_cond_different_axes(
+                Nx.vectorize(~VEC[1 0], :a),
+                Nx.vectorize(~VEC[0 1 0], :b)
+              )
+            end
+
+            :ok
+          end)
+        end
+
+      assert Enum.all?(Task.await_many(tasks, 30_000), &(&1 == :ok))
+    end
   end
 end

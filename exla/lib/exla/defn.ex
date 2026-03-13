@@ -268,6 +268,11 @@ defmodule EXLA.Defn do
     {:ok, outfeed_pid} =
       Outfeed.start_child(executable, outfeed, Process.group_leader(), Map.new(infeeds))
 
+    # Chain lock: outfeed_pid → runner, so the lock holds until run_cpu NIF returns.
+    # Without this, outfeed exit releases the lock while run_cpu still runs on the
+    # dirty CPU scheduler, allowing the next execution to interleave buffers on the
+    # global per-device outfeed queue.
+    _ = EXLA.Defn.Lock.on_unlock(lock, fn -> :ok end, fn -> {:transfer, runner} end)
     _ = EXLA.Defn.Lock.transfer(lock, fn -> send(runner, lock) end, outfeed_pid)
     ref = Process.monitor(outfeed_pid)
 
