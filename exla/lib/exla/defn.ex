@@ -268,7 +268,17 @@ defmodule EXLA.Defn do
     {:ok, outfeed_pid} =
       Outfeed.start_child(executable, outfeed, Process.group_leader(), Map.new(infeeds))
 
+    # Register on_unlock BEFORE transfer so the callback is set before outfeed_pid
+    # is monitored. The to_unlock callback is preserved through transfer.
+    # When the outfeed task exits (after reading flag=0), this transfers the lock to
+    # the runner instead of releasing it. This prevents the next execution from
+    # enqueuing buffers on the global per-device outfeed queue while run_cpu NIF is
+    # still executing on the dirty CPU scheduler. The runner process stays alive until
+    # Runner.read is called below, which stops it and releases the lock via :DOWN.
+    # See https://github.com/elixir-nx/nx/issues/1689
+    _ = EXLA.Defn.Lock.on_unlock(lock, fn -> :ok end, fn -> {:transfer, runner} end)
     _ = EXLA.Defn.Lock.transfer(lock, fn -> send(runner, lock) end, outfeed_pid)
+
     ref = Process.monitor(outfeed_pid)
 
     receive do
