@@ -268,7 +268,17 @@ defmodule EXLA.Defn do
     {:ok, outfeed_pid} =
       Outfeed.start_child(executable, outfeed, Process.group_leader(), Map.new(infeeds))
 
+    # Register on_unlock BEFORE transfer so the callback is set before outfeed_pid
+    # is monitored. The to_unlock callback is preserved through transfer.
+    # When the outfeed task exits (after reading flag=0), this transfers the lock to
+    # the runner instead of releasing it. This prevents the next execution from
+    # enqueuing buffers on the global per-device outfeed queue while run_cpu NIF is
+    # still executing on the dirty CPU scheduler. The runner process stays alive until
+    # Runner.read is called below, which stops it and releases the lock via :DOWN.
+    # See https://github.com/elixir-nx/nx/issues/1689
+    _ = EXLA.Defn.Lock.on_unlock(lock, fn -> :ok end, fn -> {:transfer, runner} end)
     _ = EXLA.Defn.Lock.transfer(lock, fn -> send(runner, lock) end, outfeed_pid)
+
     ref = Process.monitor(outfeed_pid)
 
     receive do
@@ -800,14 +810,41 @@ defmodule EXLA.Defn do
 
   defp cached_recur_operator(
          :runtime_call,
+         %T{data: %Expr{id: id, args: [tensor_expr, fun, out_template]}} = expr,
+         %{client: %EXLA.Client{platform: :cuda}, callback_server_pid: callback_server_pid} =
+           state,
+         cache
+       ) do
+    tensor_exprs = Composite.flatten_list([tensor_expr])
+
+    {arg_values, cache} =
+      Enum.map_reduce(tensor_exprs, cache, fn arg, cache ->
+        recur_operator(arg, state, cache) |> unwrap_single_tensor!()
+      end)
+
+    arg_template = Nx.to_template(tensor_expr)
+
+    :ok =
+      EXLA.CallbackServer.register(callback_server_pid, id, fun, out_template, arg_template)
+
+    typespecs = container_to_typespecs(out_template)
+
+    results =
+      Value.runtime_call(arg_values, typespecs, callback_server_pid, id)
+
+    {wrap_tuple_result(results, expr), cache}
+  end
+
+  defp cached_recur_operator(
+         :runtime_call,
          _expr,
          %{client: %EXLA.Client{platform: platform}},
          _cache
        ) do
     raise """
-    Nx.runtime_call/3 is currently only supported for EXLA CPU (platform: :host),
+    Nx.runtime_call/3 is currently only supported for EXLA CPU (platform: :host) and CUDA (platform: :cuda),
     but the active EXLA client is configured for platform #{inspect(platform)}.
-    Please run on the :host client or wait for future segmentation-based support.
+    Please run on the :host or :cuda client or wait for future segmentation-based support.
     """
   end
 
@@ -1046,6 +1083,23 @@ defmodule EXLA.Defn do
     left_side = Keyword.fetch!(opts, :left_side)
     lower = Keyword.fetch!(opts, :lower)
     transform = Keyword.fetch!(opts, :transform_a)
+
+    # StableHLO triangular_solve doesn't support conjugate-only transform,
+    # so we pre-conjugate A and use :none instead.
+    # For real types, conjugate is a no-op.
+    {a, transform} =
+      case transform do
+        :conjugate ->
+          if Nx.Type.complex?(type) do
+            a_typespec = Value.get_typespec(a)
+            {Value.conjugate(to_type(a, type), Typespec.to_type(a_typespec, type)), :none}
+          else
+            {a, :none}
+          end
+
+        other ->
+          {a, other}
+      end
 
     a_shape = Value.get_typespec(a).shape
     b_shape = Value.get_typespec(b).shape

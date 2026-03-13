@@ -331,6 +331,61 @@ defmodule EXLA.Defn.VectorizeTest do
       )
     end
 
+    # Without hooks, vectorized cond with different axes works correctly.
+    # This confirms the bug is in the outfeed system, not the cond logic.
+    defn unhook_cond_different_axes(p1, p2) do
+      cond do
+        p1 -> 1
+        p2 -> 2
+        true -> 0
+      end
+    end
+
+    test "cond with different vectorization axes works without hooks" do
+      result =
+        unhook_cond_different_axes(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1 0], :b)
+        )
+
+      assert_equal(
+        result,
+        Nx.vectorize(~MAT[
+              1 1 1
+              0 2 0
+            ], a: 2, b: 3)
+      )
+    end
+
+    # Minimal reproduction for #1689: outfeed buffer size mismatch when
+    # hooks are used inside cond with predicates on different vectorization
+    # axes. The outfeed typespecs are computed from the devectorized shape
+    # at compile time, but at runtime the vectorized axes cause different
+    # buffer sizes in different branches, crashing XLA.
+    defn hooked_cond_different_axes(p1, p2) do
+      cond do
+        p1 -> send_value(1, clause: "p1")
+        p2 -> send_value(2, clause: "p2")
+        true -> send_value(0, clause: "default")
+      end
+    end
+
+    test "hook inside cond with different vectorization axes (issue #1689)" do
+      result =
+        hooked_cond_different_axes(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1 0], :b)
+        )
+
+      assert_equal(
+        result,
+        Nx.vectorize(~MAT[
+              1 1 1
+              0 2 0
+            ], a: 2, b: 3)
+      )
+    end
+
     test "2 vectorized preds with different axes" do
       assert_equal(
         cond4(
@@ -350,6 +405,107 @@ defmodule EXLA.Defn.VectorizeTest do
       )
     end
 
+    # Stress tests: more complex vectorization scenarios for outfeed robustness
+
+    defn hooked_cond_3axes(p1, p2, p3) do
+      cond do
+        p1 -> send_value(1, clause: "p1")
+        p2 -> send_value(2, clause: "p2")
+        p3 -> send_value(3, clause: "p3")
+        true -> send_value(0, clause: "default")
+      end
+    end
+
+    test "hooked cond with 3 different vectorization axes" do
+      # p1: a=0 -> 1, a=1 -> 0
+      # p2: b=0 -> 0, b=1 -> 1
+      # p3: c=0 -> 0, c=1 -> 0, c=2 -> 1
+      #
+      # Result is vectorized[a: 2][b: 2][c: 3]
+      # a=0: p1=1 for all b,c → all 1s
+      # a=1, b=0: p1=0, p2=0, check p3 → c=0->0, c=1->0, c=2->3
+      # a=1, b=1: p1=0, p2=1 → all 2s
+      result =
+        hooked_cond_3axes(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1], :b),
+          Nx.vectorize(~VEC[0 0 1], :c)
+        )
+
+      expected =
+        Nx.tensor([
+          [[1, 1, 1], [1, 1, 1]],
+          [[0, 0, 3], [2, 2, 2]]
+        ])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+        |> Nx.vectorize(:c)
+
+      assert_equal(result, expected)
+    end
+
+    defn hooked_cond_tensor_result(p1, p2) do
+      cond do
+        p1 -> send_value(Nx.tensor([[1, 2], [3, 4]]), clause: "p1")
+        p2 -> send_value(Nx.tensor([[5, 6], [7, 8]]), clause: "p2")
+        true -> send_value(Nx.tensor([[0, 0], [0, 0]]), clause: "default")
+      end
+    end
+
+    test "hooked cond with higher-rank tensor results and different axes" do
+      # p1: a=0 -> 1, a=1 -> 0
+      # p2: b=0 -> 0, b=1 -> 1
+      #
+      # Result is vectorized[a: 2][b: 2] with inner shape {2, 2}
+      # a=0: p1=1 → [[1,2],[3,4]] for all b
+      # a=1, b=0: p1=0, p2=0 → [[0,0],[0,0]]
+      # a=1, b=1: p1=0, p2=1 → [[5,6],[7,8]]
+      result =
+        hooked_cond_tensor_result(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1], :b)
+        )
+
+      expected =
+        Nx.tensor([
+          [[[1, 2], [3, 4]], [[1, 2], [3, 4]]],
+          [[[0, 0], [0, 0]], [[5, 6], [7, 8]]]
+        ])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert_equal(result, expected)
+    end
+
+    defn unhook_cond_3axes(p1, p2, p3) do
+      cond do
+        p1 -> 1
+        p2 -> 2
+        p3 -> 3
+        true -> 0
+      end
+    end
+
+    test "unhook cond with 3 different vectorization axes" do
+      result =
+        unhook_cond_3axes(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(~VEC[0 1], :b),
+          Nx.vectorize(~VEC[0 0 1], :c)
+        )
+
+      expected =
+        Nx.tensor([
+          [[1, 1, 1], [1, 1, 1]],
+          [[0, 0, 3], [2, 2, 2]]
+        ])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+        |> Nx.vectorize(:c)
+
+      assert_equal(result, expected)
+    end
+
     test "2 vectorized preds with different axes + clauses that match either" do
       assert_equal(
         cond4(
@@ -367,6 +523,1088 @@ defmodule EXLA.Defn.VectorizeTest do
               2000 40
             ], pred1: 3, pred2: 2)
       )
+    end
+
+    # --- Additional stress tests for outfeed robustness ---
+
+    # 1. Container (tuple) results with cross-axis predicates
+    defn hooked_container_cross_axis(pred, then_a, then_b, else_a, else_b, opts \\ []) do
+      cond do
+        pred -> send_value({then_a, then_b}, pid: opts[:pid], clause: "if")
+        true -> send_value({else_a, else_b}, pid: opts[:pid], clause: "else")
+      end
+    end
+
+    test "container result with cross-axis predicates" do
+      # pred on :a, results are scalars → output vectorized[a: 3] tuple
+      # a=0: pred=1 → {10, 20}
+      # a=1: pred=0 → {30, 40}
+      # a=2: pred=1 → {10, 20}
+      {ra, rb} =
+        hooked_container_cross_axis(
+          Nx.vectorize(~VEC[1 0 1], :a),
+          10,
+          20,
+          30,
+          40,
+          pid: self()
+        )
+
+      assert_equal(ra, Nx.vectorize(~VEC[10 30 10], :a))
+      assert_equal(rb, Nx.vectorize(~VEC[20 40 20], :a))
+
+      assert_received {:vectorization_test, t, clause: "if"}
+      assert_equal(t, {Nx.tensor(10), Nx.tensor(20)})
+      assert_received {:vectorization_test, t, clause: "else"}
+      assert_equal(t, {Nx.tensor(30), Nx.tensor(40)})
+      refute_received {:vectorization_test, _, _}
+    end
+
+    test "container result with two different vectorization axes" do
+      # pred on :a (size 2), result values on :b (size 3) via broadcast
+      # a=0: pred=1 → {10, 20}
+      # a=1: pred=0 → {Nx.vectorize(~VEC[30 31 32], :b), 40}
+      #
+      # Output: tuple of vectorized[a: 2] tensors, second element of first
+      # has vectorized[a: 2][b: 3]
+      {ra, rb} =
+        hooked_container_cross_axis(
+          Nx.vectorize(~VEC[1 0], :a),
+          10,
+          20,
+          Nx.vectorize(~VEC[30 31 32], :b),
+          40,
+          pid: self()
+        )
+
+      expected_a =
+        Nx.tensor([[10, 10, 10], [30, 31, 32]])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert_equal(ra, expected_a)
+      assert_equal(rb, Nx.vectorize(~VEC[20 40], :a))
+    end
+
+    # 2. Multiple hooks per branch
+    defn multi_hook_branch(pred) do
+      cond do
+        pred ->
+          a = send_value(1, clause: "first_if")
+          send_value(Nx.add(a, 10), clause: "second_if")
+
+        true ->
+          a = send_value(2, clause: "first_else")
+          send_value(Nx.add(a, 20), clause: "second_else")
+      end
+    end
+
+    test "multiple hooks in same branch with different axes" do
+      result = multi_hook_branch(Nx.vectorize(~VEC[1 0 1], :a))
+
+      # a=0: pred=1 → 1+10=11
+      # a=1: pred=0 → 2+20=22
+      # a=2: pred=1 → 1+10=11
+      assert_equal(result, Nx.vectorize(~VEC[11 22 11], :a))
+    end
+
+    # 3. Large vectorization sizes
+    test "hooked cond with large vectorization sizes" do
+      # 10 elements on :a, 7 on :b
+      p1_data = List.duplicate(0, 10) |> List.replace_at(0, 1) |> List.replace_at(5, 1)
+      p2_data = List.duplicate(0, 7) |> List.replace_at(2, 1) |> List.replace_at(6, 1)
+
+      p1 = Nx.tensor(p1_data) |> Nx.vectorize(:a)
+      p2 = Nx.tensor(p2_data) |> Nx.vectorize(:b)
+
+      result = hooked_cond_different_axes(p1, p2)
+
+      # Build expected 10x7 matrix
+      # a=0,5: p1=1 → all 1s (row of 7 ones)
+      # other a: p1=0, check p2 → b=2,6: p2=1 → 2, rest → 0
+      expected =
+        for a <- 0..9 do
+          for b <- 0..6 do
+            cond do
+              Enum.at(p1_data, a) == 1 -> 1
+              Enum.at(p2_data, b) == 1 -> 2
+              true -> 0
+            end
+          end
+        end
+        |> Nx.tensor()
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert_equal(result, expected)
+    end
+
+    # 4. Computed predicates (Nx.greater instead of literal vectors)
+    defn hooked_cond_computed_preds(x, y) do
+      cond do
+        Nx.greater(x, 5) -> send_value(1, clause: "gt5")
+        Nx.greater(y, 3) -> send_value(2, clause: "gt3")
+        true -> send_value(0, clause: "default")
+      end
+    end
+
+    test "hooked cond with computed predicates on different axes" do
+      # x vectorized on :a: [2, 8, 3] → greater(x,5): [0, 1, 0]
+      # y vectorized on :b: [1, 5, 4, 2] → greater(y,3): [0, 1, 1, 0]
+      #
+      # Result is vectorized[a: 3][b: 4]
+      # a=0 (x=2, gt5=0): check y → b=0->0, b=1->2, b=2->2, b=3->0
+      # a=1 (x=8, gt5=1): all → 1
+      # a=2 (x=3, gt5=0): check y → b=0->0, b=1->2, b=2->2, b=3->0
+      result =
+        hooked_cond_computed_preds(
+          Nx.vectorize(Nx.tensor([2, 8, 3]), :a),
+          Nx.vectorize(Nx.tensor([1, 5, 4, 2]), :b)
+        )
+
+      expected =
+        Nx.tensor([
+          [0, 2, 2, 0],
+          [1, 1, 1, 1],
+          [0, 2, 2, 0]
+        ])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert_equal(result, expected)
+    end
+
+    # 5. Vectorized values in branch results (result vectorized on different axis than pred)
+    defn hooked_cond_vectorized_results(pred, vec_result) do
+      cond do
+        pred -> send_value(vec_result, clause: "if")
+        true -> send_value(Nx.tensor(0), clause: "else")
+      end
+    end
+
+    test "branch result vectorized on different axis than predicate" do
+      # pred on :a (size 2): [1, 0]
+      # vec_result on :b (size 3): [10, 20, 30]
+      #
+      # Result is vectorized[a: 2][b: 3]
+      # a=0: pred=1 → [10, 20, 30]
+      # a=1: pred=0 → [0, 0, 0]
+      result =
+        hooked_cond_vectorized_results(
+          Nx.vectorize(~VEC[1 0], :a),
+          Nx.vectorize(Nx.tensor([10, 20, 30]), :b)
+        )
+
+      expected =
+        Nx.tensor([[10, 20, 30], [0, 0, 0]])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert_equal(result, expected)
+    end
+
+    # 6. All-true / all-false predicate vectors (every element hits same branch)
+    test "hooked cond with all-true predicate vector" do
+      result =
+        hooked_cond_different_axes(
+          Nx.vectorize(~VEC[1 1 1], :a),
+          Nx.vectorize(~VEC[0 1], :b)
+        )
+
+      # All a values are true → always branch 1, regardless of b
+      expected =
+        Nx.tensor([[1, 1], [1, 1], [1, 1]])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert_equal(result, expected)
+    end
+
+    test "hooked cond with all-false predicates (always default)" do
+      result =
+        hooked_cond_different_axes(
+          Nx.vectorize(~VEC[0 0], :a),
+          Nx.vectorize(~VEC[0 0 0], :b)
+        )
+
+      # All predicates false → always 0
+      expected =
+        Nx.tensor([[0, 0, 0], [0, 0, 0]])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert_equal(result, expected)
+    end
+
+    # 7. Nested cond with hooks on different axes
+    defn nested_cond_hooked(p_outer, p_inner) do
+      cond do
+        p_outer ->
+          cond do
+            p_inner -> send_value(1, clause: "outer_true_inner_true")
+            true -> send_value(2, clause: "outer_true_inner_false")
+          end
+
+        true ->
+          send_value(3, clause: "outer_false")
+      end
+    end
+
+    test "nested cond with hooks on different axes" do
+      # p_outer on :a: [1, 0, 1]
+      # p_inner on :b: [0, 1]
+      #
+      # Result is vectorized[a: 3][b: 2]
+      # a=0 (outer=1): b=0 (inner=0) → 2, b=1 (inner=1) → 1
+      # a=1 (outer=0): → 3 for all b
+      # a=2 (outer=1): b=0 (inner=0) → 2, b=1 (inner=1) → 1
+      result =
+        nested_cond_hooked(
+          Nx.vectorize(~VEC[1 0 1], :a),
+          Nx.vectorize(~VEC[0 1], :b)
+        )
+
+      expected =
+        Nx.tensor([[2, 1], [3, 3], [2, 1]])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert_equal(result, expected)
+    end
+
+    # --- Evaluator comparison tests ---
+    # Compare EXLA against the reference evaluator to confirm normalize logic
+    # is correct without hand-computing expected values.
+
+    defn eval_cond_2axes(p1, p2) do
+      cond do
+        p1 -> 1
+        p2 -> 2
+        true -> 0
+      end
+    end
+
+    defn eval_cond_3axes(p1, p2, p3) do
+      cond do
+        p1 -> 10
+        p2 -> 20
+        p3 -> 30
+        true -> 0
+      end
+    end
+
+    defn eval_cond_computed(x, y) do
+      cond do
+        Nx.greater(x, 5) -> 1
+        Nx.greater(y, 3) -> 2
+        true -> 0
+      end
+    end
+
+    test "EXLA matches evaluator: 2-axis vectorized cond" do
+      p1 = Nx.vectorize(~VEC[1 0 0], :a)
+      p2 = Nx.vectorize(~VEC[0 1], :b)
+
+      expected =
+        Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: Nx.Defn.Evaluator)
+
+      result =
+        Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: EXLA)
+
+      assert_equal(result, expected)
+    end
+
+    test "EXLA matches evaluator: 3-axis vectorized cond" do
+      p1 = Nx.vectorize(~VEC[1 0], :a)
+      p2 = Nx.vectorize(~VEC[0 1 0], :b)
+      p3 = Nx.vectorize(~VEC[0 0 1 1], :c)
+
+      expected =
+        Nx.Defn.jit_apply(&eval_cond_3axes/3, [p1, p2, p3], compiler: Nx.Defn.Evaluator)
+
+      result =
+        Nx.Defn.jit_apply(&eval_cond_3axes/3, [p1, p2, p3], compiler: EXLA)
+
+      assert_equal(result, expected)
+    end
+
+    test "EXLA matches evaluator: computed predicates on different axes" do
+      x = Nx.vectorize(Nx.tensor([2, 8, 3, 6]), :a)
+      y = Nx.vectorize(Nx.tensor([1, 5, 4]), :b)
+
+      expected =
+        Nx.Defn.jit_apply(&eval_cond_computed/2, [x, y], compiler: Nx.Defn.Evaluator)
+
+      result =
+        Nx.Defn.jit_apply(&eval_cond_computed/2, [x, y], compiler: EXLA)
+
+      assert_equal(result, expected)
+    end
+
+    test "EXLA matches evaluator: varied predicate patterns" do
+      # Test several different predicate patterns to cover more broadcast cases
+      patterns = [
+        {~VEC[1 1], ~VEC[0 0 0]},
+        {~VEC[0 0], ~VEC[1 1 1]},
+        {~VEC[0 0], ~VEC[0 0 0]},
+        {~VEC[1 0 1 0], ~VEC[0 1]}
+      ]
+
+      for {p1_data, p2_data} <- patterns do
+        p1 = Nx.vectorize(p1_data, :a)
+        p2 = Nx.vectorize(p2_data, :b)
+
+        expected =
+          Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: Nx.Defn.Evaluator)
+
+        result =
+          Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: EXLA)
+
+        assert_equal(result, expected)
+      end
+    end
+
+    # --- Repetition and concurrency stress tests ---
+    # These target flaky failures caused by race conditions in the outfeed system.
+
+    test "hooked cross-axis cond under repetition (flakiness detector)" do
+      for _ <- 1..200 do
+        result =
+          hooked_cond_different_axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+
+        expected =
+          Nx.tensor([[1, 1, 1], [0, 2, 0]])
+          |> Nx.vectorize(:a)
+          |> Nx.vectorize(:b)
+
+        assert_equal(result, expected)
+      end
+    end
+
+    test "cond4 cross-axis with hooks under repetition (original #1689 scenario)" do
+      for _ <- 1..200 do
+        assert_equal(
+          cond4(
+            Nx.vectorize(~VEC[0 1 0], :pred1),
+            10,
+            Nx.vectorize(~VEC[1 0], :pred2),
+            20,
+            0,
+            30,
+            40
+          ),
+          Nx.vectorize(
+            ~MAT[
+              20 40
+              10 10
+              20 40
+            ],
+            pred1: 3,
+            pred2: 2
+          )
+        )
+      end
+    end
+
+    test "concurrent vectorized cond with hooks (outfeed routing stress)" do
+      tasks =
+        for _ <- 1..30 do
+          Task.async(fn ->
+            hooked_cond_different_axes(
+              Nx.vectorize(~VEC[1 0], :a),
+              Nx.vectorize(~VEC[0 1 0], :b)
+            )
+          end)
+        end
+
+      expected =
+        Nx.tensor([[1, 1, 1], [0, 2, 0]])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      for task <- tasks do
+        result = Task.await(task, 60_000)
+        assert_equal(result, expected)
+      end
+    end
+
+    test "concurrent cond4 cross-axis with hooks (original #1689 under concurrency)" do
+      tasks =
+        for _ <- 1..30 do
+          Task.async(fn ->
+            cond4(
+              Nx.vectorize(~VEC[0 1 0], :pred1),
+              10,
+              Nx.vectorize(~VEC[1 0], :pred2),
+              20,
+              0,
+              30,
+              40
+            )
+          end)
+        end
+
+      expected =
+        Nx.vectorize(
+          ~MAT[
+            20 40
+            10 10
+            20 40
+          ],
+          pred1: 3,
+          pred2: 2
+        )
+
+      for task <- tasks do
+        result = Task.await(task, 60_000)
+        assert_equal(result, expected)
+      end
+    end
+
+    # --- Diagnostic tests: narrowing down the race condition ---
+
+    # Q1a: Does a single execution with many outfeed writes crash?
+    # If yes → intra-execution ordering bug. If no → cross-execution race.
+    test "single execution with large axes (intra-execution stress)" do
+      p1_data = for i <- 0..49, do: rem(i, 3)
+      p2_data = for i <- 0..69, do: rem(i, 5)
+
+      p1 = Nx.tensor(p1_data) |> Nx.vectorize(:a)
+      p2 = Nx.tensor(p2_data) |> Nx.vectorize(:b)
+
+      result = hooked_cond_different_axes(p1, p2)
+
+      expected =
+        Nx.Defn.jit_apply(&eval_cond_2axes/2, [p1, p2], compiler: Nx.Defn.Evaluator)
+
+      assert_equal(result, expected)
+    end
+
+    # Q1b: Does adding a delay between iterations prevent the crash?
+    # If yes → cross-execution race window. If no → something else.
+    test "hooked cross-axis cond with delay between iterations" do
+      for _ <- 1..200 do
+        result =
+          hooked_cond_different_axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+
+        expected =
+          Nx.tensor([[1, 1, 1], [0, 2, 0]])
+          |> Nx.vectorize(:a)
+          |> Nx.vectorize(:b)
+
+        assert_equal(result, expected)
+        Process.sleep(5)
+      end
+    end
+
+    # Q2: Is the any/all/select pattern (different axes) required?
+    # Same-axis predicates don't use any/all/select, they use direct if_op.
+    # If this never crashes → the cross-axis compilation pattern matters.
+    defn hooked_cond_same_axis(p1, p2) do
+      cond do
+        p1 -> send_value(1, clause: "p1")
+        p2 -> send_value(2, clause: "p2")
+        true -> send_value(0, clause: "default")
+      end
+    end
+
+    test "hooked same-axis cond under repetition (control: no any/all/select)" do
+      for _ <- 1..200 do
+        result =
+          hooked_cond_same_axis(
+            Nx.vectorize(~VEC[1 0 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :a)
+          )
+
+        assert_equal(result, Nx.vectorize(~VEC[1 2 0], :a))
+      end
+    end
+
+    # Q3: Does unhook cross-axis cond crash under repetition?
+    # If no → outfeed is required, not just cond logic.
+    test "unhook cross-axis cond under repetition (control: no outfeed)" do
+      for _ <- 1..200 do
+        result =
+          unhook_cond_different_axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+
+        expected =
+          Nx.tensor([[1, 1, 1], [0, 2, 0]])
+          |> Nx.vectorize(:a)
+          |> Nx.vectorize(:b)
+
+        assert_equal(result, expected)
+      end
+    end
+
+    # Q4: Does adding heavy computation after cond widen the race window?
+    # If crashes more reliably → post-outfeed computation keeps XLA busy
+    # while the lock releases and next execution starts.
+    defn hooked_cond_then_compute(p1, p2) do
+      val =
+        cond do
+          p1 -> send_value(Nx.tensor(1.0), clause: "p1")
+          p2 -> send_value(Nx.tensor(2.0), clause: "p2")
+          true -> send_value(Nx.tensor(0.0), clause: "default")
+        end
+
+      # Heavy computation after the cond (outfeed already closed at this point)
+      m = Nx.broadcast(val, {64, 64})
+      Nx.sum(Nx.dot(m, m))
+    end
+
+    test "hooked cross-axis cond + heavy post-computation under repetition" do
+      for _ <- 1..200 do
+        result =
+          hooked_cond_then_compute(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+
+        # Just check it doesn't crash — exact values less important
+        assert result.vectorized_axes == [a: 2, b: 3]
+      end
+    end
+
+    # --- Advanced race condition reproduction attempts ---
+
+    # Strategy 1: Concurrent repetition — multiple tasks each doing many iterations.
+    # This creates sustained concurrent pressure on the global device outfeed queue,
+    # unlike the existing concurrent test (30 tasks x 1 exec) or repetition test (1 task x 200 execs).
+    test "concurrent sustained repetition: hooked cross-axis cond (#1689 amplifier)" do
+      expected =
+        Nx.tensor([[1, 1, 1], [0, 2, 0]])
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      tasks =
+        for _ <- 1..8 do
+          Task.async(fn ->
+            for _ <- 1..50 do
+              result =
+                hooked_cond_different_axes(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+
+              assert_equal(result, expected)
+            end
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 2: Concurrent repetition with the 4-clause cond (more hooks per execution).
+    # cond4 generates 4 outfeed flag+data pairs per execution, doubling the queue traffic.
+    test "concurrent sustained repetition: cond4 cross-axis (#1689 amplifier)" do
+      expected =
+        Nx.vectorize(
+          ~MAT[
+            20 40
+            10 10
+            20 40
+          ],
+          pred1: 3,
+          pred2: 2
+        )
+
+      tasks =
+        for _ <- 1..8 do
+          Task.async(fn ->
+            for _ <- 1..50 do
+              result =
+                cond4(
+                  Nx.vectorize(~VEC[0 1 0], :pred1),
+                  10,
+                  Nx.vectorize(~VEC[1 0], :pred2),
+                  20,
+                  0,
+                  30,
+                  40
+                )
+
+              assert_equal(result, expected)
+            end
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 3: Alternating between different hook patterns.
+    # Alternates between a scalar hook result (4B) and a tensor hook result (32B).
+    # If cross-execution buffer interleaving occurs, the size mismatch is more likely
+    # to be caught because the two patterns have very different data buffer sizes.
+    test "alternating hook patterns under concurrent repetition (size mismatch amplifier)" do
+      tasks =
+        for task_id <- 1..8 do
+          Task.async(fn ->
+            for i <- 1..50 do
+              if rem(i + task_id, 2) == 0 do
+                # Scalar results: flag=2B, data=4B
+                result =
+                  hooked_cond_different_axes(
+                    Nx.vectorize(~VEC[1 0], :a),
+                    Nx.vectorize(~VEC[0 1 0], :b)
+                  )
+
+                expected =
+                  Nx.tensor([[1, 1, 1], [0, 2, 0]])
+                  |> Nx.vectorize(:a)
+                  |> Nx.vectorize(:b)
+
+                assert_equal(result, expected)
+              else
+                # Tensor results: flag=2B, data=32B (2x2 s32 matrix)
+                result =
+                  hooked_cond_tensor_result(
+                    Nx.vectorize(~VEC[1 0], :a),
+                    Nx.vectorize(~VEC[0 1 0], :b)
+                  )
+
+                assert result.vectorized_axes == [a: 2, b: 3]
+              end
+            end
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 4: Large axes with many hooks (3-axis cond = 4 hooks per exec, large axes = many vectorized iterations).
+    # Combined: maximizes outfeed writes per execution AND concurrent load.
+    test "concurrent 3-axis hooked cond with large axes (#1689 max outfeed stress)" do
+      p1_data = for i <- 0..9, do: rem(i, 2)
+      p2_data = for i <- 0..7, do: rem(i, 3)
+      p3_data = for i <- 0..5, do: rem(i, 2)
+
+      p1 = Nx.tensor(p1_data) |> Nx.vectorize(:a)
+      p2 = Nx.tensor(p2_data) |> Nx.vectorize(:b)
+      p3 = Nx.tensor(p3_data) |> Nx.vectorize(:c)
+
+      # Compute expected from a single (non-concurrent) call.
+      # Note: hooked_cond_3axes returns 1/2/3/0, NOT eval_cond_3axes's 10/20/30/0.
+      expected = hooked_cond_3axes(p1, p2, p3)
+
+      tasks =
+        for _ <- 1..8 do
+          Task.async(fn ->
+            for _ <- 1..30 do
+              result = hooked_cond_3axes(p1, p2, p3)
+              assert_equal(result, expected)
+            end
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 5: Concurrent heavy post-computation.
+    # Combines the wide race window (heavy computation after outfeed close) with
+    # concurrent load. If the race is cross-execution, having post-outfeed work
+    # keeps run_cpu NIF busy while the lock releases and next execution starts.
+    test "concurrent heavy post-computation + hooked cross-axis (#1689 wide window)" do
+      tasks =
+        for _ <- 1..8 do
+          Task.async(fn ->
+            for _ <- 1..50 do
+              result =
+                hooked_cond_then_compute(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+
+              assert result.vectorized_axes == [a: 2, b: 3]
+            end
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 6: Rapid-fire with multiple hook types per branch.
+    # multi_hook_branch has TWO hooks per branch (first_if + second_if, or first_else + second_else).
+    # This doubles the outfeed traffic per branch and creates a longer outfeed sequence
+    # where more things can go wrong with ordering.
+    test "concurrent multi-hook branches under repetition (#1689 double-hook stress)" do
+      tasks =
+        for _ <- 1..8 do
+          Task.async(fn ->
+            for _ <- 1..50 do
+              result =
+                multi_hook_branch(Nx.vectorize(~VEC[1 0 1], :a))
+
+              assert result.vectorized_axes == [a: 3]
+            end
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 7: Mixed concurrent workloads.
+    # Different tasks run different hooked functions simultaneously.
+    # This creates the most chaotic traffic on the device outfeed queue:
+    # different numbers of hooks, different data sizes, different vectorization patterns.
+    test "mixed concurrent workloads on shared device queue (#1689 chaos test)" do
+      tasks = [
+        # 2-clause scalar hooks, 2 axes
+        Task.async(fn ->
+          for _ <- 1..40 do
+            hooked_cond_different_axes(
+              Nx.vectorize(~VEC[1 0], :a),
+              Nx.vectorize(~VEC[0 1 0], :b)
+            )
+          end
+        end),
+        # 4-clause scalar hooks, 2 axes
+        Task.async(fn ->
+          for _ <- 1..40 do
+            cond4(
+              Nx.vectorize(~VEC[0 1 0], :pred1),
+              10,
+              Nx.vectorize(~VEC[1 0], :pred2),
+              20,
+              0,
+              30,
+              40
+            )
+          end
+        end),
+        # 2-clause tensor hooks, 2 axes
+        Task.async(fn ->
+          for _ <- 1..40 do
+            hooked_cond_tensor_result(
+              Nx.vectorize(~VEC[1 0], :a),
+              Nx.vectorize(~VEC[0 1 0], :b)
+            )
+          end
+        end),
+        # 3-clause scalar hooks, 3 axes
+        Task.async(fn ->
+          for _ <- 1..40 do
+            hooked_cond_3axes(
+              Nx.vectorize(~VEC[1 0], :a),
+              Nx.vectorize(~VEC[0 1 0], :b),
+              Nx.vectorize(~VEC[0 0 1 1], :c)
+            )
+          end
+        end),
+        # multi-hook branches (2 hooks per branch), 1 axis
+        Task.async(fn ->
+          for _ <- 1..40 do
+            multi_hook_branch(Nx.vectorize(~VEC[1 0 1], :a))
+          end
+        end),
+        # heavy post-computation, 2 axes
+        Task.async(fn ->
+          for _ <- 1..40 do
+            hooked_cond_then_compute(
+              Nx.vectorize(~VEC[1 0], :a),
+              Nx.vectorize(~VEC[0 1 0], :b)
+            )
+          end
+        end)
+      ]
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # --- Blast mode tests: minimize inter-call latency ---
+    # The race window is microseconds between outfeed exit and run_cpu NIF return.
+    # Assertion overhead adds significant delay between calls, potentially letting
+    # run_cpu finish before the next execution starts. These tests remove all
+    # assertions from the inner loop, running the function as fast as possible,
+    # and only verify results from the last iteration.
+
+    # Strategy 8: Blast mode — tight loop, no assertions, maximum call rate.
+    # 30 tasks x 100 iterations with no assertion overhead = pure outfeed queue pressure.
+    test "blast mode: 30 tasks x 100 iterations, no inner assertions (#1689 max rate)" do
+      tasks =
+        for _ <- 1..30 do
+          Task.async(fn ->
+            last =
+              Enum.reduce(1..100, nil, fn _, _ ->
+                hooked_cond_different_axes(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+              end)
+
+            # Only verify the last result
+            expected =
+              Nx.tensor([[1, 1, 1], [0, 2, 0]])
+              |> Nx.vectorize(:a)
+              |> Nx.vectorize(:b)
+
+            assert_equal(last, expected)
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 9: Blast mode with heavy post-computation.
+    # No assertions + heavy computation after cond = maximum race window exposure.
+    test "blast mode: heavy post-computation, 20 tasks x 100 iterations (#1689 wide window blast)" do
+      tasks =
+        for _ <- 1..20 do
+          Task.async(fn ->
+            last =
+              Enum.reduce(1..100, nil, fn _, _ ->
+                hooked_cond_then_compute(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+              end)
+
+            assert last.vectorized_axes == [a: 2, b: 3]
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 10: Blast mode mixed workloads — different functions interleaved
+    # with no assertion overhead. The mixed buffer sizes maximize the chance that
+    # a cross-execution buffer swap produces a detectable size mismatch.
+    test "blast mode: mixed workloads, 30 tasks x 80 iterations (#1689 chaos blast)" do
+      funs = [
+        fn ->
+          hooked_cond_different_axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+        end,
+        fn ->
+          hooked_cond_tensor_result(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+        end,
+        fn ->
+          hooked_cond_3axes(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b),
+            Nx.vectorize(~VEC[0 0 1 1], :c)
+          )
+        end,
+        fn ->
+          multi_hook_branch(Nx.vectorize(~VEC[1 0 1], :a))
+        end,
+        fn ->
+          hooked_cond_then_compute(
+            Nx.vectorize(~VEC[1 0], :a),
+            Nx.vectorize(~VEC[0 1 0], :b)
+          )
+        end
+      ]
+
+      tasks =
+        for task_id <- 1..30 do
+          fun = Enum.at(funs, rem(task_id, length(funs)))
+
+          Task.async(fn ->
+            for _ <- 1..80, do: fun.()
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 11: Dirty scheduler pressure.
+    # Spawn NIF-like busy work on dirty CPU schedulers to delay run_cpu returns,
+    # widening the window between outfeed exit and NIF completion.
+    # Note: tuned for 2-core CI runners — keep pressure light enough to finish.
+    test "dirty scheduler pressure + hooked cross-axis cond (#1689 scheduler contention)" do
+      pressure_tasks =
+        for _ <- 1..4 do
+          Task.async(fn ->
+            for _ <- 1..50 do
+              m = Nx.iota({64, 64})
+              Nx.sum(Nx.dot(m, m))
+            end
+          end)
+        end
+
+      test_tasks =
+        for _ <- 1..12 do
+          Task.async(fn ->
+            for _ <- 1..30 do
+              hooked_cond_different_axes(
+                Nx.vectorize(~VEC[1 0], :a),
+                Nx.vectorize(~VEC[0 1 0], :b)
+              )
+            end
+          end)
+        end
+
+      for task <- test_tasks do
+        Task.await(task, 120_000)
+      end
+
+      for task <- pressure_tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # Strategy 12: Rapid alternation between hooked and unhooked.
+    # Unhooked calls have no outfeed (no lock held by outfeed_pid), so they
+    # complete faster. Rapid alternation between hooked (outfeed) and unhooked
+    # (no outfeed) means the lock cycling pattern is irregular, potentially
+    # catching the race at different phases.
+    test "rapid alternation hooked/unhooked cross-axis (#1689 irregular lock cycling)" do
+      tasks =
+        for _ <- 1..20 do
+          Task.async(fn ->
+            for i <- 1..100 do
+              if rem(i, 2) == 0 do
+                hooked_cond_different_axes(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+              else
+                unhook_cond_different_axes(
+                  Nx.vectorize(~VEC[1 0], :a),
+                  Nx.vectorize(~VEC[0 1 0], :b)
+                )
+              end
+            end
+          end)
+        end
+
+      for task <- tasks do
+        Task.await(task, 120_000)
+      end
+    end
+
+    # --- Focused reproduction test for #1689 ---
+    #
+    # This test combines all factors that trigger the cross-execution outfeed
+    # buffer interleaving race condition:
+    #
+    # 1. DIRTY SCHEDULER PRESSURE: Background Nx.dot work on dirty CPU schedulers
+    #    delays run_cpu NIF returns, widening the window between outfeed task exit
+    #    (lock release) and NIF completion.
+    #
+    # 2. MIXED BUFFER SIZES: Different hooked functions produce different outfeed
+    #    data sizes (scalar=4B, tensor=32B, multi-hook=different sequence lengths).
+    #    Cross-execution buffer interleaving is more likely to produce a detectable
+    #    size mismatch when buffer sizes vary.
+    #
+    # 3. BLAST MODE (NO ASSERTIONS): Removing assertion overhead from inner loops
+    #    minimizes inter-call latency, maximizing the rate of lock acquire/release
+    #    cycles and outfeed queue traffic.
+    #
+    # 4. HIGH CONCURRENCY: 20+ tasks all sharing device 0's global outfeed queue,
+    #    each doing many iterations.
+    #
+    # 5. HEAVY POST-OUTFEED COMPUTATION: hooked_cond_then_compute has Nx.dot after
+    #    the cond, keeping run_cpu alive on dirty CPU scheduler after flag=0.
+    #
+    # Evidence: On 2026-03-12, concurrent stress tests triggered the crash on
+    # 1.18.4/OTP 28.3 in the basic hooked cond test running alongside them.
+    # Error: "XLA runtime-managed outfeed buffer size 2 did not match the
+    # outfeed operation parameter buffer size 4" + SIGABRT from
+    # xfeed_manager.cc:62 CHECK(current_buffer_ == nullptr).
+    @tag timeout: 180_000
+    test "issue #1689 reproduction: cross-execution outfeed buffer interleaving" do
+      # Phase 1: Start background dirty CPU scheduler pressure.
+      # These keep dirty CPU schedulers busy, delaying run_cpu NIF returns.
+      pressure_tasks =
+        for _ <- 1..4 do
+          Task.async(fn ->
+            for _ <- 1..300 do
+              m = Nx.iota({64, 64})
+              Nx.sum(Nx.dot(m, m))
+            end
+          end)
+        end
+
+      # Phase 2: Blast mixed hooked cond workloads concurrently.
+      # No assertions in inner loops — pure outfeed queue pressure.
+      test_tasks =
+        for task_id <- 1..24 do
+          Task.async(fn ->
+            case rem(task_id, 4) do
+              0 ->
+                # Scalar hooks (flag=2B, data=4B)
+                for _ <- 1..80 do
+                  hooked_cond_different_axes(
+                    Nx.vectorize(~VEC[1 0], :a),
+                    Nx.vectorize(~VEC[0 1 0], :b)
+                  )
+                end
+
+              1 ->
+                # Tensor hooks (flag=2B, data=32B) — different data size
+                for _ <- 1..80 do
+                  hooked_cond_tensor_result(
+                    Nx.vectorize(~VEC[1 0], :a),
+                    Nx.vectorize(~VEC[0 1 0], :b)
+                  )
+                end
+
+              2 ->
+                # Heavy post-outfeed computation — widest race window
+                for _ <- 1..80 do
+                  hooked_cond_then_compute(
+                    Nx.vectorize(~VEC[1 0], :a),
+                    Nx.vectorize(~VEC[0 1 0], :b)
+                  )
+                end
+
+              3 ->
+                # Multi-hook branches (2 hooks per branch, longer outfeed sequence)
+                for _ <- 1..80 do
+                  multi_hook_branch(Nx.vectorize(~VEC[1 0 1], :a))
+                end
+            end
+          end)
+        end
+
+      # If the race triggers, run_cpu crashes with:
+      #   RuntimeError: XLA runtime-managed outfeed buffer size 2 did not match
+      #   the outfeed operation parameter buffer size 4
+      # This kills the runner GenServer, which causes the Task.await to receive
+      # an EXIT signal with the RuntimeError.
+
+      for task <- test_tasks do
+        Task.await(task, 120_000)
+      end
+
+      for task <- pressure_tasks do
+        Task.await(task, 120_000)
+      end
     end
   end
 end
