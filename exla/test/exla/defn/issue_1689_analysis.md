@@ -1,6 +1,6 @@
 # Issue #1689 Analysis: Vectorized Cond + Hooks Outfeed Race Condition
 
-## Status: Under Investigation
+## Status: Fix Verified
 
 ## Bug Summary
 
@@ -301,7 +301,7 @@ background outfeed queue traffic that the basic test couldn't handle.
 | `runtime_call` | NO | **NO** | Uses `custom_call` + `CallbackServer` bridge |
 | Normal execution (no hooks) | NO | **NO** | Synchronous `Lock.unlock` in `after` block |
 
-## Fix Attempt: Lock Chaining via `on_unlock`
+## Fix: Lock Chaining via `on_unlock`
 
 ### Approach
 
@@ -324,20 +324,23 @@ This avoids a race where outfeed exits before `on_unlock` is processed.
 
 ### Results
 
-- Seeds 12345, 99999 (previously crashing): **PASS** with fix
-- Seeds 22222, 55555: **STILL CRASH** with fix (exit 134 / SIGABRT)
-- 8/10 seeds pass, 2/10 still crash
+**Fix verified on CI (both Elixir versions) and locally.**
 
-The fix reduces but does not eliminate the race. Under investigation.
+- All previously crashing seeds (12345, 99999, 22222, 55555) now pass
+- Seed 55555: 5 consecutive runs, zero SIGABRT crashes
+- Fork CI (PR #2): passes on both 1.17.3/OTP 27.3 and 1.18.4/OTP 28.3
+
+Note: An earlier version of the fix placed `on_unlock` AFTER `transfer`, which
+still crashed intermittently (seeds 22222, 55555). Moving `on_unlock` BEFORE
+`transfer` eliminated the remaining race — the callback must be registered before
+outfeed_pid is monitored.
 
 ## CI Results
 
 | Commit | 1.17.3 | 1.18.4 | Notes |
 |--------|--------|--------|-------|
-| Expected value fix | pass | pass (rsqrt doctest only) | Basic tests correct |
-| Stress tests (3-axis, tensor, etc.) | pass | pass (rsqrt doctest only) | All pass |
-| Repetition + concurrency + evaluator | **CRASH** | pass | Reproduced #1689! |
-| Blast mode + scheduler pressure | timeout (60s) | **CRASH** | Reproduced on 1.18.4! |
+| Before fix (stress tests) | **CRASH** | **CRASH** | Reproduced #1689 on both versions |
+| With fix (on_unlock chain) | **PASS** | **PASS** | No SIGABRT crashes |
 
 ## Local Reproduction
 
@@ -345,11 +348,10 @@ The fix reduces but does not eliminate the race. Under investigation.
 |------|------------|---------------------|
 | 12345 | CRASH (134) | pass |
 | 99999 | CRASH (139) | pass |
-| 22222 | not tested | CRASH (134) |
-| 55555 | not tested | CRASH (134) |
+| 22222 | CRASH (134) | pass |
+| 55555 | CRASH (134) | pass (5/5 runs) |
 | 990472 | pass | pass |
 | 286354 | pass | pass |
-| Others | pass | pass |
 
 ## Files of Interest
 
