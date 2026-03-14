@@ -712,4 +712,57 @@ defmodule EXLA.Defn.RuntimeCallTest do
       assert_equal(result, expected)
     end
   end
+
+  describe "ephemeral callback server" do
+    defn cached_add_offset(x) do
+      out = %{x | type: Nx.Type.to_floating(x.type)}
+      Nx.runtime_call(out, x, fn t -> Nx.add(Nx.as_type(t, :f32), 10.0) end)
+    end
+
+    test "cached executable works with fresh callback server each call" do
+      # First call compiles and caches the executable.
+      # Subsequent calls reuse the cached graph but must get a fresh
+      # callback server PID each time — a stale PID would deadlock or crash.
+      results =
+        for i <- 1..10 do
+          x = Nx.tensor([i])
+          {x, cached_add_offset(x)}
+        end
+
+      for {input, result} <- results do
+        expected = Nx.add(Nx.as_type(input, :f32), 10.0)
+        assert_equal(result, expected)
+      end
+    end
+
+    test "callback server process is dead after execution completes" do
+      pids_before = MapSet.new(Process.list())
+
+      x = Nx.iota({5})
+      _result = cached_add_offset(x)
+
+      :erlang.garbage_collect()
+      Process.sleep(50)
+
+      pids_after = MapSet.new(Process.list())
+      new_pids = MapSet.difference(pids_after, pids_before)
+
+      # No new long-lived processes should remain — the callback server
+      # should be stopped after execution completes.
+      assert MapSet.size(new_pids) == 0,
+             "#{MapSet.size(new_pids)} new process(es) still alive after execution — " <>
+               "callback server should be ephemeral"
+    end
+
+    test "PID binary encoding has consistent size" do
+      # The callback server PID is passed as a u8 tensor argument to XLA.
+      # term_to_binary(pid) must have fixed length for local PIDs so the
+      # tensor shape is consistent across calls.
+      pids = for _ <- 1..100, do: spawn(fn -> :ok end)
+      sizes = Enum.map(pids, fn pid -> byte_size(:erlang.term_to_binary(pid)) end)
+      assert Enum.min(sizes) == Enum.max(sizes),
+             "PID binary size varies: min=#{Enum.min(sizes)}, max=#{Enum.max(sizes)}. " <>
+               "The callback server PID tensor requires fixed-size encoding."
+    end
+  end
 end
