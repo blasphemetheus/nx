@@ -843,7 +843,8 @@ defmodule EXLA.MLIR.Value do
   def runtime_call(
         [%Value{function: func} | _] = operands,
         typespecs,
-        callback_id
+        callback_id,
+        %Value{} = callback_pid_param
       ) do
     result_types = typespecs_to_mlir_types(typespecs)
 
@@ -861,7 +862,11 @@ defmodule EXLA.MLIR.Value do
         )
     ]
 
-    op(func, "stablehlo.custom_call", operands, result_types, attributes: attributes)
+    # The callback server PID tensor is appended as the last operand.
+    # The C++ handler extracts it via enif_binary_to_term to send
+    # callback messages directly to the ephemeral callback server.
+    all_operands = operands ++ [callback_pid_param]
+    op(func, "stablehlo.custom_call", all_operands, result_types, attributes: attributes)
   end
 
   defp term_to_int64_list(term) do

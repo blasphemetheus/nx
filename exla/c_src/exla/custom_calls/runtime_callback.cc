@@ -14,11 +14,27 @@ namespace {
 ffi::Error exla_runtime_callback_impl(
     ffi::RemainingArgs args, ffi::Span<const int64_t> callback_id_words,
     uint64_t callback_id_size, ffi::RemainingRets rets) {
-  // Collect all input tensors into lightweight payload views.
-  std::vector<exla::callback_bridge::Arg> inputs;
-  inputs.reserve(args.size());
+  if (args.size() < 1) {
+    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                      "runtime callback requires at least the PID argument");
+  }
 
-  for (size_t i = 0; i < args.size(); ++i) {
+  // The last input arg is the serialized callback server PID (u8 tensor).
+  // Extract it separately — it's not a callback argument.
+  auto maybe_pid_buf = args.get<ffi::AnyBuffer>(args.size() - 1);
+  if (!maybe_pid_buf) {
+    return maybe_pid_buf.error();
+  }
+  ffi::AnyBuffer pid_buf = *maybe_pid_buf;
+  const uint8_t *pid_data =
+      reinterpret_cast<const uint8_t *>(pid_buf.untyped_data());
+  size_t pid_size = pid_buf.size_bytes();
+
+  // Collect all input tensors EXCEPT the last (PID) into payload views.
+  std::vector<exla::callback_bridge::Arg> inputs;
+  inputs.reserve(args.size() - 1);
+
+  for (size_t i = 0; i < args.size() - 1; ++i) {
     auto maybe_buf_or = args.get<ffi::AnyBuffer>(i);
     if (!maybe_buf_or) {
       return maybe_buf_or.error();
@@ -64,7 +80,8 @@ ffi::Error exla_runtime_callback_impl(
   // results directly into the provided output buffers.
   exla::callback_bridge::Result result =
       exla::callback_bridge::InvokeRuntimeCallback(
-          callback_id_words, callback_id_size, inputs, outputs);
+          callback_id_words, callback_id_size, inputs, outputs,
+          pid_data, pid_size);
 
   if (!result.ok) {
     return ffi::Error(ffi::ErrorCode::kInternal, result.error);

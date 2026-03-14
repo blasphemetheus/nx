@@ -15,6 +15,8 @@ defmodule EXLA.Defn.Outfeed do
             compiled_hooks: %{},
             callbacks: %{},
             token: nil,
+            callback_pid_param: nil,
+            has_runtime_calls: false,
             infeeds: []
 
   ## Functional API
@@ -73,6 +75,9 @@ defmodule EXLA.Defn.Outfeed do
   defp used_hooks(%Expr{op: :token, args: [token]}, hooks),
     do: Enum.reduce(token.hooks, hooks, &Map.put(&2, &1.name, &1.callback))
 
+  defp used_hooks(%Expr{op: :runtime_call}, hooks),
+    do: Map.put(hooks, :__has_runtime_calls__, true)
+
   defp used_hooks(_, hooks),
     do: hooks
 
@@ -91,6 +96,8 @@ defmodule EXLA.Defn.Outfeed do
   An outfeed struct to track the need for outfeeds during compilation.
   """
   def new(user_hooks, default_hooks) when is_map(user_hooks) and is_map(default_hooks) do
+    {has_runtime_calls, default_hooks} = Map.pop(default_hooks, :__has_runtime_calls__, false)
+
     # Hooks with default callbacks or user callbacks are part of the cache key
     used_hooks =
       Enum.sort(for {k, v} <- default_hooks, v != nil or Map.has_key?(user_hooks, k), do: k)
@@ -98,7 +105,8 @@ defmodule EXLA.Defn.Outfeed do
     # We don't store the user hooks yet, because we don't want them to be cached
     %Outfeed{
       default_hooks: default_hooks,
-      used_hooks: used_hooks
+      used_hooks: used_hooks,
+      has_runtime_calls: has_runtime_calls == true
     }
   end
 
@@ -108,9 +116,24 @@ defmodule EXLA.Defn.Outfeed do
   def with_user_hooks(%Outfeed{} = outfeed, user_hooks), do: %{outfeed | user_hooks: user_hooks}
 
   @doc """
+  Returns the byte size of a serialized local PID.
+  This is constant for all local PIDs on the same node.
+  """
+  def callback_pid_size do
+    byte_size(:erlang.term_to_binary(self()))
+  end
+
+  @doc """
   Sets the token to outfeed.
   """
   def with_token(%Outfeed{} = outfeed, token), do: %{outfeed | token: token}
+
+  @doc """
+  Sets the callback server PID parameter Value on the outfeed struct.
+  This is the MLIR Value representing the serialized PID tensor argument.
+  """
+  def with_callback_pid_param(%Outfeed{} = outfeed, param),
+    do: %{outfeed | callback_pid_param: param}
 
   @doc """
   Registers a runtime_call callback in the outfeed struct.
@@ -235,13 +258,13 @@ defmodule EXLA.Defn.Outfeed do
 
     ref = Process.monitor(pid)
 
-    # Wait for the task to finish registering callback handlers before
-    # returning, so that XLA execution can't fire a callback before
-    # the dispatcher knows where to route it.
+    # Wait for the task to be ready. The callback_target is the PID that
+    # should receive runtime_call messages — either the task itself or a
+    # separate helper process (when the task is blocked in from_outfeed).
     receive do
-      :outfeed_ready ->
+      {:outfeed_ready, callback_target} ->
         Process.demonitor(ref, [:flush])
-        {:ok, pid}
+        {:ok, pid, callback_target}
 
       {:DOWN, ^ref, _, _, reason} ->
         {:error, {:outfeed_init_crashed, reason}}
@@ -253,47 +276,29 @@ defmodule EXLA.Defn.Outfeed do
     # Copy the group leader so we report to the proper device
     Process.group_leader(self(), group_leader)
 
-    callback_ids = Map.keys(callbacks)
-
     if compiled_hooks != %{} do
       # When both hooks and callbacks are present, the outfeed task blocks
       # in from_outfeed (a dirty IO NIF) and can't receive runtime_call
       # messages. Spawn a separate helper process for callback handling.
       callback_helper =
-        if callback_ids != [] do
-          pid = spawn_link(fn -> callback_only_loop(callbacks) end)
-          EXLA.Defn.CallbackDispatcher.register(callback_ids, pid)
-          pid
+        if callbacks != %{} do
+          spawn_link(fn -> callback_only_loop(callbacks) end)
         end
 
-      send(caller, :outfeed_ready)
+      send(caller, {:outfeed_ready, callback_helper})
 
       try do
         ref = make_ref()
         typespec = EXLA.Typespec.tensor({:u, 16}, {})
         outfeed_loop(client, device_id, ref, typespec, hooks, compiled_hooks, infeeds)
       after
-        if callback_helper do
-          send(callback_helper, :done)
-          EXLA.Defn.CallbackDispatcher.unregister(callback_ids, callback_helper)
-        end
+        if callback_helper, do: send(callback_helper, :done)
       end
     else
       # No outfeed hooks — only runtime_call messages.
-      # This task handles them directly.
-      if callback_ids != [] do
-        EXLA.Defn.CallbackDispatcher.register(callback_ids, self())
-      end
-
-      send(caller, :outfeed_ready)
-
-      try do
-        callback_only_loop(callbacks)
-      after
-        if callback_ids != [] do
-          EXLA.Defn.CallbackDispatcher.unregister(callback_ids, self())
-        end
-      end
+      # This task handles them directly via the PID encoded in the computation.
+      send(caller, {:outfeed_ready, self()})
+      callback_only_loop(callbacks)
     end
   end
 

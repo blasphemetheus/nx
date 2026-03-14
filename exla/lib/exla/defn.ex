@@ -242,13 +242,25 @@ defmodule EXLA.Defn do
         arg, i, _depth -> {i, EXLA.Defn.Buffers.from_nx!(arg, executable, false)}
       end)
 
+    {:ok, outfeed_pid, callback_target} =
+      Outfeed.start_child(executable, outfeed, Process.group_leader(), Map.new(infeeds))
+
+    # Append PID buffer if runtime_calls are present. Note: buffers is in
+    # reverse order here, so we prepend (which becomes last after reverse).
+    # Use callback_target (may be a helper process when hooks are also present).
+    buffers =
+      if outfeed.has_runtime_calls do
+        pid_binary = :erlang.term_to_binary(callback_target)
+        pid_typespec = Typespec.tensor({:u, 8}, {byte_size(pid_binary)})
+        [EXLA.BinaryBuffer.from_binary(pid_binary, pid_typespec) | buffers]
+      else
+        buffers
+      end
+
     {:ok, runner} =
       EXLA.Defn.Runner.start_link(lock, fn ->
         EXLA.Executable.run(executable, [Enum.reverse(buffers)], run_options)
       end)
-
-    {:ok, outfeed_pid} =
-      Outfeed.start_child(executable, outfeed, Process.group_leader(), Map.new(infeeds))
 
     _ = EXLA.Defn.Lock.transfer(lock, fn -> send(runner, lock) end, outfeed_pid)
     ref = Process.monitor(outfeed_pid)
@@ -271,12 +283,12 @@ defmodule EXLA.Defn do
          args,
          used_inputs,
          outputs,
-         %{callbacks: callbacks} = _outfeed,
+         %{callbacks: callbacks} = outfeed,
          run_options,
          _is_sharded?
        )
        when callbacks != %{} do
-    {:ok, outfeed_pid} =
+    {:ok, outfeed_pid, callback_target} =
       Outfeed.start_child(
         executable,
         %Outfeed{callbacks: callbacks},
@@ -290,6 +302,18 @@ defmodule EXLA.Defn do
         EXLA.Defn.Buffers.filter_by_indexes(args, used_inputs, fn arg, _i ->
           EXLA.Defn.Buffers.from_nx!(arg, executable)
         end)
+
+      # When runtime_calls are present, append the serialized callback server
+      # PID as a u8 tensor buffer. The C++ side extracts this PID to send
+      # runtime_call messages directly to the callback server process.
+      buffers =
+        if outfeed.has_runtime_calls do
+          pid_binary = :erlang.term_to_binary(callback_target)
+          pid_typespec = Typespec.tensor({:u, 8}, {byte_size(pid_binary)})
+          buffers ++ [EXLA.BinaryBuffer.from_binary(pid_binary, pid_typespec)]
+        else
+          buffers
+        end
 
       EXLA.Executable.run(executable, [buffers], run_options)
     else
@@ -433,6 +457,18 @@ defmodule EXLA.Defn do
             comp_typespecs =
               for {i, typespec} <- inputs_and_typespecs, i >= used_buffers, do: typespec
 
+            # When the computation has runtime_calls, add an extra parameter
+            # for the callback server PID (serialized as a u8 tensor).
+            # The PID is passed at execution time, not baked into the graph.
+            pid_binary_size = Outfeed.callback_pid_size()
+
+            comp_typespecs =
+              if outfeed.has_runtime_calls do
+                comp_typespecs ++ [Typespec.tensor({:u, 8}, {pid_binary_size})]
+              else
+                comp_typespecs
+              end
+
             out_typespecs =
               [outputs]
               |> Nx.Defn.Composite.flatten_list()
@@ -452,6 +488,17 @@ defmodule EXLA.Defn do
                   Function.set_arg_sharding(builder, arg_index, {mesh, sharding})
                 end)
               end
+
+              # When runtime_calls are present, the last function argument is
+              # the serialized callback server PID. Extract it and store in outfeed.
+              outfeed =
+                if outfeed.has_runtime_calls do
+                  all_args = Function.get_arguments(builder)
+                  pid_param = List.last(all_args)
+                  Outfeed.with_callback_pid_param(outfeed, pid_param)
+                else
+                  outfeed
+                end
 
               # Only create the token when we know it will actually be
               # used, that is: streaming, lazy transfers or hooks
@@ -558,6 +605,15 @@ defmodule EXLA.Defn do
 
     {initial, cache} = recur_composite(initial_arg, state, cache)
 
+    # Prepend PID param first, then token, so the order is [token, pid | values].
+    # Both are threaded through while loop regions as explicit parameters.
+    initial =
+      if pid_param = get_callback_pid_param(cache) do
+        [pid_param | initial]
+      else
+        initial
+      end
+
     initial =
       if token = get_token(cache) do
         [token | initial]
@@ -571,14 +627,23 @@ defmodule EXLA.Defn do
     results =
       Value.while(function, pred_computation, body_computation, List.flatten(initial))
 
-    if get_token(cache) do
-      [token | results] = results
-      result = wrap_tuple_result(results, initial_arg)
-      {result, update_token(cache, token)}
-    else
-      result = wrap_tuple_result(results, initial_arg)
-      {result, cache}
-    end
+    # Extract token and PID from results in the same order they were prepended.
+    has_token = get_token(cache) != nil
+    has_pid = get_callback_pid_param(cache) != nil
+
+    {token, results} =
+      if has_token do
+        [token | rest] = results
+        {token, rest}
+      else
+        {nil, results}
+      end
+
+    results = if has_pid, do: tl(results), else: results
+    result = wrap_tuple_result(results, initial_arg)
+
+    cache = if token, do: update_token(cache, token), else: cache
+    {result, cache}
   end
 
   defp cached_recur_operator(:cond, %T{data: %Expr{args: args}} = t, state, cache) do
@@ -779,15 +844,40 @@ defmodule EXLA.Defn do
           {computation, Map.put(cache, key, computation)}
       end
 
-    if token = get_token(cache) do
-      typespecs = [Typespec.token() | container_to_typespecs(expr)]
-      [token | result] = Value.call(state.builder, [token | call_args], call_body, typespecs)
-      {wrap_tuple_result(result, expr), update_token(cache, token)}
-    else
-      typespecs = container_to_typespecs(expr)
-      result = Value.call(state.builder, call_args, call_body, typespecs)
-      {wrap_tuple_result(result, expr), cache}
-    end
+    token = get_token(cache)
+    pid_param = get_callback_pid_param(cache)
+    out_typespecs = container_to_typespecs(expr)
+
+    # Build call args and return typespecs with PID and token prepended.
+    {call_input, out_typespecs} =
+      if pid_param do
+        pid_typespec = Value.get_typespec(pid_param)
+        {[pid_param | call_args], [pid_typespec | out_typespecs]}
+      else
+        {call_args, out_typespecs}
+      end
+
+    {call_input, out_typespecs} =
+      if token do
+        {[token | call_input], [Typespec.token() | out_typespecs]}
+      else
+        {call_input, out_typespecs}
+      end
+
+    result = Value.call(state.builder, call_input, call_body, out_typespecs)
+
+    # Extract token and PID from results.
+    {token, result} =
+      if token do
+        [new_token | rest] = result
+        {new_token, rest}
+      else
+        {nil, result}
+      end
+
+    result = if pid_param, do: tl(result), else: result
+    cache = if token, do: update_token(cache, token), else: cache
+    {wrap_tuple_result(result, expr), cache}
   end
 
   defp cached_recur_operator(
@@ -820,7 +910,8 @@ defmodule EXLA.Defn do
       |> then(&put_outfeed(cache, &1))
 
     typespecs = container_to_typespecs(out_template)
-    results = Value.runtime_call(arg_values, typespecs, id)
+    callback_pid_param = get_outfeed(cache).callback_pid_param
+    results = Value.runtime_call(arg_values, typespecs, id, callback_pid_param)
 
     {wrap_tuple_result(results, expr), cache}
   end
@@ -1655,8 +1746,14 @@ defmodule EXLA.Defn do
   defp new_cache(outfeed),
     do: %{__MODULE__ => outfeed}
 
-  defp merge_outfeed(%{__MODULE__ => outfeed} = cache, %{__MODULE__ => new_outfeed}),
-    do: %{cache | __MODULE__ => Outfeed.with_token(new_outfeed, outfeed.token)}
+  defp merge_outfeed(%{__MODULE__ => outfeed} = cache, %{__MODULE__ => new_outfeed}) do
+    merged =
+      new_outfeed
+      |> Outfeed.with_token(outfeed.token)
+      |> Outfeed.with_callback_pid_param(outfeed.callback_pid_param)
+
+    %{cache | __MODULE__ => merged}
+  end
 
   defp reset_token(%{__MODULE__ => outfeed}, token),
     do: %{__MODULE__ => Outfeed.with_token(outfeed, token)}
@@ -1665,6 +1762,8 @@ defmodule EXLA.Defn do
     do: %{cache | __MODULE__ => Outfeed.with_token(outfeed, token)}
 
   defp get_token(%{__MODULE__ => outfeed}), do: outfeed.token
+
+  defp get_callback_pid_param(%{__MODULE__ => outfeed}), do: outfeed.callback_pid_param
 
   defp get_outfeed(%{__MODULE__ => value}), do: value
 
@@ -1750,11 +1849,21 @@ defmodule EXLA.Defn do
     {region, args} = Function.push_region(state.builder, arg_typespecs)
 
     outer_token = get_token(cache)
+    outer_pid = get_callback_pid_param(cache)
 
-    {inner_token, arg_params} =
+    # Extract token and PID from region args in the same order they were prepended.
+    {inner_token, args} =
       if outer_token do
-        [arg_token | arg_params] = args
-        {arg_token, arg_params}
+        [arg_token | rest] = args
+        {arg_token, rest}
+      else
+        {nil, args}
+      end
+
+    {inner_pid, arg_params} =
+      if outer_pid do
+        [arg_pid | rest] = args
+        {arg_pid, rest}
       else
         {nil, args}
       end
@@ -1774,15 +1883,24 @@ defmodule EXLA.Defn do
         expr
       end
 
-    {res, comp_cache} = recur_composite(expr, & &1, state, reset_token(cache, inner_token))
+    # Reset the cache with inner-scope token and PID Values.
+    inner_cache = reset_token(cache, inner_token)
+
+    inner_cache =
+      if inner_pid do
+        put_outfeed(inner_cache, Outfeed.with_callback_pid_param(get_outfeed(inner_cache), inner_pid))
+      else
+        inner_cache
+      end
+
+    {res, comp_cache} = recur_composite(expr, & &1, state, inner_cache)
 
     res =
       if type == :with_token do
-        if outer_token do
-          [get_token(comp_cache) | List.flatten(res)]
-        else
-          List.flatten(res)
-        end
+        flat = List.flatten(res)
+        flat = if outer_pid, do: [get_callback_pid_param(comp_cache) | flat], else: flat
+        flat = if outer_token, do: [get_token(comp_cache) | flat], else: flat
+        flat
       else
         Enum.map(res, &to_type(&1, type))
       end
@@ -1800,7 +1918,17 @@ defmodule EXLA.Defn do
     out_typespecs = container_to_typespecs(expr)
 
     outer_token = get_token(cache)
+    outer_pid = get_callback_pid_param(cache)
     token_typespec = Typespec.token()
+
+    # Thread token and PID through the function as leading args/returns.
+    {arg_typespecs, out_typespecs} =
+      if outer_pid do
+        pid_typespec = Value.get_typespec(outer_pid)
+        {[pid_typespec | arg_typespecs], [pid_typespec | out_typespecs]}
+      else
+        {arg_typespecs, out_typespecs}
+      end
 
     {arg_typespecs, out_typespecs} =
       if outer_token do
@@ -1820,6 +1948,14 @@ defmodule EXLA.Defn do
         {nil, args}
       end
 
+    {inner_pid, args} =
+      if outer_pid do
+        [arg_pid | args] = args
+        {arg_pid, args}
+      else
+        {nil, args}
+      end
+
     params = Enum.with_index(args, fn param, i -> {i, param} end)
 
     state = %{
@@ -1829,13 +1965,21 @@ defmodule EXLA.Defn do
         scope_ids: Tree.scope_ids(expr)
     }
 
-    {res, comp_cache} = recur_composite(expr, state, reset_token(cache, inner_token))
+    inner_cache = reset_token(cache, inner_token)
 
-    if outer_token do
-      Value.func_return(function, [get_token(comp_cache) | List.flatten(res)])
-    else
-      Value.func_return(function, List.flatten(res))
-    end
+    inner_cache =
+      if inner_pid do
+        put_outfeed(inner_cache, Outfeed.with_callback_pid_param(get_outfeed(inner_cache), inner_pid))
+      else
+        inner_cache
+      end
+
+    {res, comp_cache} = recur_composite(expr, state, inner_cache)
+
+    ret = List.flatten(res)
+    ret = if outer_pid, do: [get_callback_pid_param(comp_cache) | ret], else: ret
+    ret = if outer_token, do: [get_token(comp_cache) | ret], else: ret
+    Value.func_return(function, ret)
 
     {function, merge_outfeed(cache, comp_cache)}
   end

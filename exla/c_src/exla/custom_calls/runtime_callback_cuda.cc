@@ -20,14 +20,44 @@ ffi::Error exla_runtime_callback_cuda_impl(
     ffi::Span<const int64_t> callback_id_words, uint64_t callback_id_size,
     ffi::RemainingRets rets) {
 
+  if (args.size() < 1) {
+    return ffi::Error(ffi::ErrorCode::kInvalidArgument,
+                      "runtime callback requires at least the PID argument");
+  }
+
+  // The last input arg is the serialized callback server PID (u8 tensor).
+  // Copy it from device to host first.
+  auto maybe_pid_buf = args.get<ffi::AnyBuffer>(args.size() - 1);
+  if (!maybe_pid_buf) {
+    return maybe_pid_buf.error();
+  }
+  ffi::AnyBuffer pid_buf = *maybe_pid_buf;
+  size_t pid_size = pid_buf.size_bytes();
+  std::vector<uint8_t> host_pid_buf(pid_size);
+
+  cudaError_t pid_err = cudaMemcpyAsync(host_pid_buf.data(),
+                                         pid_buf.untyped_data(), pid_size,
+                                         cudaMemcpyDeviceToHost, stream);
+  if (pid_err != cudaSuccess) {
+    return ffi::Error(ffi::ErrorCode::kInternal,
+                      std::string("cudaMemcpyAsync D->H for PID failed: ") +
+                          cudaGetErrorString(pid_err));
+  }
+  pid_err = cudaStreamSynchronize(stream);
+  if (pid_err != cudaSuccess) {
+    return ffi::Error(ffi::ErrorCode::kInternal,
+                      std::string("cudaStreamSynchronize for PID failed: ") +
+                          cudaGetErrorString(pid_err));
+  }
+
   // Keep host buffers alive for the duration of the callback.
   std::vector<std::vector<uint8_t>> host_input_buffers;
-  host_input_buffers.reserve(args.size());
+  host_input_buffers.reserve(args.size() - 1);
 
   std::vector<exla::callback_bridge::Arg> inputs;
-  inputs.reserve(args.size());
+  inputs.reserve(args.size() - 1);
 
-  for (size_t i = 0; i < args.size(); ++i) {
+  for (size_t i = 0; i < args.size() - 1; ++i) {
     auto maybe_buf_or = args.get<ffi::AnyBuffer>(i);
     if (!maybe_buf_or) {
       return maybe_buf_or.error();
@@ -99,7 +129,8 @@ ffi::Error exla_runtime_callback_cuda_impl(
 
   exla::callback_bridge::Result result =
       exla::callback_bridge::InvokeRuntimeCallback(
-          callback_id_words, callback_id_size, inputs, outputs);
+          callback_id_words, callback_id_size, inputs, outputs,
+          host_pid_buf.data(), pid_size);
 
   if (!result.ok) {
     return ffi::Error(ffi::ErrorCode::kInternal, result.error);

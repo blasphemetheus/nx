@@ -73,17 +73,12 @@ void deliver_reply(ErlNifEnv *env, fine::ResourcePtr<Pending> pending,
 Result InvokeRuntimeCallback(
     xla::ffi::Span<const int64_t> callback_id_words, uint64_t callback_id_size,
     const std::vector<Arg> &inputs,
-    const std::vector<OutputBuffer> &outputs);
-
-fine::Ok<> start_runtime_callback_bridge(ErlNifEnv *env,
-                                         ErlNifPid dispatcher_pid);
+    const std::vector<OutputBuffer> &outputs,
+    const uint8_t *pid_data, size_t pid_size);
 
 fine::Ok<> runtime_callback_reply(ErlNifEnv *env,
                                   fine::ResourcePtr<Pending> pending,
                                   fine::Atom status, fine::Term result);
-
-fine::Ok<> clear_runtime_callback_bridge(ErlNifEnv *env,
-                                         ErlNifPid dispatcher_pid);
 
 } // namespace callback_bridge
 

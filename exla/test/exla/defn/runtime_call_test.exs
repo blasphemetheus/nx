@@ -336,22 +336,21 @@ defmodule EXLA.Defn.RuntimeCallTest do
       assert msg =~ "expected the runtime_call function to match the given output template"
     end
 
-    test "ETS table is cleaned up after execution" do
-      # Run a runtime_call and verify the dispatcher ETS table
-      # doesn't accumulate stale entries.
-      ets_count_before = :ets.info(EXLA.Defn.CallbackDispatcher, :size)
+    test "no process leak after execution" do
+      pids_before = MapSet.new(Process.list())
 
       x = Nx.iota({5})
       add_ten(x)
 
-      # Give the outfeed task time to clean up
+      # Give the callback server time to shut down
+      :erlang.garbage_collect()
       Process.sleep(50)
 
-      ets_count_after = :ets.info(EXLA.Defn.CallbackDispatcher, :size)
+      pids_after = MapSet.new(Process.list())
+      new_pids = MapSet.difference(pids_after, pids_before)
 
-      assert ets_count_after == ets_count_before,
-             "ETS table grew by #{ets_count_after - ets_count_before} " <>
-               "entries after runtime_call — stale callback registrations"
+      assert MapSet.size(new_pids) == 0,
+             "#{MapSet.size(new_pids)} new processes leaked after runtime_call"
     end
   end
 
