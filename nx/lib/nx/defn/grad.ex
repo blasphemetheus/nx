@@ -159,6 +159,37 @@ defmodule Nx.Defn.Grad do
     {parents, Map.put(nodes, id, updated_node)}
   end
 
+  defp parents_args(
+         :checkpoint,
+         %{data: %{args: [input, _expr, body_fun, _param]}} = t,
+         id,
+         acc,
+         parent_vectorized_names
+       ) do
+    expr = body_fun.(input)
+
+    {{parents, nodes}, _} =
+      Composite.reduce(expr, {acc, parent_vectorized_names}, fn
+        expr, {{parents, nodes}, expr_vectorized_names} ->
+          arg_vectorized_names = compute_arg_vectorized_names(expr, expr_vectorized_names)
+          parents = Map.update(parents, expr.data.id, [id], &[id | &1])
+
+          acc =
+            recur_parents_tree(
+              expr,
+              {parents, nodes},
+              arg_vectorized_names
+            )
+
+          {acc, expr_vectorized_names}
+      end)
+
+    updated_node =
+      {put_in(t.data.args, [input, expr, body_fun, _param]), parent_vectorized_names}
+
+    {parents, Map.put(nodes, id, updated_node)}
+  end
+
   # We register cond as a special node to avoid pretraversing it.
   # Instead we traverse it early on on the grad computation.
   defp parents_args(:cond, _, id, {parents, nodes}, _parent_vectorized_names) do
@@ -195,6 +226,9 @@ defmodule Nx.Defn.Grad do
 
   defp reduce_args(:attach_token, %{data: %{args: [_, arg]}}, acc, fun),
     do: fun.(arg, acc)
+
+  defp reduce_args(:checkpoint, %{data: %{args: [input | _]}}, acc, fun),
+    do: fun.(input, acc)
 
   defp reduce_args(:while, %{data: %{args: [initial | _]}}, acc, fun),
     do: Composite.reduce(initial, acc, fun)
@@ -290,6 +324,17 @@ defmodule Nx.Defn.Grad do
       tuple = tuple || Tuple.duplicate([], size)
       put_elem(tuple, pos, [g | elem(tuple, pos)])
     end)
+  end
+
+  defp update_grads(:checkpoint, [_input, expr, _fun, _param], _ans, gs, _to_grad_ids, grads) do
+    gs = List.wrap(gs)
+
+    {grads, []} =
+      Composite.reduce(expr, {grads, gs}, fn child, {grads, [g | gs]} ->
+        {Map.update(grads, child.data.id, [g], &[g | &1]), gs}
+      end)
+
+    grads
   end
 
   defp update_grads(:optional, [_call, expr, _callback], _ans, gs, _to_grad_ids, grads) do

@@ -576,8 +576,13 @@ defmodule Nx.Defn do
 
   """
   def checkpoint(input, fun) when is_function(fun, 1) do
-    # TODO: implement checkpoint expression node for gradient recomputation
-    fun.(input)
+    case input do
+      %Nx.Tensor{data: %Nx.Defn.Expr{}} ->
+        Nx.Defn.Expr.checkpoint(input, fun)
+
+      _ ->
+        fun.(input)
+    end
   end
 
   @doc """

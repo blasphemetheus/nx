@@ -133,6 +133,13 @@ defmodule Nx.Defn.Evaluator do
     {[initial, pred, block, while_cache], cache}
   end
 
+  defp compute_cache(:checkpoint, %{data: %Expr{args: args}}, state, cache) do
+    [input, expr, _fun, param] = args
+    {input, cache} = compute_cache(input, state, cache)
+    {expr, expr_cache} = init_compute_cache(expr, state)
+    {[input, expr, expr_cache, param], cache}
+  end
+
   defp compute_cache(:optional, %{data: %Expr{args: args}}, state, cache) do
     [call, expr, _callback] = args
     %{data: %{args: call_args, op: call_name}} = call
@@ -364,6 +371,27 @@ defmodule Nx.Defn.Evaluator do
       end)
 
     {{}, caches}
+  end
+
+  defp eval_apply(:checkpoint, [input, expr, expr_cache, param], _ans, state, caches) do
+    {input_value, caches} = eval(input, state, caches)
+
+    # Pre-seed the body cache with the parameter's evaluated result.
+    # We don't replace state.params because the body may reference
+    # outer defn parameters (captured variables like weights).
+    param_id = param.data.id
+
+    expr_cache =
+      case expr_cache do
+        %{^param_id => {:args, count, _}} ->
+          Map.put(expr_cache, param_id, {:result, count, input_value})
+
+        _ ->
+          expr_cache
+      end
+
+    {res, [_ | caches]} = composite_eval(expr, state, [expr_cache | caches])
+    {res, caches}
   end
 
   defp eval_apply(:optional, [call, expr, expr_cache], _ans, state, caches) do
