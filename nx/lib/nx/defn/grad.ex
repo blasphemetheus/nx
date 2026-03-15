@@ -1230,6 +1230,7 @@ defmodule Nx.Defn.Grad do
       case opts[:transform_a] do
         :none -> a_input
         :transpose -> Nx.transpose(a_input)
+        :conjugate -> Nx.conjugate(a_input)
       end
 
     a_inv_hermitian = Nx.LinAlg.invert(Nx.LinAlg.adjoint(a))
@@ -1277,6 +1278,7 @@ defmodule Nx.Defn.Grad do
       case opts[:transform_a] do
         :none -> da
         :transpose -> Nx.transpose(da)
+        :conjugate -> Nx.conjugate(da)
       end
 
     da =
