@@ -5431,6 +5431,64 @@ defmodule Nx.Defn.GradTest do
       assert actual == expected
     end
 
+    # --- Axes normalization: verify negative and named axes work ---
+    # Axes are normalized to positive integers by the Nx API before reaching
+    # the expression tree. These tests verify adjust_vectorized_args handles
+    # the already-normalized values correctly.
+
+    test "grad of vectorized sum with negative axis" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(x, axes: [-1]) end
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([4.0, 5.0, 6.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized sum with named axis" do
+      x =
+        Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], names: [nil, :features])
+        |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(x, axes: [:features]) end
+
+      expected =
+        for row <- [
+              Nx.tensor([1.0, 2.0, 3.0], names: [:features]),
+              Nx.tensor([4.0, 5.0, 6.0], names: [:features])
+            ] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized sort with negative axis" do
+      x = Nx.tensor([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]]) |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.sort(x, axis: -1)) end
+
+      expected =
+        for row <- [Nx.tensor([3.0, 1.0, 2.0]), Nx.tensor([6.0, 4.0, 5.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
     # --- Elementwise with broadcasting ---
 
     test "grad of vectorized add with scalar" do
