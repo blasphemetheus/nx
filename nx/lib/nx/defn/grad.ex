@@ -329,11 +329,15 @@ defmodule Nx.Defn.Grad do
   # subtracting vec_offset so they reference the correct inner-shape axes.
 
   # Aggregate ops with keyword opts containing :axes
-  @axes_in_opts_ops [:sum, :product, :reduce_max, :reduce_min, :gather]
+  @axes_in_opts_ops [:sum, :product, :reduce_max, :reduce_min]
 
   defp adjust_vectorized_args(op, [x | rest], offset) when op in @axes_in_opts_ops do
     [x | adjust_keyword_axes(rest, offset)]
   end
+
+  # gather: don't adjust args — the grad clause handles vectorization
+  # directly by devectorizing t and g to match the expression tree shapes
+  defp adjust_vectorized_args(:gather, args, _offset), do: args
 
   # sort: [x, opts] where opts contains :axis (singular)
   defp adjust_vectorized_args(:sort, [x | rest], offset) do
@@ -915,23 +919,37 @@ defmodule Nx.Defn.Grad do
   end
 
   defp grad(:gather, [t, i, opts], _ans, g) do
+    # gather's forward pass devectorizes with keep_names: false, so t and i
+    # are never re-vectorized by recur_to_grad. However, g may be vectorized.
+    # Devectorize g to match the devectorized t/i shapes, compute the grad
+    # in devectorized space, then re-vectorize the result.
+    vec_axes = g.vectorized_axes
+    g = if vec_axes != [], do: Nx.devectorize(g, keep_names: false), else: g
+
     i_axes = opts[:axes]
     i_shape = i.shape
     t_shape = t.shape
 
     num_elements = Tuple.product(i_shape) |> div(elem(i_shape, tuple_size(i_shape) - 1))
-    updates_shape = for i <- Nx.axes(t), i not in i_axes, do: elem(t_shape, i)
+    updates_shape = for idx <- Nx.axes(t), idx not in i_axes, do: elem(t_shape, idx)
 
     indices = Nx.reshape(i, {num_elements, :auto})
     updates = Nx.reshape(g, List.to_tuple([num_elements | updates_shape]))
 
-    g =
+    result =
       0
       |> Nx.as_type(t.type)
       |> Nx.broadcast(t_shape)
       |> Nx.indexed_add(indices, updates, opts)
 
-    [{t, g}]
+    result =
+      if vec_axes != [] do
+        Nx.vectorize(result, vec_axes)
+      else
+        result
+      end
+
+    [{t, result}]
   end
 
   defp grad(:add, [x, y], ans, g) do

@@ -5097,13 +5097,50 @@ defmodule Nx.Defn.GradTest do
 
     # --- @axes_in_opts_ops: gather, sort ---
 
-    # gather grad uses raw shapes and indices designed for inner shape,
-    # can't simply devectorize since indices become invalid for full shape
-    @tag :skip
     test "grad of vectorized gather" do
       x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
 
       fun = fn x -> Nx.sum(Nx.gather(x, Nx.tensor([[0], [2]]))) end
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([4.0, 5.0, 6.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized gather with 2D inner shape" do
+      x =
+        Nx.tensor([
+          [[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]],
+          [[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]]
+        ])
+        |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.gather(x, Nx.tensor([[0], [2]]))) end
+
+      expected =
+        for row <- [
+              Nx.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]),
+              Nx.tensor([[7.0, 8.0], [9.0, 10.0], [11.0, 12.0]])
+            ] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized gather with power" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      fun = fn x -> x |> Nx.pow(2) |> Nx.gather(Nx.tensor([[0], [2]])) |> Nx.sum() end
 
       expected =
         for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([4.0, 5.0, 6.0])] do
