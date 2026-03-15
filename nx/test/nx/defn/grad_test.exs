@@ -5178,8 +5178,12 @@ defmodule Nx.Defn.GradTest do
         |> Nx.vectorize(:batch)
         |> Nx.vectorize(:seq)
 
-      rows = [Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0]),
-              Nx.tensor([5.0, 6.0]), Nx.tensor([7.0, 8.0])]
+      rows = [
+        Nx.tensor([1.0, 2.0]),
+        Nx.tensor([3.0, 4.0]),
+        Nx.tensor([5.0, 6.0]),
+        Nx.tensor([7.0, 8.0])
+      ]
 
       expected =
         rows
@@ -5199,8 +5203,12 @@ defmodule Nx.Defn.GradTest do
         |> Nx.vectorize(:batch)
         |> Nx.vectorize(:seq)
 
-      rows = [Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0]),
-              Nx.tensor([2.0, 3.0]), Nx.tensor([4.0, 5.0])]
+      rows = [
+        Nx.tensor([1.0, 2.0]),
+        Nx.tensor([3.0, 4.0]),
+        Nx.tensor([2.0, 3.0]),
+        Nx.tensor([4.0, 5.0])
+      ]
 
       expected =
         rows
@@ -5226,8 +5234,7 @@ defmodule Nx.Defn.GradTest do
       fun = fn x -> Nx.sum(Nx.dot(x, w)) end
 
       expected =
-        for row <- [Nx.tensor([[1.0, 2.0], [3.0, 4.0]]),
-                    Nx.tensor([[5.0, 6.0], [7.0, 8.0]])] do
+        for row <- [Nx.tensor([[1.0, 2.0], [3.0, 4.0]]), Nx.tensor([[5.0, 6.0], [7.0, 8.0]])] do
           Nx.Defn.grad(row, fun)
         end
         |> Nx.stack()
@@ -5239,15 +5246,16 @@ defmodule Nx.Defn.GradTest do
 
     test "grad of vectorized transpose with 2D inner shape" do
       x =
-        Nx.tensor([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
-                    [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]])
+        Nx.tensor([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]], [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]])
         |> Nx.vectorize(:batch)
 
       fun = fn x -> Nx.sum(Nx.multiply(Nx.transpose(x), 2.0)) end
 
       expected =
-        for row <- [Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
-                    Nx.tensor([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]])] do
+        for row <- [
+              Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
+              Nx.tensor([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]])
+            ] do
           Nx.Defn.grad(row, fun)
         end
         |> Nx.stack()
