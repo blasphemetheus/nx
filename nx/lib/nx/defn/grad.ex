@@ -215,19 +215,8 @@ defmodule Nx.Defn.Grad do
 
     res = sum_grad(Map.get(grads, id, []))
 
-    res =
-      case {arg.vectorized_axes, res.vectorized_axes} do
-        {[], _} ->
-          Nx.broadcast(res, arg)
-
-        {vectorized_axes, []} ->
-          devec_arg = Nx.devectorize(arg, keep_names: true)
-          res = Nx.broadcast(res, devec_arg)
-          Nx.vectorize(res, vectorized_axes)
-
-        {_, _} ->
-          Nx.broadcast(res, arg)
-      end
+    [res, arg] = Nx.broadcast_vectors([res, arg])
+    res = Nx.broadcast(res, arg)
 
     {res, {nodes, grads}}
   end
@@ -275,7 +264,7 @@ defmodule Nx.Defn.Grad do
 
           [_ | _] ->
             g = Enum.reduce(gs, &Nx.add/2)
-            g = maybe_vectorize_grad(g, vectorized_names, ans)
+            [g, _] = Nx.broadcast_vectors([g, ans])
             {nodes, update_grads(op, args, ans, g, to_grad_ids, grads)}
 
           _ ->
@@ -284,7 +273,8 @@ defmodule Nx.Defn.Grad do
               |> Tuple.to_list()
               |> Enum.map(fn gs ->
                 g = sum_grad(gs)
-                maybe_vectorize_grad(g, vectorized_names, ans)
+                [g, _] = Nx.broadcast_vectors([g, ans])
+                g
               end)
 
             {nodes, update_grads(op, args, ans, g, to_grad_ids, grads)}
@@ -309,18 +299,6 @@ defmodule Nx.Defn.Grad do
     vectorized_names = compute_arg_vectorized_names(node, vectorized_names)
 
     Nx.vectorize(node, vectorized_names)
-  end
-
-  # Ensures g has the correct vectorization to match ans.
-  # When ans is re-vectorized but g is not (e.g., scalar gradient seed),
-  # we broadcast g to the devectorized ans shape, then vectorize.
-  defp maybe_vectorize_grad(g, [], _ans), do: g
-  defp maybe_vectorize_grad(%T{vectorized_axes: [_ | _]} = g, _vectorized_names, _ans), do: g
-
-  defp maybe_vectorize_grad(%T{vectorized_axes: []} = g, vectorized_names, ans) do
-    devec_ans = Nx.devectorize(ans, keep_names: true)
-    g = Nx.broadcast(g, devec_ans)
-    Nx.vectorize(g, vectorized_names)
   end
 
   # Centralized adjustment of opts/args for vectorized operations.
@@ -390,7 +368,7 @@ defmodule Nx.Defn.Grad do
   end
 
   # window ops: [x, window_dimensions, opts] — adjust window dims and opts
-  @window_ops [:window_sum, :window_min, :window_max]
+  @window_ops [:window_sum, :window_product, :window_min, :window_max]
 
   defp adjust_vectorized_args(op, [x, window_dimensions, opts], offset)
        when op in @window_ops do
@@ -409,13 +387,18 @@ defmodule Nx.Defn.Grad do
     [x, adjusted_dims, adjusted_opts]
   end
 
-  # fft/ifft: [t, opts] — length refers to last axis, needs no axis adjustment
-  # but Nx.rank(t) is used in the grad clause (returns inner rank, which is correct)
-  defp adjust_vectorized_args(:fft, args, _offset), do: args
-  defp adjust_vectorized_args(:ifft, args, _offset), do: args
+  # fft/ifft: [t, opts] where opts contains :axis (singular)
+  defp adjust_vectorized_args(:fft, [x | rest], offset) do
+    [x | adjust_keyword_axis(rest, offset)]
+  end
 
-  # conv: complex, skip for now
-  defp adjust_vectorized_args(:conv, args, _offset), do: args
+  defp adjust_vectorized_args(:ifft, [x | rest], offset) do
+    [x | adjust_keyword_axis(rest, offset)]
+  end
+
+  defp adjust_vectorized_args(:conv, _args, _offset) do
+    raise ArgumentError, "conv gradient with vectorized tensors is not yet supported"
+  end
 
   # Default: no adjustment needed (elementwise ops, etc.)
   defp adjust_vectorized_args(_op, args, _offset), do: args
@@ -919,12 +902,8 @@ defmodule Nx.Defn.Grad do
   end
 
   defp grad(:gather, [t, i, opts], _ans, g) do
-    # gather's forward pass devectorizes with keep_names: false, so t and i
-    # are never re-vectorized by recur_to_grad. However, g may be vectorized.
-    # Devectorize g to match the devectorized t/i shapes, compute the grad
-    # in devectorized space, then re-vectorize the result.
     vec_axes = g.vectorized_axes
-    g = if vec_axes != [], do: Nx.devectorize(g, keep_names: false), else: g
+    g = Nx.devectorize(g, keep_names: false)
 
     i_axes = opts[:axes]
     i_shape = i.shape
@@ -942,14 +921,7 @@ defmodule Nx.Defn.Grad do
       |> Nx.broadcast(t_shape)
       |> Nx.indexed_add(indices, updates, opts)
 
-    result =
-      if vec_axes != [] do
-        Nx.vectorize(result, vec_axes)
-      else
-        result
-      end
-
-    [{t, result}]
+    [{t, Nx.vectorize(result, vec_axes)}]
   end
 
   defp grad(:add, [x, y], ans, g) do
