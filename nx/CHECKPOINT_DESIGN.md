@@ -270,11 +270,25 @@ Template follows `:optional` evaluator pattern:
 
 ## Step 5: Function Definition
 
-*TODO — fill in the templates*
+COMPLETE. Implementation in commit `bce02469`.
+
+Key implementation detail not anticipated in the templates: the evaluator cannot replace `state.params` because captured variables (weights) share the outer defn's parameter namespace. Instead, the evaluator pre-seeds the body's expression cache with the parameter's result, leaving `state.params` untouched so outer parameters resolve via `eval_parent`.
+
+Design decision revised: we do NOT use a separate `{:checkpoint, ref}` context (tried and failed — breaks captured variables). Parameters share `:root` context. The evaluator distinguishes checkpoint params from outer params by directly mapping the param's expression ID in the cache.
+
+### Files modified
+- `nx/lib/nx/defn/expr.ex` — `checkpoint/2` constructor, `traverse_args` clause
+- `nx/lib/nx/defn/tree.ex` — `apply_args` clause for `:checkpoint`
+- `nx/lib/nx/defn/grad.ex` — `reduce_args`, `parents_args`, `update_grads` clauses
+- `nx/lib/nx/defn/evaluator.ex` — `compute_cache`, `eval_apply` clauses
+- `nx/lib/nx/defn.ex` — public API dispatches to `Expr.checkpoint/2` or falls back
+
+### Expression node args
+`[input, body_expr, fun, param]` — 4 elements, not 3 as originally designed. The `param` stores the parameter node created during tracing so the evaluator can map its ID to the input value.
 
 ## Step 6: Testing
 
-*TODO — verify all 33 tests pass with the real implementation*
+COMPLETE. All 33 checkpoint tests pass. Full defn test suite (405 tests) passes with 0 regressions.
 
 ---
 
