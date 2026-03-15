@@ -251,7 +251,6 @@ defmodule Nx.Defn.Grad do
         %T{data: %Expr{op: op, args: args}} = ans
         {gs, grads} = Map.pop(grads, id)
 
-        # No re-vectorization — grad clauses work in devectorized space.
         case gs do
           nil ->
             {nodes, grads}
