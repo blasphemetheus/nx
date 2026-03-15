@@ -396,15 +396,6 @@ defmodule Nx.Defn.Grad do
     [x | adjust_keyword_axis(rest, offset)]
   end
 
-  # fft2/ifft2: [t, opts] where opts contains :axes (plural)
-  defp adjust_vectorized_args(:fft2, [x | rest], offset) do
-    [x | adjust_keyword_axes(rest, offset)]
-  end
-
-  defp adjust_vectorized_args(:ifft2, [x | rest], offset) do
-    [x | adjust_keyword_axes(rest, offset)]
-  end
-
   defp adjust_vectorized_args(:conv, _args, _offset) do
     raise ArgumentError, "conv gradient with vectorized tensors is not yet supported"
   end
