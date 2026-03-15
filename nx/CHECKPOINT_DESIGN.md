@@ -47,6 +47,16 @@ Rationale:
 | Scope semantics in tree traversal | Body is scoped | Body is scoped | Body is scoped |
 | Gradient strategy | Re-trace fun, differentiate fresh tree | Passthrough to body children | Build companion while loop |
 
+### Design decisions
+
+| Question | Decision | Rationale |
+|----------|----------|-----------|
+| Re-tracing location | `parents_args` (like `:optional`) | Checkpoint is a boundary, not a loop. Re-trace the function, let normal gradient flow through the fresh tree. `update_grads` just assigns gradients to body outputs. |
+| Context scoping | Inherit body's context (no dedicated scope) | Checkpoint's body result IS returned to the outer scope (unlike while's looping body). No risk of scope escape. |
+| Public API mechanism | `deftransform` calling `Expr.checkpoint/2` | Runs at trace time, creates expression nodes. Same pattern as `custom_grad`. Falls back to `fun.(input)` outside defn. |
+| Container handling | No flattening — pass through as-is | Not iterative like while. Input goes in, output comes out. No shape matching across iterations. |
+| `reduce_args` | All inputs participate in gradient | Every input potentially has a gradient path through the body. |
+
 ## Step 2: Signature, Purpose, Header
 
 ### `Nx.Defn.checkpoint/2`
@@ -142,7 +152,121 @@ All tests pass with the pass-through stub since checkpoint is semantically trans
 
 ## Step 4: Template / Inventory
 
-*TODO — derive function outlines from the data definitions*
+### `Nx.Defn.checkpoint/2` (public API — deftransform)
+
+```elixir
+# In Nx.Defn or Nx.Defn.Kernel
+deftransform checkpoint(input, fun) do
+  # If inside defn (input is an Expr tensor), create expression node
+  # Otherwise, pass through: fun.(input)
+  ...
+end
+```
+
+### `Nx.Defn.Expr.checkpoint/2` (expression node constructor)
+
+Template follows `:optional` pattern at line 374 of expr.ex:
+
+```elixir
+def checkpoint(input, fun) do
+  # 1. Create parameter node from input
+  param = parameter(input, 0)
+
+  # 2. Trace fun with the parameter to get body expression
+  body_expr = fun.(param)
+
+  # 3. Get context from body expression
+  context = body_expr.data.context  # (or handle tuple output)
+
+  # 4. Build :checkpoint expression node
+  #    args = [input, body_expr, fun]
+  expr(body_expr, context, :checkpoint, [input, body_expr, fun])
+
+  # 5. If body_expr is a tuple, wrap with :elem extraction (like :optional)
+end
+```
+
+### `Nx.Defn.Tree.apply_args/4` clause
+
+Template follows `:optional` pattern at line 182 of tree.ex:
+
+```elixir
+# In apply_args, :scope mode — only traverse input (external-facing)
+defp apply_args(:checkpoint, [input, _body_expr, _fun], acc, fun, _mode = :scope) do
+  {input, acc} = fun.(input, acc)
+  {[input, _body_expr, _fun], acc}
+end
+
+# In apply_args, :all mode — also traverse body_expr
+defp apply_args(:checkpoint, [input, body_expr, fun_arg], acc, fun, _mode = :all) do
+  {input, acc} = fun.(input, acc)
+  {body_expr, acc} = Composite.traverse(body_expr, acc, fun)
+  {[input, body_expr, fun_arg], acc}
+end
+```
+
+### `Nx.Defn.Grad.parents_args/5` clause
+
+Template follows `:optional` at line 129 of grad.ex:
+
+```elixir
+defp parents_args(
+       :checkpoint,
+       %{data: %{args: [_input, _body_expr, body_fun]}} = t,
+       id,
+       acc,
+       parent_vectorized_names
+     ) do
+  # 1. Re-trace body_fun with parameter created from input
+  #    (like :optional does: apply(callback, call.data.args))
+  expr = body_fun.(... fresh param from input ...)
+
+  # 2. Traverse the re-traced expression, building parent-child edges
+  #    (like :optional's Composite.reduce loop)
+  {parents, nodes} = ... traverse expr, linking to id ...
+
+  # 3. Store re-traced expr back into the node
+  updated_node = {put_in(t.data.args, [input, expr, body_fun]), parent_vectorized_names}
+  {parents, Map.put(nodes, id, updated_node)}
+end
+```
+
+### `Nx.Defn.Grad.update_grads/6` clause
+
+Template follows `:optional` at line 295 of grad.ex:
+
+```elixir
+defp update_grads(:checkpoint, [_input, expr, _fun], _ans, gs, _to_grad_ids, grads) do
+  # Assign incoming gradients to body expression output nodes
+  # (identical to :optional's update_grads)
+  gs = List.wrap(gs)
+
+  {grads, []} =
+    Composite.reduce(expr, {grads, gs}, fn child, {grads, [g | gs]} ->
+      {Map.update(grads, child.data.id, [g], &[g | &1]), gs}
+    end)
+
+  grads
+end
+```
+
+### `Nx.Defn.Grad.reduce_args/4` clause
+
+```elixir
+defp reduce_args(:checkpoint, %{data: %{args: [input | _]}}, acc, fun) do
+  # All inputs participate in gradient
+  fun.(input, acc)
+end
+```
+
+### `Nx.Defn.Evaluator` clause
+
+Template follows `:optional` evaluator pattern:
+
+```elixir
+# In compute_cache: separate input (outer scope) from body (inner scope)
+# In eval_apply: evaluate input, set as param, evaluate body_expr
+```
 
 ## Step 5: Function Definition
 
