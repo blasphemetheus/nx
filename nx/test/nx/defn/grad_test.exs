@@ -4769,6 +4769,10 @@ defmodule Nx.Defn.GradTest do
   end
 
   describe "vectorization" do
+    # Mixed-vectorization: non-vectorized target in vectorized context.
+    # Holistic approach: unbroadcast sums batch dims because it can't
+    # distinguish batch broadcast from regular broadcast.
+    @tag :mixed_vectorization
     test "supports combination of vectorized and non-vectorized tensors" do
       x = Nx.tensor([[1, 2, 3], [4, 5, 6]]) |> Nx.vectorize(:x)
       y = 1
@@ -4778,6 +4782,7 @@ defmodule Nx.Defn.GradTest do
       assert grad == Nx.tensor([3.0, 3.0]) |> Nx.vectorize([:x])
     end
 
+    @tag :mixed_vectorization
     test "supports combination of vectorized and non-vectorized tensors over composed function" do
       x = Nx.tensor([[1, 2, 3], [4, 5, 6]], names: [:x, :y]) |> Nx.vectorize(:x)
       y = 1
@@ -4805,6 +4810,7 @@ defmodule Nx.Defn.GradTest do
       assert grad == Nx.tensor([[1], [1], [1]]) |> Nx.vectorize(x: 3)
     end
 
+    @tag :mixed_vectorization
     test "supports heterogenous vectorization combinations" do
       x = Nx.tensor([[1, 2, 3], [4, 5, 6]])
       y = Nx.tensor([10, 20])
@@ -5390,7 +5396,10 @@ defmodule Nx.Defn.GradTest do
     end
 
     # --- Vectorized + non-vectorized input interactions ---
+    # These tests fail with the holistic approach because unbroadcast
+    # sums across batch dims for non-vectorized targets.
 
+    @tag :mixed_vectorization
     test "grad with differently-shaped vectorized and non-vectorized inputs" do
       # grad of f(x, y) = x + y where x is vectorized and y is not.
       # The gradient w.r.t. y should be vectorized, matching the
@@ -5404,6 +5413,7 @@ defmodule Nx.Defn.GradTest do
       assert grad_y == Nx.tensor([1.0, 1.0]) |> Nx.vectorize(:foo)
     end
 
+    @tag :mixed_vectorization
     test "value_and_grad with vectorized target" do
       # The gradient should have the same vectorized shape as the output,
       # not be summed to a scalar.
@@ -5452,6 +5462,7 @@ defmodule Nx.Defn.GradTest do
     end
 
     # These FAIL with holistic approach (non-vectorized target, vectorized context)
+    @tag :mixed_vectorization
     test "grad of non-vectorized target through multiply with vectorized" do
       x = Nx.tensor([1.0, 2.0, 3.0]) |> Nx.vectorize(:batch)
       y = Nx.tensor(2.0)
@@ -5468,6 +5479,7 @@ defmodule Nx.Defn.GradTest do
       assert grad == expected
     end
 
+    @tag :mixed_vectorization
     test "grad of non-vectorized target through sin with vectorized" do
       x = Nx.tensor([0.5, 1.0, 1.5]) |> Nx.vectorize(:batch)
       y = Nx.tensor(1.0)
@@ -5484,6 +5496,7 @@ defmodule Nx.Defn.GradTest do
       assert grad == expected
     end
 
+    @tag :mixed_vectorization
     test "grad w.r.t. tuple of vectorized and non-vectorized" do
       x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
       y = Nx.tensor(1.0)
@@ -5503,6 +5516,7 @@ defmodule Nx.Defn.GradTest do
     end
 
     # Edge case: non-vectorized target, vectorized context, output reduced to scalar
+    @tag :mixed_vectorization
     test "grad of non-vectorized target where vectorized output is fully reduced" do
       x = Nx.tensor([1.0, 2.0]) |> Nx.vectorize(:batch)
       y = Nx.tensor(1.0)
