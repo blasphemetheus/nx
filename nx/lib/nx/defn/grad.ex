@@ -161,7 +161,7 @@ defmodule Nx.Defn.Grad do
 
   defp parents_args(
          :checkpoint,
-         %{data: %{args: [input, _expr, body_fun, _param]}} = t,
+         %{data: %{args: [input, _expr, body_fun, param]}} = t,
          id,
          acc,
          parent_vectorized_names
@@ -185,7 +185,7 @@ defmodule Nx.Defn.Grad do
       end)
 
     updated_node =
-      {put_in(t.data.args, [input, expr, body_fun, _param]), parent_vectorized_names}
+      {put_in(t.data.args, [input, expr, body_fun, param]), parent_vectorized_names}
 
     {parents, Map.put(nodes, id, updated_node)}
   end

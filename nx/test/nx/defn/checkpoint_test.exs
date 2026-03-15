@@ -685,4 +685,192 @@ defmodule Nx.Defn.CheckpointTest do
       assert grad_checkpoint_transpose(x) == grad_transpose_no_checkpoint(x)
     end
   end
+
+  # --- JIT compilation ---
+
+  describe "jit compilation" do
+    test "checkpoint works via Nx.Defn.jit" do
+      fun =
+        Nx.Defn.jit(fn x ->
+          Nx.Defn.checkpoint(x, fn x -> Nx.sin(x) end)
+        end)
+
+      x = Nx.tensor([1.0, 2.0, 3.0])
+      assert fun.(x) == Nx.sin(x)
+    end
+
+    test "grad through checkpoint via jit" do
+      fun =
+        Nx.Defn.jit(fn x ->
+          Nx.Defn.grad(x, fn x ->
+            Nx.Defn.checkpoint(x, fn x -> Nx.sum(Nx.sin(x)) end)
+          end)
+        end)
+
+      x = Nx.tensor([1.0, 2.0, 3.0])
+      assert fun.(x) == Nx.Defn.grad(x, &Nx.sum(Nx.sin(&1)))
+    end
+  end
+
+  # --- Expression tree inspection ---
+
+  describe "expression tree" do
+    test "checkpoint node appears in debug output" do
+      fun =
+        Nx.Defn.jit(
+          fn x ->
+            Nx.Defn.checkpoint(x, fn x -> Nx.sin(x) end)
+          end,
+          compiler: Nx.Defn.Debug
+        )
+
+      result = fun.(Nx.tensor(1.0))
+      assert inspect(result) =~ "checkpoint"
+    end
+  end
+
+  # --- Multiple captured variables ---
+
+  describe "multiple captured variables" do
+    defn grad_multi_capture(w1, w2, b, x) do
+      grad(x, fn x ->
+        Nx.Defn.checkpoint(x, fn x ->
+          x |> Nx.dot(w1) |> Nx.add(b) |> Nx.dot(w2) |> Nx.sum()
+        end)
+      end)
+    end
+
+    defn grad_multi_capture_plain(w1, w2, b, x) do
+      grad(x, fn x ->
+        x |> Nx.dot(w1) |> Nx.add(b) |> Nx.dot(w2) |> Nx.sum()
+      end)
+    end
+
+    test "checkpoint with multiple captured weight matrices and bias" do
+      w1 = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+      w2 = Nx.tensor([[0.1], [0.4]])
+      b = Nx.tensor([0.1, -0.1])
+      x = Nx.tensor([1.0, 2.0])
+
+      assert grad_multi_capture(w1, w2, b, x) ==
+               grad_multi_capture_plain(w1, w2, b, x)
+    end
+  end
+
+  # --- Input/output shape mismatch ---
+
+  describe "shape-changing checkpoint" do
+    defn grad_shape_change(x) do
+      grad(x, fn x ->
+        Nx.Defn.checkpoint(x, fn x ->
+          Nx.sum(x, axes: [1])
+        end)
+        |> Nx.sum()
+      end)
+    end
+
+    defn grad_shape_change_plain(x) do
+      grad(x, fn x ->
+        x |> Nx.sum(axes: [1]) |> Nx.sum()
+      end)
+    end
+
+    test "input shape differs from output shape" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
+      assert grad_shape_change(x) == grad_shape_change_plain(x)
+    end
+
+    defn grad_expand_shape(x) do
+      grad(x, fn x ->
+        Nx.Defn.checkpoint(x, fn x ->
+          Nx.stack([x, Nx.multiply(x, 2.0)])
+        end)
+        |> Nx.sum()
+      end)
+    end
+
+    defn grad_expand_shape_plain(x) do
+      grad(x, fn x ->
+        Nx.stack([x, Nx.multiply(x, 2.0)]) |> Nx.sum()
+      end)
+    end
+
+    test "output larger than input" do
+      x = Nx.tensor([1.0, 2.0])
+      assert grad_expand_shape(x) == grad_expand_shape_plain(x)
+    end
+  end
+
+  # --- Integer input ---
+
+  describe "integer input" do
+    defn checkpoint_integer_forward(x) do
+      Nx.Defn.checkpoint(x, fn x -> Nx.add(x, 1) end)
+    end
+
+    test "integer tensor forward pass" do
+      x = Nx.tensor([1, 2, 3])
+      assert checkpoint_integer_forward(x) == Nx.tensor([2, 3, 4])
+    end
+  end
+
+  # --- Deep nesting: checkpoint inside while inside checkpoint ---
+
+  describe "deep nesting" do
+    defn grad_checkpoint_while_checkpoint(x) do
+      grad(x, fn x ->
+        Nx.Defn.checkpoint(x, fn x ->
+          {_i, acc} =
+            while {i = 0, acc = x}, Nx.less(i, 2) do
+              {i + 1, Nx.Defn.checkpoint(acc, fn acc -> Nx.sin(acc) end)}
+            end
+
+          Nx.sum(acc)
+        end)
+      end)
+    end
+
+    defn grad_deep_plain(x) do
+      grad(x, fn x ->
+        {_i, acc} =
+          while {i = 0, acc = x}, Nx.less(i, 2) do
+            {i + 1, Nx.sin(acc)}
+          end
+
+        Nx.sum(acc)
+      end)
+    end
+
+    test "checkpoint inside while inside checkpoint" do
+      x = Nx.tensor([0.5, 1.0])
+      assert grad_checkpoint_while_checkpoint(x) == grad_deep_plain(x)
+    end
+  end
+
+  # --- Shared function reference ---
+
+  describe "shared function across checkpoints" do
+    defn grad_shared_fun(x) do
+      sin_fn = &Nx.sin/1
+
+      grad(x, fn x ->
+        x
+        |> Nx.Defn.checkpoint(sin_fn)
+        |> Nx.Defn.checkpoint(sin_fn)
+        |> Nx.Defn.checkpoint(sin_fn)
+        |> Nx.sum()
+      end)
+    end
+
+    defn grad_shared_plain(x) do
+      grad(x, fn x ->
+        x |> Nx.sin() |> Nx.sin() |> Nx.sin() |> Nx.sum()
+      end)
+    end
+
+    test "same function reused across multiple checkpoints" do
+      x = Nx.tensor([0.5, 1.0, 1.5])
+      assert grad_shared_fun(x) == grad_shared_plain(x)
+    end
+  end
 end
