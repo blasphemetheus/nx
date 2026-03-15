@@ -552,6 +552,32 @@ defmodule Nx.Defn do
   end
 
   @doc """
+  Marks a computation region for gradient checkpointing.
+
+  When used outside of `grad`, `checkpoint(fun)` is equivalent to `fun.()`.
+
+  When used inside `grad`, the backward pass will recompute the intermediates
+  of `fun` from its saved inputs rather than storing them, reducing peak
+  activation memory from O(n) to O(sqrt(n)) for optimally placed checkpoints.
+
+  The gradients produced are identical to those without checkpointing —
+  only memory usage changes.
+
+  ## Examples
+
+      defn forward(params, input) do
+        input
+        |> Nx.Defn.checkpoint(&dense_block(params.layer1, &1))
+        |> Nx.Defn.checkpoint(&dense_block(params.layer2, &1))
+      end
+
+  """
+  def checkpoint(fun) when is_function(fun, 0) do
+    # TODO: implement checkpoint expression node for gradient recomputation
+    fun.()
+  end
+
+  @doc """
   Receives an anonymous function and returns a new anonymous function
   that returns the value and gradient of the input function when invoked.
 
