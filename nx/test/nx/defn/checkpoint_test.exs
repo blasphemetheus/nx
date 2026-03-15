@@ -873,4 +873,236 @@ defmodule Nx.Defn.CheckpointTest do
       assert grad_shared_fun(x) == grad_shared_plain(x)
     end
   end
+
+  # --- Tuple as input ---
+
+  describe "tuple input" do
+    defn grad_tuple_input(x, y) do
+      grad({x, y}, fn {x, y} ->
+        {a, b} =
+          Nx.Defn.checkpoint({x, y}, fn {x, y} ->
+            {Nx.sin(x), Nx.cos(y)}
+          end)
+
+        Nx.sum(Nx.multiply(a, b))
+      end)
+    end
+
+    defn grad_tuple_input_plain(x, y) do
+      grad({x, y}, fn {x, y} ->
+        Nx.sum(Nx.multiply(Nx.sin(x), Nx.cos(y)))
+      end)
+    end
+
+    test "tuple as checkpoint input" do
+      x = Nx.tensor([1.0, 2.0, 3.0])
+      y = Nx.tensor([0.5, 1.0, 1.5])
+      assert grad_tuple_input(x, y) == grad_tuple_input_plain(x, y)
+    end
+  end
+
+  # --- Back-to-back checkpoints with no ops between ---
+
+  describe "back-to-back checkpoints" do
+    defn grad_back_to_back(x) do
+      grad(x, fn x ->
+        x
+        |> Nx.Defn.checkpoint(fn x -> Nx.sin(x) end)
+        |> Nx.Defn.checkpoint(fn x -> x end)
+        |> Nx.sum()
+      end)
+    end
+
+    defn grad_back_to_back_plain(x) do
+      grad(x, fn x -> x |> Nx.sin() |> Nx.sum() end)
+    end
+
+    test "identity checkpoint in the middle of chain" do
+      x = Nx.tensor([1.0, 2.0, 3.0])
+      assert grad_back_to_back(x) == grad_back_to_back_plain(x)
+    end
+  end
+
+  # --- Complex number support ---
+
+  describe "complex tensors" do
+    defn grad_checkpoint_complex(x) do
+      grad(x, fn x ->
+        Nx.Defn.checkpoint(x, fn x ->
+          Nx.sum(Nx.real(Nx.multiply(x, x)))
+        end)
+      end)
+    end
+
+    defn grad_complex_plain(x) do
+      grad(x, fn x ->
+        Nx.sum(Nx.real(Nx.multiply(x, x)))
+      end)
+    end
+
+    test "complex tensor input" do
+      x = Nx.tensor([Complex.new(1.0, 2.0), Complex.new(3.0, -1.0)])
+      assert grad_checkpoint_complex(x) == grad_complex_plain(x)
+    end
+  end
+
+  # --- Slice and gather inside checkpoint ---
+
+  describe "indexing ops inside checkpoint" do
+    defn grad_checkpoint_slice(x) do
+      grad(x, fn x ->
+        Nx.Defn.checkpoint(x, fn x ->
+          Nx.sum(Nx.slice(x, [1], [2]))
+        end)
+      end)
+    end
+
+    defn grad_slice_plain(x) do
+      grad(x, fn x -> Nx.sum(Nx.slice(x, [1], [2])) end)
+    end
+
+    test "slice inside checkpoint" do
+      x = Nx.tensor([1.0, 2.0, 3.0, 4.0])
+      assert grad_checkpoint_slice(x) == grad_slice_plain(x)
+    end
+
+    defn grad_checkpoint_gather(x) do
+      grad(x, fn x ->
+        Nx.Defn.checkpoint(x, fn x ->
+          Nx.sum(Nx.gather(x, Nx.tensor([[0], [2]])))
+        end)
+      end)
+    end
+
+    defn grad_gather_plain(x) do
+      grad(x, fn x -> Nx.sum(Nx.gather(x, Nx.tensor([[0], [2]]))) end)
+    end
+
+    test "gather inside checkpoint" do
+      x = Nx.tensor([1.0, 2.0, 3.0, 4.0])
+      assert grad_checkpoint_gather(x) == grad_gather_plain(x)
+    end
+  end
+
+  # --- Matmul / dot patterns (neural network ops) ---
+
+  describe "neural network op patterns" do
+    defn grad_checkpoint_matmul_chain(w1, w2, w3, x) do
+      grad(x, fn x ->
+        x
+        |> Nx.Defn.checkpoint(fn x -> Nx.dot(x, w1) |> Nx.max(0) end)
+        |> Nx.Defn.checkpoint(fn x -> Nx.dot(x, w2) |> Nx.max(0) end)
+        |> Nx.Defn.checkpoint(fn x -> Nx.dot(x, w3) end)
+        |> Nx.sum()
+      end)
+    end
+
+    defn grad_matmul_chain_plain(w1, w2, w3, x) do
+      grad(x, fn x ->
+        x
+        |> Nx.dot(w1)
+        |> Nx.max(0)
+        |> Nx.dot(w2)
+        |> Nx.max(0)
+        |> Nx.dot(w3)
+        |> Nx.sum()
+      end)
+    end
+
+    test "3-layer matmul-relu chain" do
+      w1 = Nx.tensor([[0.5, -0.3, 0.1], [0.2, 0.8, -0.4]])
+      w2 = Nx.tensor([[0.1, 0.4], [-0.2, 0.3], [0.5, -0.1]])
+      w3 = Nx.tensor([[0.3], [-0.5]])
+      x = Nx.tensor([1.0, 2.0])
+
+      assert grad_checkpoint_matmul_chain(w1, w2, w3, x) ==
+               grad_matmul_chain_plain(w1, w2, w3, x)
+    end
+  end
+
+  # --- Captured variable is also the grad target ---
+
+  describe "captured variable is grad target" do
+    defn grad_capture_is_target(w, x) do
+      grad(w, fn w ->
+        Nx.Defn.checkpoint(x, fn x ->
+          Nx.sum(Nx.dot(x, w))
+        end)
+      end)
+    end
+
+    defn grad_capture_is_target_plain(w, x) do
+      grad(w, fn w -> Nx.sum(Nx.dot(x, w)) end)
+    end
+
+    test "grad target captured in checkpoint closure" do
+      w = Nx.tensor([[0.5], [0.3]])
+      x = Nx.tensor([1.0, 2.0])
+      assert grad_capture_is_target(w, x) == grad_capture_is_target_plain(w, x)
+    end
+  end
+
+  # --- Named tensors ---
+
+  describe "named tensors" do
+    defn grad_checkpoint_named(x) do
+      grad(x, fn x ->
+        Nx.Defn.checkpoint(x, fn x ->
+          Nx.sum(Nx.sin(x))
+        end)
+      end)
+    end
+
+    test "preserves behavior with named tensors" do
+      x = Nx.tensor([1.0, 2.0, 3.0], names: [:features])
+      expected = Nx.Defn.grad(x, &Nx.sum(Nx.sin(&1)))
+      assert grad_checkpoint_named(x) == expected
+    end
+  end
+
+  # --- Asymmetric chain (different functions per checkpoint) ---
+
+  describe "asymmetric checkpoint chain" do
+    defn grad_asymmetric(x) do
+      grad(x, fn x ->
+        x
+        |> Nx.Defn.checkpoint(fn x -> Nx.exp(x) end)
+        |> Nx.Defn.checkpoint(fn x -> Nx.tanh(x) end)
+        |> Nx.Defn.checkpoint(fn x -> Nx.log(Nx.abs(x) + 1.0e-8) end)
+        |> Nx.sum()
+      end)
+    end
+
+    defn grad_asymmetric_plain(x) do
+      grad(x, fn x ->
+        x |> Nx.exp() |> Nx.tanh() |> then(&Nx.log(Nx.abs(&1) + 1.0e-8)) |> Nx.sum()
+      end)
+    end
+
+    test "chain of different functions" do
+      x = Nx.tensor([0.1, 0.5, 1.0])
+      assert grad_asymmetric(x) == grad_asymmetric_plain(x)
+    end
+  end
+
+  # --- LinAlg operations inside checkpoint ---
+
+  describe "linear algebra inside checkpoint" do
+    defn grad_checkpoint_linalg(x) do
+      grad(x, fn x ->
+        Nx.Defn.checkpoint(x, fn x ->
+          Nx.sum(Nx.LinAlg.norm(x))
+        end)
+      end)
+    end
+
+    defn grad_linalg_plain(x) do
+      grad(x, fn x -> Nx.sum(Nx.LinAlg.norm(x)) end)
+    end
+
+    test "Nx.LinAlg.norm inside checkpoint" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]])
+      assert grad_checkpoint_linalg(x) == grad_linalg_plain(x)
+    end
+  end
 end
