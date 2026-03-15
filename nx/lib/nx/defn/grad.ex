@@ -329,10 +329,15 @@ defmodule Nx.Defn.Grad do
   # subtracting vec_offset so they reference the correct inner-shape axes.
 
   # Aggregate ops with keyword opts containing :axes
-  @axes_in_opts_ops [:sum, :product, :reduce_max, :reduce_min, :gather, :sort]
+  @axes_in_opts_ops [:sum, :product, :reduce_max, :reduce_min, :gather]
 
   defp adjust_vectorized_args(op, [x | rest], offset) when op in @axes_in_opts_ops do
     [x | adjust_keyword_axes(rest, offset)]
+  end
+
+  # sort: [x, opts] where opts contains :axis (singular)
+  defp adjust_vectorized_args(:sort, [x | rest], offset) do
+    [x | adjust_keyword_axis(rest, offset)]
   end
 
   # squeeze: [x, axes] where axes is a plain list
@@ -425,6 +430,22 @@ defmodule Nx.Defn.Grad do
         case Keyword.fetch(opts, :axes) do
           {:ok, axes} when is_list(axes) ->
             Keyword.put(opts, :axes, offset_axes(axes, offset))
+
+          _ ->
+            opts
+        end
+
+      other ->
+        other
+    end)
+  end
+
+  defp adjust_keyword_axis(opts_list, offset) do
+    Enum.map(opts_list, fn
+      opts when is_list(opts) ->
+        case Keyword.fetch(opts, :axis) do
+          {:ok, axis} when is_integer(axis) ->
+            Keyword.put(opts, :axis, axis - offset)
 
           _ ->
             opts

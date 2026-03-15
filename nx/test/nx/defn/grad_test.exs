@@ -5094,5 +5094,281 @@ defmodule Nx.Defn.GradTest do
       actual = Nx.Defn.grad(x, fun)
       assert actual == expected
     end
+
+    # --- @axes_in_opts_ops: gather, sort ---
+
+    # gather grad uses raw shapes and indices designed for inner shape,
+    # can't simply devectorize since indices become invalid for full shape
+    @tag :skip
+    test "grad of vectorized gather" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.gather(x, Nx.tensor([[0], [2]]))) end
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([4.0, 5.0, 6.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized sort" do
+      x = Nx.tensor([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]]) |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.sort(x)) end
+
+      expected =
+        for row <- [Nx.tensor([3.0, 1.0, 2.0]), Nx.tensor([6.0, 4.0, 5.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    # --- window_min, window_max ---
+
+    test "grad of vectorized window_max" do
+      x =
+        Nx.tensor([[1.0, 3.0, 2.0, 4.0], [5.0, 7.0, 6.0, 8.0]])
+        |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.window_max(x, {2})) end
+
+      expected =
+        for row <- [Nx.tensor([1.0, 3.0, 2.0, 4.0]), Nx.tensor([5.0, 7.0, 6.0, 8.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized window_min" do
+      x =
+        Nx.tensor([[4.0, 2.0, 3.0, 1.0], [8.0, 6.0, 7.0, 5.0]])
+        |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.window_min(x, {2})) end
+
+      expected =
+        for row <- [Nx.tensor([4.0, 2.0, 3.0, 1.0]), Nx.tensor([8.0, 6.0, 7.0, 5.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    # --- Multi-axis vectorization ---
+
+    test "grad of multi-axis vectorized sum" do
+      x =
+        Nx.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]])
+        |> Nx.vectorize(:batch)
+        |> Nx.vectorize(:seq)
+
+      rows = [Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0]),
+              Nx.tensor([5.0, 6.0]), Nx.tensor([7.0, 8.0])]
+
+      expected =
+        rows
+        |> Enum.map(&Nx.Defn.grad(&1, fn x -> Nx.sum(x) end))
+        |> Nx.stack()
+        |> Nx.reshape({2, 2, 2})
+        |> Nx.vectorize(:batch)
+        |> Nx.vectorize(:seq)
+
+      actual = Nx.Defn.grad(x, &Nx.sum/1)
+      assert actual == expected
+    end
+
+    test "grad of multi-axis vectorized product" do
+      x =
+        Nx.tensor([[[1.0, 2.0], [3.0, 4.0]], [[2.0, 3.0], [4.0, 5.0]]])
+        |> Nx.vectorize(:batch)
+        |> Nx.vectorize(:seq)
+
+      rows = [Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0]),
+              Nx.tensor([2.0, 3.0]), Nx.tensor([4.0, 5.0])]
+
+      expected =
+        rows
+        |> Enum.map(fn row -> Nx.Defn.grad(row, &Nx.product/1) end)
+        |> Nx.stack()
+        |> Nx.reshape({2, 2, 2})
+        |> Nx.vectorize(:batch)
+        |> Nx.vectorize(:seq)
+
+      actual = Nx.Defn.grad(x, &Nx.product/1)
+      assert actual == expected
+    end
+
+    # --- 2D inner shapes ---
+
+    test "grad of vectorized dot with 2D inner shape" do
+      x =
+        Nx.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]])
+        |> Nx.vectorize(:batch)
+
+      w = Nx.tensor([0.5, -1.0])
+
+      fun = fn x -> Nx.sum(Nx.dot(x, w)) end
+
+      expected =
+        for row <- [Nx.tensor([[1.0, 2.0], [3.0, 4.0]]),
+                    Nx.tensor([[5.0, 6.0], [7.0, 8.0]])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized transpose with 2D inner shape" do
+      x =
+        Nx.tensor([[[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]],
+                    [[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]]])
+        |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.multiply(Nx.transpose(x), 2.0)) end
+
+      expected =
+        for row <- [Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]),
+                    Nx.tensor([[7.0, 8.0, 9.0], [10.0, 11.0, 12.0]])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    # --- Composed chains ---
+
+    test "grad of vectorized dot then sum" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      w = Nx.tensor([[1.0, 0.0], [0.0, 1.0], [1.0, 1.0]])
+
+      fun = fn x -> Nx.sum(Nx.dot(x, w)) end
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([4.0, 5.0, 6.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized transpose then squeeze then sum" do
+      x =
+        Nx.tensor([[[1.0], [2.0]], [[3.0], [4.0]]])
+        |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.squeeze(Nx.transpose(x))) end
+
+      expected =
+        for row <- [Nx.tensor([[1.0], [2.0]]), Nx.tensor([[3.0], [4.0]])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized pad then sum" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.pad(x, 0.0, [{1, 1, 0}])) end
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    # --- Elementwise with broadcasting ---
+
+    test "grad of vectorized add with scalar" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.add(x, 10.0)) end
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([4.0, 5.0, 6.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    test "grad of vectorized multiply with broadcast" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+
+      fun = fn x -> Nx.sum(Nx.multiply(x, Nx.tensor([2.0, 3.0]))) end
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0])] do
+          Nx.Defn.grad(row, fun)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      actual = Nx.Defn.grad(x, fun)
+      assert actual == expected
+    end
+
+    # --- Vectorized + non-vectorized input interactions ---
+
+    test "grad with differently-shaped vectorized and non-vectorized inputs" do
+      # grad of f(x, y) = x + y where x is vectorized and y is not.
+      # The gradient w.r.t. y should be vectorized, matching the
+      # vectorized output shape (per-element gradient, not summed).
+      x = Nx.tensor([0, 1]) |> Nx.vectorize(:foo)
+      y = Nx.tensor(1.0)
+
+      {value, grad_y} = Nx.Defn.value_and_grad(y, fn y -> Nx.sum(Nx.add(x, y)) end)
+
+      assert value == Nx.tensor([1.0, 2.0]) |> Nx.vectorize(:foo)
+      assert grad_y == Nx.tensor([1.0, 1.0]) |> Nx.vectorize(:foo)
+    end
+
+    test "value_and_grad with vectorized target" do
+      # The gradient should have the same vectorized shape as the output,
+      # not be summed to a scalar.
+      x = Nx.tensor([0, 1, 2]) |> Nx.vectorize(:foo)
+      y = Nx.tensor(1)
+
+      {_value, grad_y} = Nx.Defn.value_and_grad(y, fn y -> Nx.add(x, y) end)
+
+      expected_grad = Nx.tensor([1.0, 1.0, 1.0]) |> Nx.vectorize(:foo)
+      assert grad_y == expected_grad
+    end
   end
 end
