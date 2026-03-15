@@ -5415,5 +5415,106 @@ defmodule Nx.Defn.GradTest do
       expected_grad = Nx.tensor([1.0, 1.0, 1.0]) |> Nx.vectorize(:foo)
       assert grad_y == expected_grad
     end
+
+    # --- Boundary tests: what works holistically vs what needs vectorization awareness ---
+
+    # These PASS with holistic approach (vectorized target)
+    test "grad of vectorized target with non-vectorized captured constant" do
+      w = Nx.tensor([2.0, 3.0])
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.multiply(x, w)) end)
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0])] do
+          Nx.Defn.grad(row, fn r -> Nx.sum(Nx.multiply(r, w)) end)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      assert grad == expected
+    end
+
+    test "grad of vectorized target with non-vectorized captured matrix" do
+      w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.dot(x, w)) end)
+
+      expected =
+        for row <- [Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0])] do
+          Nx.Defn.grad(row, fn r -> Nx.sum(Nx.dot(r, w)) end)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      assert grad == expected
+    end
+
+    # These FAIL with holistic approach (non-vectorized target, vectorized context)
+    test "grad of non-vectorized target through multiply with vectorized" do
+      x = Nx.tensor([1.0, 2.0, 3.0]) |> Nx.vectorize(:batch)
+      y = Nx.tensor(2.0)
+
+      grad = Nx.Defn.grad(y, fn y -> Nx.sum(Nx.multiply(x, y)) end)
+
+      expected =
+        for val <- [1.0, 2.0, 3.0] do
+          Nx.Defn.grad(Nx.tensor(2.0), fn y -> Nx.sum(Nx.multiply(val, y)) end)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      assert grad == expected
+    end
+
+    test "grad of non-vectorized target through sin with vectorized" do
+      x = Nx.tensor([0.5, 1.0, 1.5]) |> Nx.vectorize(:batch)
+      y = Nx.tensor(1.0)
+
+      grad = Nx.Defn.grad(y, fn y -> Nx.sum(Nx.sin(Nx.add(x, y))) end)
+
+      expected =
+        for val <- [0.5, 1.0, 1.5] do
+          Nx.Defn.grad(Nx.tensor(1.0), fn y -> Nx.sum(Nx.sin(Nx.add(val, y))) end)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      assert grad == expected
+    end
+
+    test "grad w.r.t. tuple of vectorized and non-vectorized" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      y = Nx.tensor(1.0)
+
+      {grad_x, grad_y} = Nx.Defn.grad({x, y}, fn {x, y} -> Nx.sum(Nx.add(x, y)) end)
+
+      expected_x =
+        for row <- [Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0])] do
+          Nx.Defn.grad(row, fn r -> Nx.sum(Nx.add(r, 1.0)) end)
+        end
+        |> Nx.stack()
+        |> Nx.vectorize(:batch)
+
+      assert grad_x == expected_x
+      # grad_y should be vectorized: per-batch gradient
+      assert grad_y == Nx.tensor([2.0, 2.0]) |> Nx.vectorize(:batch)
+    end
+
+    # Edge case: non-vectorized target, vectorized context, output reduced to scalar
+    test "grad of non-vectorized target where vectorized output is fully reduced" do
+      x = Nx.tensor([1.0, 2.0]) |> Nx.vectorize(:batch)
+      y = Nx.tensor(1.0)
+
+      # Nx.sum reduces inner dims, result is vectorized scalar [batch: 2]
+      # Then what if we sum again? That would be non-vectorized
+      # Actually Nx.sum on vectorized only sums inner dims
+      grad = Nx.Defn.grad(y, fn y -> Nx.sum(Nx.multiply(x, y)) end)
+
+      # Per-batch: batch 0 = 1.0*y, batch 1 = 2.0*y, grad = [1.0, 2.0]
+      expected = Nx.tensor([1.0, 2.0]) |> Nx.vectorize(:batch)
+      assert grad == expected
+    end
   end
 end
