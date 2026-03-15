@@ -1105,4 +1105,42 @@ defmodule Nx.Defn.CheckpointTest do
       assert grad_checkpoint_linalg(x) == grad_linalg_plain(x)
     end
   end
+
+  # --- Recomputation behavior ---
+
+  describe "recomputation" do
+    defn checkpoint_used_twice(x) do
+      y = Nx.Defn.checkpoint(x, fn x -> Nx.sin(x) end)
+      Nx.add(y, Nx.multiply(y, 2.0))
+    end
+
+    defn plain_used_twice(x) do
+      y = Nx.sin(x)
+      Nx.add(y, Nx.multiply(y, 2.0))
+    end
+
+    test "checkpoint output used by multiple downstream ops gives correct result" do
+      x = Nx.tensor([1.0, 2.0, 3.0])
+      assert checkpoint_used_twice(x) == plain_used_twice(x)
+    end
+
+    defn grad_checkpoint_used_twice(x) do
+      grad(x, fn x ->
+        y = Nx.Defn.checkpoint(x, fn x -> Nx.sin(x) end)
+        Nx.sum(Nx.add(y, Nx.multiply(y, 2.0)))
+      end)
+    end
+
+    defn grad_plain_used_twice(x) do
+      grad(x, fn x ->
+        y = Nx.sin(x)
+        Nx.sum(Nx.add(y, Nx.multiply(y, 2.0)))
+      end)
+    end
+
+    test "gradient correct when checkpoint output used by multiple downstream ops" do
+      x = Nx.tensor([1.0, 2.0, 3.0])
+      assert grad_checkpoint_used_twice(x) == grad_plain_used_twice(x)
+    end
+  end
 end

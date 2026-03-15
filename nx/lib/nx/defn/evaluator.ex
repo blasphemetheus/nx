@@ -260,6 +260,24 @@ defmodule Nx.Defn.Evaluator do
 
   defp eval(%Nx.Tensor{data: %Expr{op: op, id: id}} = ans, state, [cache | caches]) do
     case cache do
+      %{^id => {:args, _count, args}} when op == :checkpoint ->
+        # Checkpoint: eval_apply handles its own cache management
+        # (stores :recompute entry instead of :result)
+        {res, caches} = eval_apply(:checkpoint, args, ans, state, [cache | caches])
+        state.gc && :erlang.garbage_collect(self())
+        {res, caches}
+
+      %{^id => {:recompute, count, recompute_fun}} ->
+        res = recompute_fun.()
+        state.gc && :erlang.garbage_collect(self())
+
+        cache =
+          if count == 1,
+            do: Map.delete(cache, id),
+            else: %{cache | id => {:recompute, count - 1, recompute_fun}}
+
+        {res, [cache | caches]}
+
       %{^id => {:args, count, args}} ->
         {res, [cache | caches]} = eval_apply(op, args, ans, state, [cache | caches])
         state.gc && :erlang.garbage_collect(self())
@@ -373,25 +391,42 @@ defmodule Nx.Defn.Evaluator do
     {{}, caches}
   end
 
-  defp eval_apply(:checkpoint, [input, expr, expr_cache, param], _ans, state, caches) do
-    {input_value, caches} = eval(input, state, caches)
+  defp eval_apply(:checkpoint, [input, expr, expr_cache, param], ans, state, [cache | caches]) do
+    {input_value, [cache | caches]} = eval(input, state, [cache | caches])
 
-    # Pre-seed the body cache with the parameter's evaluated result.
-    # We don't replace state.params because the body may reference
-    # outer defn parameters (captured variables like weights).
-    param_id = param.data.id
+    recompute_fun = fn ->
+      # Pre-seed body cache with parameter's value.
+      # expr_cache is immutable — safe to reuse across recomputations.
+      param_id = param.data.id
 
-    expr_cache =
-      case expr_cache do
-        %{^param_id => {:args, count, _}} ->
-          Map.put(expr_cache, param_id, {:result, count, input_value})
+      seeded_cache =
+        case expr_cache do
+          %{^param_id => {:args, count, _}} ->
+            Map.put(expr_cache, param_id, {:result, count, input_value})
 
-        _ ->
-          expr_cache
+          _ ->
+            expr_cache
+        end
+
+      {res, _} = composite_eval(expr, state, [seeded_cache | [cache | caches]])
+      res
+    end
+
+    res = recompute_fun.()
+
+    # Store as :recompute instead of :result — output is never cached,
+    # re-evaluated from saved input each time a downstream op needs it.
+    id = ans.data.id
+    count = cache[id] |> elem(1)
+
+    cache =
+      if count == 1 do
+        Map.delete(cache, id)
+      else
+        Map.put(cache, id, {:recompute, count - 1, recompute_fun})
       end
 
-    {res, [_ | caches]} = composite_eval(expr, state, [expr_cache | caches])
-    {res, caches}
+    {res, [cache | caches]}
   end
 
   defp eval_apply(:optional, [call, expr, expr_cache], _ans, state, caches) do
