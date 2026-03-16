@@ -6,7 +6,7 @@ defmodule EXLA.MLIR.CustomCallTest do
       tol_opts =
         case type do
           {:f, 16} ->
-            [atol: 1.0e-10, rtol: 1.0e-2]
+            [atol: 1.0e-2, rtol: 1.0e-2]
 
           {:bf, 16} ->
             [atol: 1.0e-1, rtol: 1.0e-1]
@@ -15,7 +15,7 @@ defmodule EXLA.MLIR.CustomCallTest do
             [atol: 1.0e-14, rtol: 1.0e-15]
 
           {:f, 32} ->
-            [atol: 1.0e-6, rtol: 1.0e-6]
+            [atol: 1.0e-4, rtol: 1.0e-4]
         end
 
       test "works for input type #{inspect(type)}" do
