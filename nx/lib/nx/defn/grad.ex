@@ -412,6 +412,12 @@ defmodule Nx.Defn.Grad do
     [x, Enum.drop(start_indices, offset), update]
   end
 
+  # indexed ops: need per-op devectorization in their grad clauses
+  # (like gather does), not just opts adjustment. Skipped for now.
+  defp adjust_vectorized_args(op, args, _offset) when op in [:indexed_add, :indexed_put] do
+    args
+  end
+
   # fft/ifft: [t, opts] where opts contains :axis (singular)
   defp adjust_vectorized_args(:fft, [x | rest], offset) do
     [x | adjust_keyword_axis(rest, offset)]
