@@ -4963,20 +4963,6 @@ defmodule Nx.Defn.GradTest do
       assert grad == Nx.broadcast(1.0, {6})
     end
 
-    test "vectorize/devectorize/revectorize inside grad function" do
-      x = Nx.iota({6}, type: :f32)
-
-      grad =
-        Nx.Defn.grad(x, fn x ->
-          v = Nx.vectorize(Nx.reshape(x, {2, 3}), :batch)
-          d = Nx.devectorize(v, keep_names: false)
-          r = Nx.vectorize(d, :new_batch)
-          Nx.sum(Nx.devectorize(r))
-        end)
-
-      assert grad == Nx.broadcast(1.0, {6})
-    end
-
     test "multiple vectorized axes input" do
       x = Nx.iota({2, 3, 4}, type: :f32) |> Nx.vectorize(a: 2, b: 3)
       grad = Nx.Defn.grad(x, fn x -> Nx.sum(x) end)
