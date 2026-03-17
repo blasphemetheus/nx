@@ -383,10 +383,10 @@ defmodule Nx.Defn.Grad do
     [x, adjusted_dims, adjusted_opts]
   end
 
-  # window_scatter ops: don't adjust — not yet supported for vectorized inputs
-  defp adjust_vectorized_args(op, args, _offset)
+  defp adjust_vectorized_args(op, _args, _offset)
        when op in [:window_scatter_max, :window_scatter_min] do
-    args
+    raise ArgumentError,
+          "#{op} gradient with vectorized tensors is not yet supported"
   end
 
   # slice: [x, start_indices, lengths, strides] — drop leading vectorized entries
