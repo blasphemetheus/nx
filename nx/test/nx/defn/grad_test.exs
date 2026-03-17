@@ -5224,12 +5224,30 @@ defmodule Nx.Defn.GradTest do
       assert grad == expected
     end
 
+    test "gather with multiple indices" do
+      x = Nx.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.gather(x, Nx.tensor([[0], [1], [3]]))) end)
+      assert grad.vectorized_axes == [batch: 2]
+      expected = Nx.tensor([[1.0, 1.0, 0.0, 1.0], [1.0, 1.0, 0.0, 1.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
+    end
+
     @tag :skip
     test "indexed_add with vectorized" do
-      # Fails: given axis invalid for shape
+      # Fails: given axis invalid for shape — opts axes in devectorized space
       x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
       grad = Nx.Defn.grad(x, fn x ->
         Nx.sum(Nx.indexed_add(x, Nx.tensor([[0]]), Nx.tensor([10.0])))
+      end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "indexed_put with vectorized" do
+      # Fails: given axis invalid for shape — same root cause as indexed_add
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x ->
+        Nx.sum(Nx.indexed_put(x, Nx.tensor([[1]]), Nx.tensor([99.0])))
       end)
       assert grad.vectorized_axes == [batch: 2]
     end
