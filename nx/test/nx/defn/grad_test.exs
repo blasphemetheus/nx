@@ -5378,6 +5378,63 @@ defmodule Nx.Defn.GradTest do
       assert :a in Keyword.keys(grad.vectorized_axes)
     end
 
+    test "trig and hyperbolic functions" do
+      x = Nx.tensor([[0.5, -0.3, 0.8], [0.1, -0.5, 0.2]]) |> Nx.vectorize(:batch)
+      x_pos = Nx.tensor([[1.5, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      for {name, fun, input} <- [
+        {:acos, fn x -> Nx.sum(Nx.acos(x)) end, x},
+        {:acosh, fn x -> Nx.sum(Nx.acosh(x)) end, x_pos},
+        {:asin, fn x -> Nx.sum(Nx.asin(x)) end, x},
+        {:asinh, fn x -> Nx.sum(Nx.asinh(x)) end, x},
+        {:atan, fn x -> Nx.sum(Nx.atan(x)) end, x},
+        {:atanh, fn x -> Nx.sum(Nx.atanh(x)) end, x},
+        {:cos, fn x -> Nx.sum(Nx.cos(x)) end, x},
+        {:cosh, fn x -> Nx.sum(Nx.cosh(x)) end, x},
+        {:sinh, fn x -> Nx.sum(Nx.sinh(x)) end, x},
+        {:tanh, fn x -> Nx.sum(Nx.tanh(x)) end, x},
+        {:sin, fn x -> Nx.sum(Nx.sin(x)) end, x},
+        {:tan, fn x -> Nx.sum(Nx.tan(x)) end, x}
+      ] do
+        grad = Nx.Defn.grad(input, fun)
+        assert grad.vectorized_axes == input.vectorized_axes,
+          "#{name} vectorized axes mismatch"
+      end
+    end
+
+    test "math functions" do
+      x_pos = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      x = Nx.tensor([[0.5, -0.3, 0.8], [0.1, -0.5, 0.2]]) |> Nx.vectorize(:batch)
+
+      for {name, fun, input} <- [
+        {:erf, fn x -> Nx.sum(Nx.erf(x)) end, x},
+        {:erfc, fn x -> Nx.sum(Nx.erfc(x)) end, x},
+        {:erf_inv, fn x -> Nx.sum(Nx.erf_inv(x)) end, x},
+        {:rsqrt, fn x -> Nx.sum(Nx.rsqrt(x)) end, x_pos},
+        {:sqrt, fn x -> Nx.sum(Nx.sqrt(x)) end, x_pos},
+        {:log, fn x -> Nx.sum(Nx.log(x)) end, x_pos},
+        {:exp, fn x -> Nx.sum(Nx.exp(x)) end, x},
+        {:divide, fn x -> Nx.sum(Nx.divide(x, 2.0)) end, x},
+        {:subtract, fn x -> Nx.sum(Nx.subtract(x, 0.5)) end, x}
+      ] do
+        grad = Nx.Defn.grad(input, fun)
+        assert grad.vectorized_axes == input.vectorized_axes,
+          "#{name} vectorized axes mismatch"
+      end
+    end
+
+    test "atan2 with vectorized" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.atan2(x, Nx.tensor(1.0))) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "ifft with vectorized" do
+      x = Nx.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.real(Nx.ifft(Nx.as_type(x, :c64)))) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
     test "mixed vectorized axes with add" do
       # x has axis :a (2 vectors of size 3), y has axis :b (3 vectors of size 3)
       # gradient should carry both axes
