@@ -383,23 +383,9 @@ defmodule Nx.Defn.Grad do
     [x, adjusted_dims, adjusted_opts]
   end
 
-  # window_scatter ops: [tensor, source, init_value, window_dimensions, opts]
-  @window_scatter_ops [:window_scatter_max, :window_scatter_min]
-
-  defp adjust_vectorized_args(op, [tensor, source, init_value, window_dimensions, opts], offset)
-       when op in @window_scatter_ops do
-    adjusted_dims =
-      window_dimensions
-      |> Tuple.to_list()
-      |> Enum.drop(offset)
-      |> List.to_tuple()
-
-    adjusted_opts =
-      opts
-      |> adjust_keyword_drop(:strides, offset)
-      |> adjust_keyword_padding(:padding, offset)
-
-    [tensor, source, init_value, adjusted_dims, adjusted_opts]
+  # window_scatter ops: don't adjust — not yet supported for vectorized inputs
+  defp adjust_vectorized_args(op, args, _offset) when op in [:window_scatter_max, :window_scatter_min] do
+    args
   end
 
   # slice: [x, start_indices, lengths, strides] — drop leading vectorized entries
@@ -412,8 +398,7 @@ defmodule Nx.Defn.Grad do
     [x, Enum.drop(start_indices, offset), update]
   end
 
-  # indexed ops: need per-op devectorization in their grad clauses
-  # (like gather does), not just opts adjustment. Skipped for now.
+  # indexed ops: don't adjust — the grad clause handles vectorization directly
   defp adjust_vectorized_args(op, args, _offset) when op in [:indexed_add, :indexed_put] do
     args
   end
@@ -734,17 +719,23 @@ defmodule Nx.Defn.Grad do
   end
 
   defp grad(:indexed_put, [target, indices, updates, opts], _ans, g) do
+    vec_axes = g.vectorized_axes
+    g = Nx.devectorize(g, keep_names: false)
+
     zeros = Nx.broadcast(Expr.tensor(0.0), updates)
-    target_g = Nx.indexed_put(g, indices, zeros, opts)
-    updates_g = g |> Nx.gather(indices, opts) |> Nx.reshape(updates.shape)
+    target_g = Nx.indexed_put(g, indices, zeros, opts) |> Nx.vectorize(vec_axes)
+    updates_g = g |> Nx.gather(indices, opts) |> Nx.reshape(updates.shape) |> Nx.vectorize(vec_axes)
     indices_g = Nx.broadcast(Expr.tensor(0.0), indices)
 
     [{target, target_g}, {indices, indices_g}, {updates, updates_g}]
   end
 
   defp grad(:indexed_add, [target, indices, updates, opts], _ans, g) do
-    target_g = g
-    updates_g = g |> Nx.gather(indices, opts) |> Nx.reshape(updates.shape)
+    vec_axes = g.vectorized_axes
+    g = Nx.devectorize(g, keep_names: false)
+
+    target_g = Nx.vectorize(g, vec_axes)
+    updates_g = g |> Nx.gather(indices, opts) |> Nx.reshape(updates.shape) |> Nx.vectorize(vec_axes)
     indices_g = Nx.broadcast(Expr.tensor(0.0), indices)
 
     [{target, target_g}, {indices, indices_g}, {updates, updates_g}]
