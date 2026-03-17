@@ -5280,9 +5280,7 @@ defmodule Nx.Defn.GradTest do
       w = Nx.tensor([[0.5, 0.3], [0.2, 0.4]]) |> Nx.vectorize(:a)
       grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.multiply(x, w)) end)
       assert grad.vectorized_axes == [a: 2]
-      # Using == instead of assert_all_close due to vectorized assert_all_close
-      # interaction issue when run alongside other vectorized tests
-      assert grad == Nx.tensor([[0.5, 0.3], [0.2, 0.4]]) |> Nx.vectorize(:a)
+      assert_all_close(grad, Nx.tensor([[0.5, 0.3], [0.2, 0.4]]) |> Nx.vectorize(:a))
     end
 
     test "large vectorized batch" do
