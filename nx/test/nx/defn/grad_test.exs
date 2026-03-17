@@ -5125,6 +5125,115 @@ defmodule Nx.Defn.GradTest do
       assert grad.vectorized_axes == [batch: 2]
     end
 
+    test "pad with non-zero padding" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.pad(x, 0, [{1, 1, 0}])) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "take" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.take(x, Nx.tensor([0, 2]))) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "reshape" do
+      x = Nx.tensor([[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [7.0, 8.0, 9.0, 10.0, 11.0, 12.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.reshape(x, {2, 3})) end)
+      assert grad.vectorized_axes == [batch: 2]
+      assert Nx.shape(grad) == {6}
+    end
+
+    test "abs" do
+      x = Nx.tensor([[1.0, -2.0, 3.0], [-4.0, 5.0, -6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.abs(x)) end)
+      assert grad.vectorized_axes == [batch: 2]
+      expected = Nx.tensor([[1.0, -1.0, 1.0], [-1.0, 1.0, -1.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
+    end
+
+    test "clip" do
+      x = Nx.tensor([[1.0, 5.0, 10.0], [0.5, 3.0, 8.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.clip(x, 2, 7)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "sigmoid" do
+      x = Nx.tensor([[0.0, 1.0, -1.0], [2.0, -2.0, 0.5]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.sigmoid(x)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "pow(x, 3)" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.pow(x, 3)) end)
+      assert grad.vectorized_axes == [batch: 2]
+      expected = Nx.tensor([[3.0, 12.0], [27.0, 48.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
+    end
+
+    test "reduce_min then sum" do
+      x = Nx.tensor([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.reduce_min(x)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "window_sum then sum" do
+      x = Nx.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.window_sum(x, {2}, strides: [1])) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "window_max then sum" do
+      x = Nx.tensor([[1.0, 3.0, 2.0, 4.0], [8.0, 6.0, 7.0, 5.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.window_max(x, {2}, strides: [1])) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "fft" do
+      x = Nx.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.real(Nx.fft(x))) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "second-order grad" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x ->
+        Nx.sum(Nx.Defn.grad(x, fn x -> Nx.sum(Nx.pow(x, 3)) end))
+      end)
+      assert grad.vectorized_axes == [batch: 2]
+      # d²/dx² x³ = 6x
+      expected = Nx.tensor([[6.0, 12.0], [18.0, 24.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
+    end
+
+    @tag :skip
+    test "put_slice with vectorized" do
+      # Fails: invalid start indices rank
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.put_slice(x, [0], Nx.tensor([99.0]))) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "indexed_add with vectorized" do
+      # Fails: given axis invalid for shape
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x ->
+        Nx.sum(Nx.indexed_add(x, Nx.tensor([[0]]), Nx.tensor([10.0])))
+      end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "conv with vectorized" do
+      # Fails: conv spatial dims shape mismatch
+      x = Nx.tensor([[[[1.0, 2.0, 3.0, 4.0]]], [[[5.0, 6.0, 7.0, 8.0]]]]) |> Nx.vectorize(:batch)
+      k = Nx.tensor([[[[1.0, 0.0, -1.0]]]])
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.conv(x, k)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
     test "mixed vectorized axes with add" do
       # x has axis :a (2 vectors of size 3), y has axis :b (3 vectors of size 3)
       # gradient should carry both axes
