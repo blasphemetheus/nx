@@ -4976,6 +4976,55 @@ defmodule Nx.Defn.GradTest do
       assert grad == Nx.broadcast(1.0, {6})
     end
 
+    # Edge cases: vectorization created/modified inside grad function
+    # These test the boundaries of the current per-op approach
+
+    @tag :skip
+    test "reshape then vectorize inside grad — output retains created axes" do
+      # Creates vectorized axes inside the grad fn via reshape+vectorize.
+      # Fails because grad devectorizes inputs, so reshape sees inner shape
+      # instead of the original flat shape.
+      x = Nx.iota({6}, type: :f32)
+
+      grad = Nx.Defn.grad(x, fn x ->
+        v = Nx.vectorize(Nx.reshape(x, {2, 3}), :batch)
+        Nx.sum(v)
+      end)
+
+      assert grad == Nx.broadcast(1.0, {6})
+    end
+
+    @tag :skip
+    test "non-vectorized input, vectorized output — grad should match input shape" do
+      # When the function creates vectorization from a non-vectorized input,
+      # the gradient should match the input's shape (no vectorized axes).
+      # Currently returns [v: 3] {3} — vectorization leaks into gradient.
+      x = Nx.tensor([1.0, 2.0, 3.0])
+
+      grad = Nx.Defn.grad(x, fn x ->
+        Nx.vectorize(x, :v)
+      end)
+
+      assert grad.vectorized_axes == []
+      assert grad == Nx.broadcast(1.0, {3})
+    end
+
+    @tag :skip
+    test "rename vectorized axes inside grad — gradient should preserve original axes" do
+      # When vectorized axes are renamed inside grad, the gradient should
+      # have the original input's axis names, not the renamed ones
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:a)
+
+      grad = Nx.Defn.grad(x, fn x ->
+        d = Nx.devectorize(x, keep_names: false)
+        v = Nx.vectorize(d, :new_name)
+        Nx.sum(v)
+      end)
+
+      # Gradient should have :a axis (matching input), not :new_name
+      assert grad.vectorized_axes == [a: 2]
+    end
+
     test "mixed vectorized axes with add" do
       # x has axis :a (2 vectors of size 3), y has axis :b (3 vectors of size 3)
       # gradient should carry both axes
