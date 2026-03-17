@@ -1624,7 +1624,7 @@ defmodule Nx.Defn.Grad do
     if keep_axes || !axes do
       Nx.broadcast(g, x)
     else
-      axes = Nx.axes(x.shape) -- axes
+      axes = Nx.axes(x) -- axes
       Nx.broadcast(g, x, axes: axes)
     end
   end
