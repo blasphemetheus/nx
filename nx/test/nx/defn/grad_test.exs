@@ -5097,9 +5097,7 @@ defmodule Nx.Defn.GradTest do
       assert grad.vectorized_axes == [batch: 2]
     end
 
-    @tag :skip
     test "slice with vectorized" do
-      # Fails: padding rank mismatch in grad
       x = Nx.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]) |> Nx.vectorize(:batch)
 
       grad = Nx.Defn.grad(x, fn x ->
@@ -5108,6 +5106,8 @@ defmodule Nx.Defn.GradTest do
 
       assert grad.vectorized_axes == [batch: 2]
       assert Nx.shape(grad) == {4}
+      expected = Nx.tensor([[0.0, 1.0, 1.0, 0.0], [0.0, 1.0, 1.0, 0.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
     end
 
     @tag :skip
@@ -5207,12 +5207,21 @@ defmodule Nx.Defn.GradTest do
       assert grad == expected
     end
 
-    @tag :skip
     test "put_slice with vectorized" do
-      # Fails: invalid start indices rank
       x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
       grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.put_slice(x, [0], Nx.tensor([99.0]))) end)
       assert grad.vectorized_axes == [batch: 2]
+      expected = Nx.tensor([[0.0, 1.0, 1.0], [0.0, 1.0, 1.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
+    end
+
+    test "slice at different positions with vectorized" do
+      x = Nx.tensor([[1.0, 2.0, 3.0, 4.0, 5.0], [6.0, 7.0, 8.0, 9.0, 10.0]]) |> Nx.vectorize(:batch)
+
+      # Slice from position 2, length 3
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.slice(x, [2], [3])) end)
+      expected = Nx.tensor([[0.0, 0.0, 1.0, 1.0, 1.0], [0.0, 0.0, 1.0, 1.0, 1.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
     end
 
     @tag :skip

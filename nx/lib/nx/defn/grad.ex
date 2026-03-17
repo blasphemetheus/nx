@@ -402,6 +402,16 @@ defmodule Nx.Defn.Grad do
     [tensor, source, init_value, adjusted_dims, adjusted_opts]
   end
 
+  # slice: [x, start_indices, lengths, strides] — drop leading vectorized entries
+  defp adjust_vectorized_args(:slice, [x, start_indices, lengths, strides], offset) do
+    [x, Enum.drop(start_indices, offset), Enum.drop(lengths, offset), Enum.drop(strides, offset)]
+  end
+
+  # put_slice: [x, start_indices, update] — drop leading vectorized entries from start_indices
+  defp adjust_vectorized_args(:put_slice, [x, start_indices, update], offset) do
+    [x, Enum.drop(start_indices, offset), update]
+  end
+
   # fft/ifft: [t, opts] where opts contains :axis (singular)
   defp adjust_vectorized_args(:fft, [x | rest], offset) do
     [x | adjust_keyword_axis(rest, offset)]
