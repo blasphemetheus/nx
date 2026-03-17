@@ -5025,6 +5025,106 @@ defmodule Nx.Defn.GradTest do
       assert grad.vectorized_axes == [a: 2]
     end
 
+    test "multiple vectorized axes input" do
+      x = Nx.iota({2, 3, 4}, type: :f32) |> Nx.vectorize(a: 2, b: 3)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(x) end)
+      assert grad.vectorized_axes == [a: 2, b: 3]
+      assert Nx.shape(grad) == {4}
+    end
+
+    test "select (conditional) with vectorized inputs" do
+      x = Nx.tensor([[1.0, -2.0, 3.0], [-1.0, 2.0, -3.0]]) |> Nx.vectorize(:batch)
+
+      grad = Nx.Defn.grad(x, fn x ->
+        Nx.sum(Nx.select(Nx.greater(x, 0), x, Nx.negate(x)))
+      end)
+
+      assert grad.vectorized_axes == [batch: 2]
+      expected = Nx.tensor([[1.0, -1.0, 1.0], [-1.0, 1.0, -1.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
+    end
+
+    test "concatenate with vectorized" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.concatenate([x, x])) end)
+      assert grad.vectorized_axes == [batch: 2]
+      assert Nx.shape(grad) == {2}
+    end
+
+    test "stack with vectorized" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.stack([x, Nx.multiply(x, 2)])) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "reverse with vectorized" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.reverse(x)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "as_type with vectorized" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.as_type(x, :f64)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "two vectorized inputs through sin(add)" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:a)
+      y = Nx.tensor([[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]]) |> Nx.vectorize(:b)
+
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.sin(Nx.add(x, y))) end)
+      assert grad.vectorized_axes == [a: 2, b: 3]
+    end
+
+    test "expm1/log1p with vectorized" do
+      x = Nx.tensor([[0.5, 1.0, 1.5], [2.0, 2.5, 3.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.log1p(Nx.expm1(x))) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "devectorize then compute then return scalar" do
+      # Fails: broadcast shape mismatch when gradient flows back
+      # through devectorize boundary
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+
+      grad = Nx.Defn.grad(x, fn x ->
+        d = Nx.devectorize(x, keep_names: false)
+        Nx.sum(Nx.multiply(d, d))
+      end)
+
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "slice with vectorized" do
+      # Fails: padding rank mismatch in grad
+      x = Nx.tensor([[1.0, 2.0, 3.0, 4.0], [5.0, 6.0, 7.0, 8.0]]) |> Nx.vectorize(:batch)
+
+      grad = Nx.Defn.grad(x, fn x ->
+        Nx.sum(Nx.slice(x, [1], [2]))
+      end)
+
+      assert grad.vectorized_axes == [batch: 2]
+      assert Nx.shape(grad) == {4}
+    end
+
+    @tag :skip
+    test "chained devectorize/vectorize with computation" do
+      # Fails: lists.duplicate crash
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      grad = Nx.Defn.grad(x, fn x ->
+        d = Nx.devectorize(x, keep_names: false)
+        squared = Nx.multiply(d, d)
+        v = Nx.vectorize(squared, :batch)
+        Nx.sum(v)
+      end)
+
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
     test "mixed vectorized axes with add" do
       # x has axis :a (2 vectors of size 3), y has axis :b (3 vectors of size 3)
       # gradient should carry both axes
