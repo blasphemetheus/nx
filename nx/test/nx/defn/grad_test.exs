@@ -5182,7 +5182,9 @@ defmodule Nx.Defn.GradTest do
 
     @tag :skip
     test "conv with vectorized" do
-      # Fails: conv spatial dims shape mismatch
+      # conv crashes in forward pass with vectorized inputs (FunctionClauseError in Shape)
+      # When supported, should produce:
+      # assert grad.vectorized_axes == [batch: 2]
       x = Nx.tensor([[[[1.0, 2.0, 3.0, 4.0]]], [[[5.0, 6.0, 7.0, 8.0]]]]) |> Nx.vectorize(:batch)
       k = Nx.tensor([[[[1.0, 0.0, -1.0]]]])
       grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.conv(x, k)) end)
@@ -5434,6 +5436,10 @@ defmodule Nx.Defn.GradTest do
 
     @tag :skip
     test "window_scatter_max with vectorized inputs" do
+      # window_scatter crashes in forward pass with vectorized source shape
+      # When supported, should produce:
+      # assert grad.vectorized_axes == [batch: 2]
+      # assert Nx.shape(grad) == {2, 6}
       t =
         Nx.tensor([
           [[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]],
@@ -5456,6 +5462,10 @@ defmodule Nx.Defn.GradTest do
 
     @tag :skip
     test "window_scatter_min with vectorized inputs" do
+      # window_scatter crashes in forward pass with vectorized source shape
+      # When supported, should produce:
+      # assert grad.vectorized_axes == [batch: 2]
+      # assert Nx.shape(grad) == {2, 6}
       t =
         Nx.tensor([
           [[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]],
@@ -5471,9 +5481,6 @@ defmodule Nx.Defn.GradTest do
         Nx.Defn.grad(t, fn t ->
           Nx.sum(Nx.window_scatter_min(t, source, init, {1, 3}, strides: [1, 3], padding: :valid))
         end)
-
-      assert grad.vectorized_axes == [batch: 2]
-      assert Nx.shape(grad) == {2, 6}
 
       assert grad.vectorized_axes == [batch: 2]
       assert Nx.shape(grad) == {2, 6}
