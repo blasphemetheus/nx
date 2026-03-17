@@ -4963,6 +4963,81 @@ defmodule Nx.Defn.GradTest do
       assert grad == Nx.broadcast(1.0, {6})
     end
 
+    # Vectorize/devectorize inside grad — deferred to follow-up PR
+
+    @tag :skip
+    test "reshape then vectorize inside grad" do
+      # Fails: grad devectorizes inputs, reshape sees inner shape instead of original
+      x = Nx.iota({6}, type: :f32)
+
+      grad =
+        Nx.Defn.grad(x, fn x ->
+          v = Nx.vectorize(Nx.reshape(x, {2, 3}), :batch)
+          Nx.sum(v)
+        end)
+
+      assert grad == Nx.broadcast(1.0, {6})
+    end
+
+    @tag :skip
+    test "non-vectorized input, vectorized output" do
+      # Fails: vectorization leaks into gradient — should match input shape
+      x = Nx.tensor([1.0, 2.0, 3.0])
+
+      grad =
+        Nx.Defn.grad(x, fn x ->
+          Nx.vectorize(x, :v)
+        end)
+
+      assert grad.vectorized_axes == []
+      assert grad == Nx.broadcast(1.0, {3})
+    end
+
+    @tag :skip
+    test "rename vectorized axes inside grad" do
+      # Fails: gradient has renamed axes, not original input axes
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:a)
+
+      grad =
+        Nx.Defn.grad(x, fn x ->
+          d = Nx.devectorize(x, keep_names: false)
+          v = Nx.vectorize(d, :new_name)
+          Nx.sum(v)
+        end)
+
+      assert grad.vectorized_axes == [a: 2]
+    end
+
+    @tag :skip
+    test "devectorize then compute then return scalar" do
+      # Fails: broadcast shape mismatch through devectorize boundary
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+
+      grad =
+        Nx.Defn.grad(x, fn x ->
+          d = Nx.devectorize(x, keep_names: false)
+          Nx.sum(Nx.multiply(d, d))
+        end)
+
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "chained devectorize/vectorize with computation" do
+      # Fails: lists.duplicate crash
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      grad =
+        Nx.Defn.grad(x, fn x ->
+          d = Nx.devectorize(x, keep_names: false)
+          squared = Nx.multiply(d, d)
+          v = Nx.vectorize(squared, :batch)
+          Nx.sum(v)
+        end)
+
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
     test "multiple vectorized axes input" do
       x = Nx.iota({2, 3, 4}, type: :f32) |> Nx.vectorize(a: 2, b: 3)
       grad = Nx.Defn.grad(x, fn x -> Nx.sum(x) end)
