@@ -384,7 +384,8 @@ defmodule Nx.Defn.Grad do
   end
 
   # window_scatter ops: don't adjust — not yet supported for vectorized inputs
-  defp adjust_vectorized_args(op, args, _offset) when op in [:window_scatter_max, :window_scatter_min] do
+  defp adjust_vectorized_args(op, args, _offset)
+       when op in [:window_scatter_max, :window_scatter_min] do
     args
   end
 
@@ -724,7 +725,10 @@ defmodule Nx.Defn.Grad do
 
     zeros = Nx.broadcast(Expr.tensor(0.0), updates)
     target_g = Nx.indexed_put(g, indices, zeros, opts) |> Nx.vectorize(vec_axes)
-    updates_g = g |> Nx.gather(indices, opts) |> Nx.reshape(updates.shape) |> Nx.vectorize(vec_axes)
+
+    updates_g =
+      g |> Nx.gather(indices, opts) |> Nx.reshape(updates.shape) |> Nx.vectorize(vec_axes)
+
     indices_g = Nx.broadcast(Expr.tensor(0.0), indices)
 
     [{target, target_g}, {indices, indices_g}, {updates, updates_g}]
@@ -735,7 +739,10 @@ defmodule Nx.Defn.Grad do
     g = Nx.devectorize(g, keep_names: false)
 
     target_g = Nx.vectorize(g, vec_axes)
-    updates_g = g |> Nx.gather(indices, opts) |> Nx.reshape(updates.shape) |> Nx.vectorize(vec_axes)
+
+    updates_g =
+      g |> Nx.gather(indices, opts) |> Nx.reshape(updates.shape) |> Nx.vectorize(vec_axes)
+
     indices_g = Nx.broadcast(Expr.tensor(0.0), indices)
 
     [{target, target_g}, {indices, indices_g}, {updates, updates_g}]
