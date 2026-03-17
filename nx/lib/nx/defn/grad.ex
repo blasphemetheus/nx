@@ -214,11 +214,7 @@ defmodule Nx.Defn.Grad do
     {nodes, grads} = acc
 
     res = sum_grad(Map.get(grads, id, []))
-
-    [res, arg] = Nx.broadcast_vectors([res, arg])
-    res = Nx.broadcast(res, arg)
-
-    {res, {nodes, grads}}
+    {Nx.broadcast(res, arg), {nodes, grads}}
   end
 
   defp sum_grad([]), do: Expr.tensor(0.0)
@@ -385,6 +381,25 @@ defmodule Nx.Defn.Grad do
       |> adjust_keyword_padding(:padding, offset)
 
     [x, adjusted_dims, adjusted_opts]
+  end
+
+  # window_scatter ops: [tensor, source, init_value, window_dimensions, opts]
+  @window_scatter_ops [:window_scatter_max, :window_scatter_min]
+
+  defp adjust_vectorized_args(op, [tensor, source, init_value, window_dimensions, opts], offset)
+       when op in @window_scatter_ops do
+    adjusted_dims =
+      window_dimensions
+      |> Tuple.to_list()
+      |> Enum.drop(offset)
+      |> List.to_tuple()
+
+    adjusted_opts =
+      opts
+      |> adjust_keyword_drop(:strides, offset)
+      |> adjust_keyword_padding(:padding, offset)
+
+    [tensor, source, init_value, adjusted_dims, adjusted_opts]
   end
 
   # fft/ifft: [t, opts] where opts contains :axis (singular)
