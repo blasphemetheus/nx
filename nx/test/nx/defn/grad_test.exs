@@ -5232,24 +5232,25 @@ defmodule Nx.Defn.GradTest do
       assert grad == expected
     end
 
-    @tag :skip
     test "indexed_add with vectorized" do
-      # Fails: given axis invalid for shape — opts axes in devectorized space
       x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
       grad = Nx.Defn.grad(x, fn x ->
         Nx.sum(Nx.indexed_add(x, Nx.tensor([[0]]), Nx.tensor([10.0])))
       end)
       assert grad.vectorized_axes == [batch: 2]
+      expected = Nx.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
     end
 
-    @tag :skip
     test "indexed_put with vectorized" do
-      # Fails: given axis invalid for shape — same root cause as indexed_add
       x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
       grad = Nx.Defn.grad(x, fn x ->
         Nx.sum(Nx.indexed_put(x, Nx.tensor([[1]]), Nx.tensor([99.0])))
       end)
       assert grad.vectorized_axes == [batch: 2]
+      # indexed_put overwrites index 1, so grad is 0 there
+      expected = Nx.tensor([[1.0, 0.0, 1.0], [1.0, 0.0, 1.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
     end
 
     @tag :skip
@@ -5433,11 +5434,8 @@ defmodule Nx.Defn.GradTest do
       assert :row in Keyword.keys(grad.vectorized_axes)
     end
 
-    # TODO: window_scatter with vectorized inputs fails — source shape
-    # doesn't match valid windows after devectorization in grad
     @tag :skip
     test "window_scatter_max with vectorized inputs" do
-      # {2, 6} input with {2, 3} window, strides [2, 3] → 1×2 valid windows
       t = Nx.tensor([[[1, 2, 3, 4, 5, 6], [7, 8, 9, 10, 11, 12]],
                       [[13, 14, 15, 16, 17, 18], [19, 20, 21, 22, 23, 24]]])
             |> Nx.as_type(:f32) |> Nx.vectorize(:batch)
@@ -5463,6 +5461,9 @@ defmodule Nx.Defn.GradTest do
       grad = Nx.Defn.grad(t, fn t ->
         Nx.sum(Nx.window_scatter_min(t, source, init, {1, 3}, strides: [1, 3], padding: :valid))
       end)
+
+      assert grad.vectorized_axes == [batch: 2]
+      assert Nx.shape(grad) == {2, 6}
 
       assert grad.vectorized_axes == [batch: 2]
       assert Nx.shape(grad) == {2, 6}
