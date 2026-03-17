@@ -5234,6 +5234,124 @@ defmodule Nx.Defn.GradTest do
       assert grad.vectorized_axes == [batch: 2]
     end
 
+    test "triangular_solve" do
+      a = Nx.tensor([[[1.0, 0.0], [2.0, 3.0]], [[1.0, 0.0], [1.0, 1.0]]]) |> Nx.vectorize(:batch)
+      b = Nx.tensor([[4.0, 5.0], [2.0, 3.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(b, fn b -> Nx.sum(Nx.LinAlg.triangular_solve(a, b)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "new_axis" do
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.new_axis(x, 0)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "tile" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.tile(x, [2])) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "cbrt" do
+      x = Nx.tensor([[1.0, 8.0, 27.0], [64.0, 125.0, 216.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.cbrt(x)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "negate" do
+      x = Nx.tensor([[1.0, -2.0, 3.0], [4.0, -5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.negate(x)) end)
+      assert grad.vectorized_axes == [batch: 2]
+      expected = Nx.tensor([[-1.0, -1.0, -1.0], [-1.0, -1.0, -1.0]]) |> Nx.vectorize(:batch)
+      assert grad == expected
+    end
+
+    test "chained binary ops" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x ->
+        Nx.sum(Nx.divide(Nx.add(Nx.multiply(x, x), x), Nx.add(x, 1)))
+      end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "multiple same-axis inputs, grad wrt one" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:a)
+      w = Nx.tensor([[0.5, 0.3], [0.2, 0.4]]) |> Nx.vectorize(:a)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.multiply(x, w)) end)
+      assert grad.vectorized_axes == [a: 2]
+      # Using == instead of assert_all_close due to vectorized assert_all_close
+      # interaction issue when run alongside other vectorized tests
+      assert grad == Nx.tensor([[0.5, 0.3], [0.2, 0.4]]) |> Nx.vectorize(:a)
+    end
+
+    test "large vectorized batch" do
+      x = Nx.iota({100, 4}, type: :f32) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.exp(x)) end)
+      assert grad.vectorized_axes == [batch: 100]
+      assert Nx.shape(grad) == {4}
+    end
+
+    test "remainder" do
+      x = Nx.tensor([[5.0, 7.0, 9.0], [11.0, 13.0, 15.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.remainder(x, 3)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    test "conjugate" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.conjugate(x)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "qr grad with vectorized" do
+      # Fails: cannot vectorize tensor of rank 0
+      x = Nx.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x ->
+        {q, r} = Nx.LinAlg.qr(x)
+        Nx.sum(Nx.dot(q, r))
+      end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "cholesky grad with vectorized" do
+      # Fails: lists.duplicate crash
+      a1 = Nx.tensor([[4.0, 2.0], [2.0, 3.0]])
+      a2 = Nx.tensor([[9.0, 3.0], [3.0, 5.0]])
+      x = Nx.stack([a1, a2]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.LinAlg.cholesky(x)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "cumulative_sum with vectorized" do
+      # Fails: vectorized axis name collision
+      x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.cumulative_sum(x)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "take_along_axis with vectorized" do
+      # Fails: parameter expression error
+      x = Nx.tensor([[3.0, 1.0, 2.0], [6.0, 4.0, 5.0]]) |> Nx.vectorize(:batch)
+      idx = Nx.tensor([[2, 0, 1], [1, 2, 0]]) |> Nx.vectorize(:batch)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.take_along_axis(x, idx, axis: 0)) end)
+      assert grad.vectorized_axes == [batch: 2]
+    end
+
+    @tag :skip
+    test "three different vectorized axes" do
+      # Fails: broadcast shape mismatch
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:a)
+      y = Nx.tensor([[10.0, 20.0], [30.0, 40.0], [50.0, 60.0]]) |> Nx.vectorize(:b)
+      z = Nx.tensor([[100.0, 200.0]]) |> Nx.vectorize(:c)
+      grad = Nx.Defn.grad(x, fn x -> Nx.sum(Nx.add(Nx.add(x, y), z)) end)
+      assert :a in Keyword.keys(grad.vectorized_axes)
+    end
+
     test "mixed vectorized axes with add" do
       # x has axis :a (2 vectors of size 3), y has axis :b (3 vectors of size 3)
       # gradient should carry both axes
