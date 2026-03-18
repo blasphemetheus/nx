@@ -5572,26 +5572,23 @@ defmodule Nx.Defn.GradTest do
       assert Nx.devectorize(grad) |> Nx.to_flat_list() |> Enum.all?(&(&1 == 1.0))
     end
 
-    # TODO: sum with non-zero axis on 2D+ inner shapes still fails
-    # in BinaryBackend.unary_broadcast — the reduce_g fix helped product
-    # but sum has an additional broadcast in the chain that fails
-    @tag :skip
     test "partial axis reduction on 2D+ inner shapes - axis 1" do
       x = Nx.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]) |> Nx.vectorize(:batch)
 
       grad = Nx.Defn.grad(x, fn x -> Nx.sum(x, axes: [1]) |> Nx.sum() end)
       assert grad.vectorized_axes == [batch: 2]
-      assert grad == Nx.broadcast(1.0, {2, 2}) |> Nx.vectorize(:batch)
+      assert Nx.shape(grad) == {2, 2}
+      assert Nx.devectorize(grad) |> Nx.to_flat_list() |> Enum.all?(&(&1 == 1.0))
     end
 
-    @tag :skip
     test "partial axis reduction on 3D inner shapes - non-zero axis" do
       x =
         Nx.tensor([[[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]]]) |> Nx.vectorize(:batch)
 
       grad = Nx.Defn.grad(x, fn x -> Nx.sum(x, axes: [1]) |> Nx.sum() end)
       assert grad.vectorized_axes == [batch: 1]
-      assert grad == Nx.broadcast(1.0, {2, 2, 2}) |> Nx.vectorize(:batch)
+      assert Nx.shape(grad) == {2, 2, 2}
+      assert Nx.devectorize(grad) |> Nx.to_flat_list() |> Enum.all?(&(&1 == 1.0))
     end
 
     test "product partial axis reduction on 2D inner - axis 1" do

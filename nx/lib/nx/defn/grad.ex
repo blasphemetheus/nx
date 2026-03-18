@@ -1638,8 +1638,12 @@ defmodule Nx.Defn.Grad do
     if keep_axes || !axes do
       Nx.broadcast(g, x)
     else
-      axes = Nx.axes(x) -- axes
-      Nx.broadcast(g, x, axes: axes)
+      # Reinsert size-1 dims at the reduced axis positions, then broadcast.
+      # This is equivalent to using keep_axes: true and avoids the explicit
+      # axes mapping in Nx.broadcast which breaks with vectorized tensors.
+      unsqueezed_shape = Enum.reduce(axes, Nx.shape(x), &put_elem(&2, &1, 1))
+      g = Nx.reshape(g, unsqueezed_shape)
+      Nx.broadcast(g, x)
     end
   end
 
