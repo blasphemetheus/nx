@@ -76,6 +76,7 @@ defmodule EXLA.MixProject do
       {:xla, "~> 0.10.0", runtime: false},
       {:fine, "~> 0.1", runtime: false},
       {:elixir_make, "~> 0.6", runtime: false},
+      {:stream_data, "~> 1.0", only: :test},
       {:benchee, "~> 1.0", only: :dev},
       {:ex_doc, "~> 0.29", only: :docs},
       {:nimble_pool, "~> 1.0"}
