@@ -481,4 +481,429 @@ defmodule Nx.FuzzTest do
       end
     end
   end
+
+  # ── Window Operations ─────────────────────────────────────────────
+
+  describe "window ops don't crash" do
+    for op <- [:window_sum, :window_max, :window_min, :window_product] do
+      property "#{op} with 1D window" do
+        check all(
+                len <- integer(2..32),
+                win <- integer(1..4),
+                type <- float_type(),
+                max_runs: 30
+              ) do
+          win = min(win, len)
+          t = Nx.iota({len}, type: type)
+          result = apply(Nx, unquote(op), [t, {win}])
+          assert is_struct(result, Nx.Tensor)
+          expected_len = len - win + 1
+          assert Nx.shape(result) == {expected_len}
+        end
+      end
+
+      property "#{op} with 2D window" do
+        check all(
+                rows <- integer(2..16),
+                cols <- integer(2..16),
+                win_r <- integer(1..3),
+                win_c <- integer(1..3),
+                type <- float_type(),
+                max_runs: 20
+              ) do
+          win_r = min(win_r, rows)
+          win_c = min(win_c, cols)
+          t = Nx.iota({rows, cols}, type: type)
+          result = apply(Nx, unquote(op), [t, {win_r, win_c}])
+          assert is_struct(result, Nx.Tensor)
+          assert Nx.shape(result) == {rows - win_r + 1, cols - win_c + 1}
+        end
+      end
+    end
+
+    for op <- [:window_sum, :window_max, :window_min] do
+      property "#{op} with strides" do
+        check all(
+                len <- integer(4..32),
+                type <- float_type(),
+                max_runs: 20
+              ) do
+          t = Nx.iota({len}, type: type)
+          result = apply(Nx, unquote(op), [t, {2}, [strides: [2]]])
+          assert is_struct(result, Nx.Tensor)
+        end
+      end
+    end
+  end
+
+  # ── Pad Operations ────────────────────────────────────────────────
+
+  describe "pad ops don't crash" do
+    property "pad 1D with positive padding" do
+      check all(
+              len <- integer(1..16),
+              pad_lo <- integer(0..4),
+              pad_hi <- integer(0..4),
+              type <- float_type(),
+              max_runs: 30
+            ) do
+        t = Nx.iota({len}, type: type)
+        result = Nx.pad(t, 0, [{pad_lo, pad_hi, 0}])
+        assert Nx.shape(result) == {len + pad_lo + pad_hi}
+      end
+    end
+
+    property "pad 2D" do
+      check all(
+              rows <- integer(1..8),
+              cols <- integer(1..8),
+              type <- float_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota({rows, cols}, type: type)
+        result = Nx.pad(t, 0, [{1, 1, 0}, {0, 2, 0}])
+        assert Nx.shape(result) == {rows + 2, cols + 2}
+      end
+    end
+  end
+
+  # ── Slice Operations ──────────────────────────────────────────────
+
+  describe "slice ops don't crash" do
+    property "slice 1D" do
+      check all(
+              len <- integer(2..32),
+              type <- numeric_type(),
+              max_runs: 30
+            ) do
+        t = Nx.iota({len}, type: type)
+        start = :rand.uniform(len) - 1
+        slice_len = :rand.uniform(len - start)
+        result = Nx.slice(t, [start], [slice_len])
+        assert Nx.shape(result) == {slice_len}
+      end
+    end
+
+    property "slice 2D" do
+      check all(
+              rows <- integer(2..16),
+              cols <- integer(2..16),
+              type <- numeric_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota({rows, cols}, type: type)
+        sr = :rand.uniform(rows) - 1
+        sc = :rand.uniform(cols) - 1
+        lr = :rand.uniform(rows - sr)
+        lc = :rand.uniform(cols - sc)
+        result = Nx.slice(t, [sr, sc], [lr, lc])
+        assert Nx.shape(result) == {lr, lc}
+      end
+    end
+
+    property "put_slice 1D" do
+      check all(
+              len <- integer(2..16),
+              type <- float_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota({len}, type: type)
+        start = :rand.uniform(len) - 1
+        update_len = :rand.uniform(len - start)
+        update = Nx.broadcast(99.0, {update_len})
+        result = Nx.put_slice(t, [start], update)
+        assert Nx.shape(result) == {len}
+      end
+    end
+  end
+
+  # ── Gather / Take Operations ──────────────────────────────────────
+
+  describe "gather and take ops don't crash" do
+    property "take from 1D" do
+      check all(
+              len <- integer(1..32),
+              n_idx <- integer(1..8),
+              type <- numeric_type(),
+              max_runs: 30
+            ) do
+        t = Nx.iota({len}, type: type)
+        indices = Nx.remainder(Nx.iota({n_idx}, type: :s64), len)
+        result = Nx.take(t, indices)
+        assert Nx.shape(result) == {n_idx}
+      end
+    end
+
+    property "gather with indices" do
+      check all(
+              len <- integer(2..16),
+              n_idx <- integer(1..8),
+              type <- numeric_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota({len}, type: type)
+        indices = Nx.remainder(Nx.iota({n_idx, 1}, type: :s64), len)
+        result = Nx.gather(t, indices)
+        assert is_struct(result, Nx.Tensor)
+      end
+    end
+  end
+
+  # ── Reverse / Sort Operations ─────────────────────────────────────
+
+  describe "reverse and sort ops don't crash" do
+    property "reverse 1D" do
+      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 30) do
+        if tuple_size(Nx.shape(t)) >= 1 do
+          result = Nx.reverse(t)
+          assert Nx.shape(result) == Nx.shape(t)
+        end
+      end
+    end
+
+    property "sort 1D" do
+      check all(
+              len <- integer(1..32),
+              type <- numeric_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota({len}, type: type)
+        result = Nx.sort(t)
+        assert Nx.shape(result) == {len}
+      end
+    end
+
+    property "argsort 1D" do
+      check all(
+              len <- integer(1..32),
+              type <- numeric_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota({len}, type: type)
+        result = Nx.argsort(t)
+        assert Nx.shape(result) == {len}
+      end
+    end
+  end
+
+  # ── Cumulative Operations ─────────────────────────────────────────
+
+  describe "cumulative ops don't crash" do
+    for op <- [:cumulative_sum, :cumulative_product, :cumulative_min, :cumulative_max] do
+      property "#{op} preserves shape" do
+        check all(
+                len <- integer(1..32),
+                type <- float_type(),
+                max_runs: 20
+              ) do
+          t = Nx.iota({len}, type: type)
+          result = apply(Nx, unquote(op), [t])
+          assert Nx.shape(result) == {len}
+        end
+      end
+    end
+  end
+
+  # ── Dot / Tensordot ───────────────────────────────────────────────
+
+  describe "dot product ops don't crash" do
+    property "dot 1D vectors" do
+      check all(
+              len <- integer(1..32),
+              type <- float_type(),
+              max_runs: 20
+            ) do
+        a = Nx.iota({len}, type: type)
+        b = Nx.iota({len}, type: type)
+        result = Nx.dot(a, b)
+        assert Nx.shape(result) == {}
+      end
+    end
+
+    property "dot 2D matrix multiply" do
+      check all(
+              m <- integer(1..16),
+              n <- integer(1..16),
+              k <- integer(1..16),
+              type <- float_type(),
+              max_runs: 20
+            ) do
+        a = Nx.iota({m, k}, type: type)
+        b = Nx.iota({k, n}, type: type)
+        result = Nx.dot(a, b)
+        assert Nx.shape(result) == {m, n}
+      end
+    end
+
+    property "dot with batched matmul" do
+      check all(
+              batch <- integer(1..4),
+              m <- integer(1..8),
+              n <- integer(1..8),
+              k <- integer(1..8),
+              type <- float_type(),
+              max_runs: 15
+            ) do
+        a = Nx.iota({batch, m, k}, type: type)
+        b = Nx.iota({batch, k, n}, type: type)
+        result = Nx.dot(a, [2], [0], b, [1], [0])
+        assert Nx.shape(result) == {batch, m, n}
+      end
+    end
+  end
+
+  # ── Select / Where ────────────────────────────────────────────────
+
+  describe "select ops don't crash" do
+    property "select with random predicate" do
+      check all(
+              shape <- non_empty_shape(),
+              type <- float_type(),
+              max_runs: 20
+            ) do
+        pred = Nx.greater(Nx.iota(shape, type: :f32), Nx.size(shape) / 2)
+        on_true = Nx.iota(shape, type: type)
+        on_false = Nx.broadcast(0, shape) |> Nx.as_type(type)
+        result = Nx.select(pred, on_true, on_false)
+        assert Nx.shape(result) == shape
+      end
+    end
+  end
+
+  # ── Indexed Operations ────────────────────────────────────────────
+
+  describe "indexed ops don't crash" do
+    property "indexed_add 1D" do
+      check all(
+              len <- integer(2..16),
+              type <- float_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota({len}, type: type)
+        idx = Nx.remainder(Nx.iota({2, 1}, type: :s64), len)
+        updates = Nx.broadcast(1.0, {2})
+        result = Nx.indexed_add(t, idx, updates)
+        assert Nx.shape(result) == {len}
+      end
+    end
+
+    property "indexed_put 1D" do
+      check all(
+              len <- integer(2..16),
+              type <- float_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota({len}, type: type)
+        idx = Nx.remainder(Nx.iota({2, 1}, type: :s64), len)
+        updates = Nx.broadcast(99.0, {2})
+        result = Nx.indexed_put(t, idx, updates)
+        assert Nx.shape(result) == {len}
+      end
+    end
+  end
+
+  # ── Clip ──────────────────────────────────────────────────────────
+
+  describe "clip doesn't crash" do
+    property "clip with random bounds" do
+      check all(
+              shape <- non_empty_shape(),
+              type <- float_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota(shape, type: type)
+        result = Nx.clip(t, 2, 5)
+        assert Nx.shape(result) == shape
+      end
+    end
+  end
+
+  # ── Logical Operations ────────────────────────────────────────────
+
+  @logical_ops [:logical_and, :logical_or, :logical_xor]
+
+  describe "logical ops don't crash" do
+    for op <- @logical_ops do
+      property "#{op} returns correct shape" do
+        check all(
+                shape <- non_empty_shape(),
+                max_runs: 20
+              ) do
+          a = Nx.greater(Nx.iota(shape, type: :f32), 2)
+          b = Nx.less(Nx.iota(shape, type: :f32), 5)
+          result = apply(Nx, unquote(op), [a, b])
+          assert Nx.shape(result) == shape
+        end
+      end
+    end
+
+    property "logical_not returns correct shape" do
+      check all(shape <- non_empty_shape(), max_runs: 20) do
+        a = Nx.greater(Nx.iota(shape, type: :f32), 2)
+        result = Nx.logical_not(a)
+        assert Nx.shape(result) == shape
+      end
+    end
+  end
+
+  # ── Bitwise Operations ────────────────────────────────────────────
+
+  describe "bitwise binary ops don't crash" do
+    for op <- [:bitwise_and, :bitwise_or, :bitwise_xor] do
+      property "#{op} with matching integer shapes" do
+        check all(
+                shape <- non_empty_shape(),
+                type <- member_of(@integer_types),
+                max_runs: 20
+              ) do
+          a = Nx.iota(shape, type: type)
+          b = Nx.iota(shape, type: type)
+          result = apply(Nx, unquote(op), [a, b])
+          assert Nx.shape(result) == shape
+        end
+      end
+    end
+
+    for op <- [:left_shift, :right_shift] do
+      property "#{op} with small shift amounts" do
+        check all(
+                shape <- non_empty_shape(),
+                type <- member_of([:u8, :u16, :s8, :s16, :s32]),
+                max_runs: 20
+              ) do
+          a = Nx.iota(shape, type: type)
+          shift = Nx.broadcast(Nx.tensor(1, type: type), shape)
+          result = apply(Nx, unquote(op), [a, shift])
+          assert Nx.shape(result) == shape
+        end
+      end
+    end
+  end
+
+  # ── all/any Aggregation ───────────────────────────────────────────
+
+  describe "all/any aggregation" do
+    for op <- [:all, :any] do
+      property "#{op} reduces to scalar" do
+        check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20) do
+          result = apply(Nx, unquote(op), [t])
+          assert Nx.shape(result) == {}
+        end
+      end
+    end
+
+    property "argmax returns scalar index" do
+      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20) do
+        result = Nx.argmax(t)
+        assert Nx.shape(result) == {}
+      end
+    end
+
+    property "argmin returns scalar index" do
+      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20) do
+        result = Nx.argmin(t)
+        assert Nx.shape(result) == {}
+      end
+    end
+  end
 end
