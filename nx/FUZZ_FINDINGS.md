@@ -2,8 +2,8 @@
 
 ## Summary
 
-288 property tests + 10 explicit tests across 7 test files.
-4 bugs found, all in BinaryBackend. 7 skipped tests documenting bugs.
+288 property tests + 46 explicit tests across 7 test files.
+5 bugs found, all in BinaryBackend. 8 skipped tests documenting bugs.
 
 ---
 
@@ -80,7 +80,34 @@ standard behavior for domain errors.
 
 ---
 
-## Bug 3: window_scatter_max/min crashes on f64 tensors
+## Bug 3: Nx.divide by zero crashes instead of returning Inf
+
+**Reproduce:**
+```elixir
+Nx.divide(Nx.tensor(1.0), Nx.tensor(0.0))
+# ** (ArithmeticError) bad argument in arithmetic expression
+
+Nx.divide(Nx.tensor(1.0), Nx.tensor(-0.0))
+# ** (ArithmeticError) bad argument in arithmetic expression
+```
+
+**Expected:** `Inf` for `1.0/0.0`, `-Inf` for `1.0/-0.0`, `NaN` for `0.0/0.0`
+per IEEE 754.
+
+**Root cause:** Same `:math` delegation issue.
+
+**EXLA behavior:** EXLA correctly returns Inf/-Inf/NaN.
+
+**Severity:** High. Division by zero is common in ML (e.g., normalizing by
+variance which can be zero, reciprocal of small values).
+
+**Fix approach:** Same as Bugs 1-2.
+
+---
+
+## Bug 4: window_scatter_max/min crashes on f64 tensors
+
+*Renumbered from Bug 3 in previous version.*
 
 **Affected ops:** `window_scatter_max`, `window_scatter_min`
 

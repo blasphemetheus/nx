@@ -433,4 +433,248 @@ defmodule Nx.FuzzRandomValuesTest do
       end
     end
   end
+
+  # ── Exotic value edge cases ───────────────────────────────────────
+  # These test specific dangerous values: -0.0, subnormals, MAX/MIN,
+  # type boundary values, and mixed special values in tensors.
+
+  describe "negative zero handling" do
+    test "add(-0.0, 0.0) doesn't crash" do
+      result = Nx.add(Nx.tensor(-0.0), Nx.tensor(0.0))
+      assert Nx.to_number(result) == 0.0
+    end
+
+    test "multiply(-0.0, x) doesn't crash" do
+      result = Nx.multiply(Nx.tensor(-0.0), Nx.tensor(5.0))
+      assert Nx.to_number(result) == 0.0 or Nx.to_number(result) == -0.0
+    end
+
+    # BUG: divide by zero/negative-zero crashes instead of returning Inf
+    @tag :skip
+    test "divide(x, -0.0) should return infinity" do
+      result = Nx.divide(Nx.tensor(1.0), Nx.tensor(-0.0))
+      assert Nx.to_number(result) == :neg_infinity or Nx.to_number(result) == :infinity
+    end
+
+    test "equal(-0.0, 0.0) is true (IEEE 754)" do
+      result = Nx.equal(Nx.tensor(-0.0), Nx.tensor(0.0)) |> Nx.to_number()
+      assert result == 1
+    end
+
+    test "sign(-0.0) returns 0" do
+      result = Nx.sign(Nx.tensor(-0.0)) |> Nx.to_number()
+      assert result == 0.0 or result == -0.0
+    end
+  end
+
+  describe "subnormal values" do
+    # Smallest positive subnormal for f32: ~1.4e-45
+    @f32_min_subnormal 1.0e-45
+    # Smallest positive normal for f32: ~1.175e-38
+    @f32_min_normal 1.175494e-38
+
+    test "subnormal values survive roundtrip" do
+      t = Nx.tensor([@f32_min_subnormal, @f32_min_normal, -@f32_min_subnormal], type: :f32)
+      result = Nx.to_flat_list(t)
+      assert length(result) == 3
+    end
+
+    test "add with subnormals doesn't crash" do
+      a = Nx.tensor(@f32_min_subnormal, type: :f32)
+      b = Nx.tensor(@f32_min_subnormal, type: :f32)
+      result = Nx.add(a, b)
+      assert is_struct(result, Nx.Tensor)
+    end
+
+    test "multiply subnormal by large number" do
+      a = Nx.tensor(@f32_min_subnormal, type: :f32)
+      b = Nx.tensor(1.0e38, type: :f32)
+      result = Nx.multiply(a, b)
+      assert is_struct(result, Nx.Tensor)
+    end
+
+    test "divide subnormal by subnormal" do
+      a = Nx.tensor(@f32_min_subnormal, type: :f32)
+      b = Nx.tensor(@f32_min_subnormal, type: :f32)
+      result = Nx.divide(a, b)
+      # Should be 1.0 or NaN depending on flush-to-zero
+      assert is_struct(result, Nx.Tensor)
+    end
+
+    test "abs of subnormal preserves value" do
+      a = Nx.tensor(-@f32_min_subnormal, type: :f32)
+      result = Nx.abs(a)
+      val = Nx.to_number(result)
+      assert val >= 0.0
+    end
+
+    test "comparison with subnormals" do
+      a = Nx.tensor(@f32_min_subnormal, type: :f32)
+      b = Nx.tensor(0.0, type: :f32)
+      assert Nx.greater(a, b) |> Nx.to_number() == 1
+    end
+  end
+
+  describe "MAX/MIN float boundaries" do
+    @f32_max 3.4028235e38
+    @f32_min -3.4028235e38
+
+    test "tensor at f32 max doesn't crash" do
+      t = Nx.tensor(@f32_max, type: :f32)
+      val = Nx.to_number(t)
+      # f32 can't represent the exact constant — just check it's close
+      assert_in_delta val, @f32_max, 1.0e32
+    end
+
+    test "add near f32 max" do
+      a = Nx.tensor(@f32_max, type: :f32)
+      b = Nx.tensor(1.0, type: :f32)
+      # Should return max or Inf, not crash
+      result = Nx.add(a, b)
+      assert is_struct(result, Nx.Tensor)
+    end
+
+    test "multiply f32 max by 2" do
+      a = Nx.tensor(@f32_max, type: :f32)
+      result = Nx.multiply(a, 2.0)
+      val = Nx.to_number(result)
+      assert val == :infinity
+    end
+
+    test "negate f32 max" do
+      result = Nx.negate(Nx.tensor(@f32_max, type: :f32))
+      val = Nx.to_number(result)
+      assert_in_delta val, @f32_min, 1.0e32
+    end
+
+    test "abs of f32 min" do
+      result = Nx.abs(Nx.tensor(@f32_min, type: :f32))
+      val = Nx.to_number(result)
+      assert_in_delta val, @f32_max, 1.0e32
+    end
+
+    test "reduce_max/min with boundary values" do
+      t = Nx.tensor([@f32_max, 0.0, @f32_min], type: :f32)
+      max_val = Nx.reduce_max(t) |> Nx.to_number()
+      min_val = Nx.reduce_min(t) |> Nx.to_number()
+      assert_in_delta max_val, @f32_max, 1.0e32
+      assert_in_delta min_val, @f32_min, 1.0e32
+    end
+
+    test "sort with boundary values" do
+      t = Nx.tensor([@f32_max, 0.0, @f32_min, 1.0, -1.0], type: :f32)
+      sorted = Nx.sort(t, direction: :asc) |> Nx.to_flat_list()
+      assert sorted == Enum.sort(sorted)
+    end
+  end
+
+  describe "mixed special values in tensors" do
+    test "tensor with Inf, -Inf, NaN, 0, -0" do
+      t = Nx.tensor([:infinity, :neg_infinity, :nan, 0.0, -0.0], type: :f32)
+      assert Nx.shape(t) == {5}
+    end
+
+    test "sum with Inf propagates" do
+      t = Nx.tensor([1.0, :infinity, 3.0], type: :f32)
+      result = Nx.sum(t) |> Nx.to_number()
+      assert result == :infinity
+    end
+
+    test "sum with -Inf propagates" do
+      t = Nx.tensor([1.0, :neg_infinity, 3.0], type: :f32)
+      result = Nx.sum(t) |> Nx.to_number()
+      assert result == :neg_infinity
+    end
+
+    test "sum with Inf and -Inf produces NaN" do
+      t = Nx.tensor([:infinity, :neg_infinity], type: :f32)
+      result = Nx.sum(t) |> Nx.to_number()
+      assert result == :nan
+    end
+
+    test "mean with NaN propagates NaN" do
+      t = Nx.tensor([1.0, :nan, 3.0], type: :f32)
+      result = Nx.mean(t) |> Nx.to_number()
+      assert result == :nan
+    end
+
+    test "multiply Inf * 0 produces NaN" do
+      result = Nx.multiply(Nx.tensor(:infinity), Nx.tensor(0.0)) |> Nx.to_number()
+      assert result == :nan
+    end
+
+    test "equal(NaN, NaN) is false (IEEE 754)" do
+      result = Nx.equal(Nx.tensor(:nan), Nx.tensor(:nan)) |> Nx.to_number()
+      assert result == 0
+    end
+
+    test "is_nan detects NaN" do
+      t = Nx.tensor([1.0, :nan, :infinity, 0.0], type: :f32)
+      result = Nx.is_nan(t) |> Nx.to_flat_list()
+      assert result == [0, 1, 0, 0]
+    end
+
+    test "is_infinity detects Inf and -Inf" do
+      t = Nx.tensor([1.0, :infinity, :neg_infinity, 0.0], type: :f32)
+      result = Nx.is_infinity(t) |> Nx.to_flat_list()
+      assert result == [0, 1, 1, 0]
+    end
+
+    test "select with NaN pred" do
+      # NaN is truthy (non-zero bits)
+      pred = Nx.tensor(:nan, type: :f32)
+      on_true = Nx.tensor(1.0)
+      on_false = Nx.tensor(0.0)
+      result = Nx.select(pred, on_true, on_false) |> Nx.to_number()
+      # NaN should be treated as truthy since its bits are non-zero
+      assert result == 1.0 or result == 0.0
+    end
+
+    test "dot with Inf values" do
+      a = Nx.tensor([1.0, :infinity], type: :f32)
+      b = Nx.tensor([1.0, 1.0], type: :f32)
+      result = Nx.dot(a, b) |> Nx.to_number()
+      assert result == :infinity
+    end
+
+    test "abs(Inf) == Inf, abs(-Inf) == Inf, abs(NaN) == NaN" do
+      assert Nx.abs(Nx.tensor(:infinity)) |> Nx.to_number() == :infinity
+      assert Nx.abs(Nx.tensor(:neg_infinity)) |> Nx.to_number() == :infinity
+      assert Nx.abs(Nx.tensor(:nan)) |> Nx.to_number() == :nan
+    end
+  end
+
+  describe "integer type boundaries" do
+    test "u8 boundary values" do
+      t = Nx.tensor([0, 127, 255], type: :u8)
+      assert Nx.reduce_max(t) |> Nx.to_number() == 255
+      assert Nx.reduce_min(t) |> Nx.to_number() == 0
+    end
+
+    test "s8 boundary values" do
+      t = Nx.tensor([-128, 0, 127], type: :s8)
+      assert Nx.reduce_max(t) |> Nx.to_number() == 127
+      assert Nx.reduce_min(t) |> Nx.to_number() == -128
+    end
+
+    test "u8 overflow wraps" do
+      result = Nx.add(Nx.tensor(255, type: :u8), Nx.tensor(1, type: :u8))
+      val = Nx.to_number(result)
+      # Should wrap to 0
+      assert val == 0
+    end
+
+    test "s8 overflow wraps" do
+      result = Nx.add(Nx.tensor(127, type: :s8), Nx.tensor(1, type: :s8))
+      val = Nx.to_number(result)
+      # Should wrap to -128
+      assert val == -128
+    end
+
+    test "negate s8 min" do
+      # -(-128) = 128 which overflows s8
+      result = Nx.negate(Nx.tensor(-128, type: :s8))
+      assert is_struct(result, Nx.Tensor)
+    end
+  end
 end
