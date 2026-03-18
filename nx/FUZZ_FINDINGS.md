@@ -2,8 +2,8 @@
 
 ## Summary
 
-288 property tests + 46 explicit tests across 7 test files.
-5 bugs found, all in BinaryBackend. 8 skipped tests documenting bugs.
+442 property tests + 203 explicit tests across 11 test files.
+7 bugs found (5 BinaryBackend, 1 Nx.linspace, 1 validation ordering). 10 skipped tests documenting bugs.
 
 ---
 
@@ -162,6 +162,83 @@ whether Nx should support empty tensors for consistency with other frameworks.
 
 ---
 
+## Bug 5: BinaryBackend crashes on Nx.slice of scalar tensor
+
+**Reproduce:**
+```elixir
+Nx.slice(Nx.tensor(42), [], [])
+# ** (ArgumentError) errors were found at the given arguments:
+#   * 1st argument: not a nonempty list
+```
+
+**Expected:** Should return the scalar tensor unchanged (no-op).
+
+**Root cause:** `BinaryBackend.bin_slice/7` calls `hd(strides)` and `hd(start_indices)`
+on line 1855, which crashes on empty lists when the tensor is scalar (rank 0).
+
+**Severity:** Low. Slicing a scalar is unusual, but the validation in
+`Nx.Shape.slice` passes, so the backend should handle it.
+
+**Fix approach:** Add a scalar guard in `bin_slice/7`: if `start_indices == []`,
+return the data unchanged.
+
+**Files to change:** `nx/lib/nx/binary_backend.ex` around line 1852.
+
+---
+
+## Bug 6: Nx.linspace crashes with n=1
+
+**Reproduce:**
+```elixir
+Nx.linspace(0, 10, n: 1)
+# ** (ArithmeticError) bad argument in arithmetic expression
+```
+
+**Expected:** Should return a single-element tensor containing the start value,
+like NumPy's `np.linspace(0, 10, 1)` which returns `[0.0]`.
+
+**Root cause:** When `endpoint: true` (default), `divisor = n - 1 = 0`.
+Then `Nx.divide(stop - start, 0)` triggers a divide-by-zero in BinaryBackend.
+Line 16841 in `nx.ex`: `divisor = n - 1`.
+
+**Severity:** Medium. `n=1` is a reasonable input (e.g., when generating a
+single interpolation point).
+
+**Fix approach:** Special-case `n == 1` before the divisor calculation:
+return `Nx.broadcast(start, {1})` directly.
+
+**Files to change:** `nx/lib/nx.ex` around line 16839.
+
+---
+
+## Bug 7: Nx.gather gives wrong error on scalar indices
+
+**Reproduce:**
+```elixir
+Nx.gather(Nx.iota({3}), Nx.tensor(0))
+# ** (ArgumentError) errors were found at the given arguments:
+#   * 1st argument: out of range
+```
+
+**Expected:** Should raise `"expected indices rank to be at least 1, got: 0"`.
+
+**Root cause:** `indexed_axes` (line 8027 in nx.ex) calls
+`elem(indices.shape, tuple_size(indices.shape) - 1)` which is
+`elem({}, -1)` — Erlang raises before the Nx validation fires.
+The scalar check in `Nx.Shape.gather` (line 1641) never runs because
+`indexed_axes` is called first.
+
+**Severity:** Low. The function still rejects invalid input, just with
+an unhelpful error message.
+
+**Fix approach:** Move the `indices_shape == {}` check to before the
+`indexed_axes` call in `Nx.gather/3`, or guard `indexed_axes` against
+scalar indices.
+
+**Files to change:** `nx/lib/nx.ex` around line 14605.
+
+---
+
 ## Not a bug: Nx.select broadcasting
 
 `Nx.select` with non-scalar predicate uses the predicate's shape as the output
@@ -190,4 +267,17 @@ valid position instead of raising. This matches XLA behavior.
 | fuzz_complex_test.exs | 29 | 0 | 0 | c64/c128 arithmetic, properties |
 | fuzz_errors_test.exs | 15 | 7 | 0 | Invalid inputs, error messages |
 | fuzz_vectorized_test.exs | 29 | 0 | 0 | Vectorized axes preservation |
-| **Total** | **288** | **10** | **7** | |
+| fuzz_types_test.exs | 18 | 9 | 0 | f16/bf16, type promotion, high-rank |
+| fuzz_grad_test.exs | 61 | 2 | 0 | Finite difference gradient verification |
+| fuzz_differential_test.exs | 60 | 0 | 0 | BinaryBackend vs EXLA cross-backend |
+| fuzz_edge_cases_test.exs | 15 | 182 | 3 | Tier 4: source-derived boundary tests |
+| fuzz_edge_cases2_test.exs | 9 | 79 | 0 | Tier 4: defn, diagonal, reduce, vectorize, type |
+| fuzz_edge_cases3_test.exs | 7 | 58 | 0 | Tier 4: diff, eye, clip, FFT, LinAlg, equivalences |
+| fuzz_edge_cases4_test.exs | 0 | 72 | 0 | Tier 4: complex types, vectorized+edge combos |
+| fuzz_edge_cases5_test.exs | 0 | 72 | 0 | Tier 4: defn hooks, tokens, nested JIT, compile |
+| fuzz_edge_cases6_test.exs | 5 | 57 | 0 | Tier 4: NaN/Inf propagation, broadcast+boundary combos |
+| fuzz_sequence_test.exs | 32 | 3 | 0 | Tier 5: random/binary/JIT sequences, vectorized chains, backend/resource monitoring |
+| fuzz_sequence2_test.exs | 1 | 43 | 0 | Tier 5: defn control flow, grad chains, concurrency, exotic types, high-rank, vectorized binary |
+| exla/fuzz_edge_cases_test.exs | 0 | 48 | 0 | Tier 4: cross-backend edge cases (EXLA vs Binary) |
+| exla/fuzz_sequence_test.exs | 12 | 0 | 0 | Tier 5: cross-backend op chain comparison (EXLA vs Binary) |
+| **Total** | **508** | **635** | **10** | |
