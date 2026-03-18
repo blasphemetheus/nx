@@ -104,9 +104,6 @@ defmodule Nx.FuzzRandomValuesTest do
       end
     end
 
-    # BUG: sigmoid crashes on large inputs (e.g., 1e6) due to BinaryBackend
-    # overflow in :math.exp. Should return 1.0 for large positive, 0.0 for large negative.
-    @tag :skip
     property "sigmoid with large random values produces [0, 1]" do
       check all(
               shape <- random_shape(),
@@ -449,8 +446,6 @@ defmodule Nx.FuzzRandomValuesTest do
       assert Nx.to_number(result) == 0.0 or Nx.to_number(result) == -0.0
     end
 
-    # BUG: divide by zero/negative-zero crashes instead of returning Inf
-    @tag :skip
     test "divide(x, -0.0) should return infinity" do
       result = Nx.divide(Nx.tensor(1.0), Nx.tensor(-0.0))
       assert Nx.to_number(result) == :neg_infinity or Nx.to_number(result) == :infinity

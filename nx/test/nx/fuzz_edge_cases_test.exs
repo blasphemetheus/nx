@@ -113,10 +113,7 @@ defmodule Nx.FuzzEdgeCasesTest do
       end
     end
 
-    @tag :skip
-    test "BUG: slice on scalar tensor crashes BinaryBackend" do
-      # Nx.Shape.slice passes validation for scalar (rank 0),
-      # but BinaryBackend.bin_slice/7 calls :erlang.hd([]) and crashes.
+    test "slice on scalar tensor returns scalar unchanged" do
       t = Nx.tensor(42)
       result = Nx.slice(t, [], [])
       assert Nx.to_number(result) == 42
@@ -372,11 +369,7 @@ defmodule Nx.FuzzEdgeCasesTest do
       assert Nx.to_flat_list(result) == Enum.to_list(0..7)
     end
 
-    @tag :skip
-    test "BUG: gather with scalar indices gives wrong error message" do
-      # Nx.tensor(0) has shape {}. The Nx.Shape.gather validation should
-      # raise "expected indices rank to be at least 1" but instead an
-      # Erlang error fires first from tuple_size({}).
+    test "gather with scalar indices raises correct error" do
       t = Nx.iota({3})
       assert_raise ArgumentError, ~r/expected indices rank to be at least 1/, fn ->
         Nx.gather(t, Nx.tensor(0))
@@ -1282,12 +1275,9 @@ defmodule Nx.FuzzEdgeCasesTest do
   #   - start/stop must have same shape
 
   describe "linspace boundary conditions" do
-    @tag :skip
-    test "BUG: linspace n=1 crashes with ArithmeticError (divide by zero)" do
-      # When n=1, step = (stop - start) / (n - 1) = 10 / 0 -> crash
-      # Should return a single-element tensor containing start value.
+    test "linspace n=1 returns start value" do
       result = Nx.linspace(0, 10, n: 1)
-      assert Nx.to_number(result) == 0.0
+      assert Nx.to_flat_list(result) == [0.0]
     end
 
     test "linspace n=2 returns endpoints" do

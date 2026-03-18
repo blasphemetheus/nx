@@ -221,7 +221,6 @@ defmodule Nx.FuzzTest do
     # for inputs that overflow. A robust backend should not crash.
 
     for op <- @unary_float_overflow do
-      @tag :skip
       property "#{op} should return Inf (not crash) on large inputs" do
         # BinaryBackend delegates to :math which raises ArithmeticError
         # on overflow. Should return Inf instead.
@@ -1212,9 +1211,7 @@ defmodule Nx.FuzzTest do
         end
       end
 
-      # BUG: window_scatter on f64 crashes with binary size mismatch
-      @tag :skip
-      property "#{op} 1D f64 (crashes — binary size bug)" do
+      property "#{op} 1D f64" do
         check all(_ <- constant(:ok), max_runs: 5) do
           t = Nx.iota({6}, type: :f64)
           source = Nx.iota({3}, type: :f64)
