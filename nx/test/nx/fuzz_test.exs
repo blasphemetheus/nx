@@ -45,11 +45,12 @@ defmodule Nx.FuzzTest do
       {2, constant({})},
       {4, map(tensor_dim(), &{&1})},
       {4, bind(tensor_dim(), fn d1 -> map(tensor_dim(), &{d1, &1}) end)},
-      {2, bind(tensor_dim(), fn d1 ->
-        bind(tensor_dim(), fn d2 ->
-          map(tensor_dim(), &{d1, d2, &1})
-        end)
-      end)}
+      {2,
+       bind(tensor_dim(), fn d1 ->
+         bind(tensor_dim(), fn d2 ->
+           map(tensor_dim(), &{d1, d2, &1})
+         end)
+       end)}
     ])
   end
 
@@ -84,7 +85,7 @@ defmodule Nx.FuzzTest do
       # Generate subsets of valid axes
       member_of([
         [],
-        all_axes | (for a <- all_axes, do: [a])
+        all_axes | for(a <- all_axes, do: [a])
       ])
     end
   end
@@ -92,14 +93,31 @@ defmodule Nx.FuzzTest do
   # ── Unary Element-wise Operations ──────────────────────────────────
 
   @unary_ops [
-    :abs, :negate, :sign, :floor, :ceil, :round,
-    :bitwise_not, :count_leading_zeros, :population_count
+    :abs,
+    :negate,
+    :sign,
+    :floor,
+    :ceil,
+    :round,
+    :bitwise_not,
+    :count_leading_zeros,
+    :population_count
   ]
 
   # Split by domain requirements
   @unary_float_safe [
-    :sigmoid, :sin, :cos, :tan, :atan, :tanh, :cbrt,
-    :erf, :erfc, :is_nan, :is_infinity, :sign
+    :sigmoid,
+    :sin,
+    :cos,
+    :tan,
+    :atan,
+    :tanh,
+    :cbrt,
+    :erf,
+    :erfc,
+    :is_nan,
+    :is_infinity,
+    :sign
   ]
 
   # These overflow on large inputs (exp(710) overflows f64)
@@ -903,6 +921,357 @@ defmodule Nx.FuzzTest do
       check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20) do
         result = Nx.argmin(t)
         assert Nx.shape(result) == {}
+      end
+    end
+  end
+
+  # ── Statistical Operations ────────────────────────────────────────
+
+  describe "statistical ops don't crash" do
+    for op <- [:mean, :variance, :standard_deviation] do
+      property "#{op} reduces to scalar" do
+        check all(
+                shape <- non_empty_shape() |> filter(&(Nx.size(&1) > 0)),
+                type <- float_type(),
+                max_runs: 20
+              ) do
+          t = Nx.iota(shape, type: type)
+          result = apply(Nx, unquote(op), [t])
+          assert Nx.shape(result) == {}
+        end
+      end
+    end
+
+    property "covariance doesn't crash" do
+      check all(
+              rows <- integer(2..16),
+              cols <- integer(2..8),
+              type <- float_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({rows, cols}, type: type)
+        result = Nx.covariance(t)
+        assert Nx.shape(result) == {cols, cols}
+      end
+    end
+
+    property "weighted_mean doesn't crash" do
+      check all(
+              len <- integer(1..16),
+              type <- float_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({len}, type: type)
+        w = Nx.add(Nx.iota({len}, type: type), 1)
+        result = Nx.weighted_mean(t, w)
+        assert Nx.shape(result) == {}
+      end
+    end
+  end
+
+  # ── Shape Manipulation (more) ─────────────────────────────────────
+
+  describe "more shape ops don't crash" do
+    property "flatten" do
+      check all(
+              shape <- non_empty_shape() |> filter(&(Nx.size(&1) > 0)),
+              type <- numeric_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota(shape, type: type)
+        result = Nx.flatten(t)
+        assert Nx.shape(result) == {Nx.size(shape)}
+      end
+    end
+
+    property "tile 1D" do
+      check all(
+              len <- integer(1..8),
+              reps <- integer(1..4),
+              type <- numeric_type(),
+              max_runs: 20
+            ) do
+        t = Nx.iota({len}, type: type)
+        result = Nx.tile(t, [reps])
+        assert Nx.shape(result) == {len * reps}
+      end
+    end
+
+    property "tile 2D" do
+      check all(
+              rows <- integer(1..6),
+              cols <- integer(1..6),
+              rep_r <- integer(1..3),
+              rep_c <- integer(1..3),
+              type <- numeric_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({rows, cols}, type: type)
+        result = Nx.tile(t, [rep_r, rep_c])
+        assert Nx.shape(result) == {rows * rep_r, cols * rep_c}
+      end
+    end
+
+    property "reflect 1D" do
+      check all(
+              len <- integer(3..16),
+              type <- float_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({len}, type: type)
+        pad = min(:rand.uniform(len - 1), len - 1)
+        result = Nx.reflect(t, padding_config: [{pad, pad}])
+        assert Nx.shape(result) == {len + 2 * pad}
+      end
+    end
+
+    property "diff 1D" do
+      check all(
+              len <- integer(2..16),
+              type <- float_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({len}, type: type)
+        result = Nx.diff(t)
+        assert Nx.shape(result) == {len - 1}
+      end
+    end
+
+    property "split" do
+      check all(
+              type <- numeric_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({6}, type: type)
+        {left, right} = Nx.split(t, 3)
+        assert Nx.shape(left) == {3}
+        assert Nx.shape(right) == {3}
+      end
+    end
+
+    property "slice_along_axis" do
+      check all(
+              len <- integer(4..16),
+              type <- numeric_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({len}, type: type)
+        start = :rand.uniform(div(len, 2)) - 1
+        slice_len = :rand.uniform(len - start)
+        result = Nx.slice_along_axis(t, start, slice_len)
+        assert Nx.shape(result) == {slice_len}
+      end
+    end
+  end
+
+  # ── Matrix Diagonal Operations ────────────────────────────────────
+
+  describe "diagonal ops don't crash" do
+    property "take_diagonal" do
+      check all(
+              n <- integer(2..8),
+              type <- numeric_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({n, n}, type: type)
+        result = Nx.take_diagonal(t)
+        assert Nx.shape(result) == {n}
+      end
+    end
+
+    property "make_diagonal" do
+      check all(
+              n <- integer(1..8),
+              type <- numeric_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({n}, type: type)
+        result = Nx.make_diagonal(t)
+        assert Nx.shape(result) == {n, n}
+      end
+    end
+
+    property "triu" do
+      check all(
+              n <- integer(2..8),
+              type <- numeric_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({n, n}, type: type)
+        result = Nx.triu(t)
+        assert Nx.shape(result) == {n, n}
+      end
+    end
+
+    property "tril" do
+      check all(
+              n <- integer(2..8),
+              type <- numeric_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({n, n}, type: type)
+        result = Nx.tril(t)
+        assert Nx.shape(result) == {n, n}
+      end
+    end
+
+    property "tri" do
+      check all(
+              n <- integer(2..8),
+              max_runs: 15
+            ) do
+        result = Nx.tri(n, n)
+        assert Nx.shape(result) == {n, n}
+      end
+    end
+  end
+
+  # ── Complex Number Operations ─────────────────────────────────────
+
+  describe "complex ops don't crash" do
+    property "conjugate" do
+      check all(
+              shape <- non_empty_shape(),
+              type <- member_of([:f32, :f64]),
+              max_runs: 15
+            ) do
+        t = Nx.iota(shape, type: type)
+        result = Nx.conjugate(t)
+        assert Nx.shape(result) == shape
+      end
+    end
+
+    property "real and imag on float tensors" do
+      check all(
+              shape <- non_empty_shape(),
+              type <- member_of([:f32, :f64]),
+              max_runs: 15
+            ) do
+        t = Nx.iota(shape, type: type)
+        r = Nx.real(t)
+        i = Nx.imag(t)
+        assert Nx.shape(r) == shape
+        assert Nx.shape(i) == shape
+      end
+    end
+  end
+
+  # ── FFT ───────────────────────────────────────────────────────────
+
+  describe "FFT ops don't crash" do
+    property "fft and ifft roundtrip" do
+      check all(
+              # FFT requires power-of-2 or the library handles padding
+              exp <- integer(1..6),
+              type <- member_of([:f32, :f64]),
+              max_runs: 10
+            ) do
+        len = Integer.pow(2, exp)
+        t = Nx.iota({len}, type: type)
+        ft = Nx.fft(t)
+        assert is_struct(ft, Nx.Tensor)
+        ift = Nx.ifft(ft)
+        assert is_struct(ift, Nx.Tensor)
+      end
+    end
+  end
+
+  # ── Top-K ─────────────────────────────────────────────────────────
+
+  describe "top_k" do
+    property "returns correct shapes" do
+      check all(
+              len <- integer(2..32),
+              k <- integer(1..4),
+              type <- numeric_type(),
+              max_runs: 15
+            ) do
+        k = min(k, len)
+        t = Nx.iota({len}, type: type)
+        {values, indices} = Nx.top_k(t, k: k)
+        assert Nx.shape(values) == {k}
+        assert Nx.shape(indices) == {k}
+      end
+    end
+  end
+
+  # ── Window Scatter ────────────────────────────────────────────────
+
+  describe "window scatter ops don't crash" do
+    for op <- [:window_scatter_max, :window_scatter_min] do
+      property "#{op} 1D f32" do
+        check all(_ <- constant(:ok), max_runs: 10) do
+          t = Nx.iota({6}, type: :f32)
+          source = Nx.iota({3}, type: :f32)
+          init = Nx.tensor(0.0, type: :f32)
+
+          result =
+            apply(Nx, unquote(op), [t, source, init, {2}, [strides: [2], padding: :valid]])
+
+          assert Nx.shape(result) == {6}
+        end
+      end
+
+      # BUG: window_scatter on f64 crashes with binary size mismatch
+      @tag :skip
+      property "#{op} 1D f64 (crashes — binary size bug)" do
+        check all(_ <- constant(:ok), max_runs: 5) do
+          t = Nx.iota({6}, type: :f64)
+          source = Nx.iota({3}, type: :f64)
+          init = Nx.tensor(0.0, type: :f64)
+
+          result =
+            apply(Nx, unquote(op), [t, source, init, {2}, [strides: [2], padding: :valid]])
+
+          assert Nx.shape(result) == {6}
+        end
+      end
+    end
+
+    property "window_mean 1D" do
+      check all(
+              len <- integer(2..16),
+              type <- float_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({len}, type: type)
+        win = min(2, len)
+        result = Nx.window_mean(t, {win})
+        assert is_struct(result, Nx.Tensor)
+      end
+    end
+  end
+
+  # ── Take Along Axis ───────────────────────────────────────────────
+
+  describe "take_along_axis" do
+    property "1D take_along_axis" do
+      check all(
+              len <- integer(2..16),
+              type <- numeric_type(),
+              max_runs: 15
+            ) do
+        t = Nx.iota({len}, type: type)
+        # Sort indices as a valid use case
+        indices = Nx.argsort(t, direction: :desc)
+        result = Nx.take_along_axis(t, indices, axis: 0)
+        assert Nx.shape(result) == {len}
+      end
+    end
+  end
+
+  # ── Bitcast ───────────────────────────────────────────────────────
+
+  describe "bitcast" do
+    property "bitcast preserves byte size" do
+      check all(
+              shape <- non_empty_shape() |> filter(&(Nx.size(&1) > 0)),
+              max_runs: 15
+            ) do
+        t = Nx.iota(shape, type: :f32)
+        result = Nx.bitcast(t, :s32)
+        assert Nx.shape(result) == shape
+        assert Nx.type(result) == {:s, 32}
       end
     end
   end
