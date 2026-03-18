@@ -400,4 +400,223 @@ defmodule Nx.FuzzGradTest do
       end
     end
   end
+
+  # ── Trig inverse gradients ────────────────────────────────────────
+
+  describe "trig inverse gradients" do
+    property "grad of sum(asin(x))" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n, min: -0.9, max: 0.9)
+        check_grad(fn x -> Nx.sum(Nx.asin(x)) end, x)
+      end
+    end
+
+    property "grad of sum(acos(x))" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n, min: -0.9, max: 0.9)
+        check_grad(fn x -> Nx.sum(Nx.acos(x)) end, x)
+      end
+    end
+
+    property "grad of sum(atan(x))" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n)
+        check_grad(fn x -> Nx.sum(Nx.atan(x)) end, x)
+      end
+    end
+
+    property "grad of sum(atan2(x, y)) wrt x" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n, min: 0.5, max: 3.0)
+        y = random_input(n, min: 0.5, max: 3.0)
+        check_grad(fn x -> Nx.sum(Nx.atan2(x, y)) end, x)
+      end
+    end
+
+    property "grad of sum(asinh(x))" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n, min: -2.0, max: 2.0)
+        check_grad(fn x -> Nx.sum(Nx.asinh(x)) end, x)
+      end
+    end
+
+    property "grad of sum(acosh(x))" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n, min: 1.1, max: 5.0)
+        check_grad(fn x -> Nx.sum(Nx.acosh(x)) end, x)
+      end
+    end
+
+    property "grad of sum(atanh(x))" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n, min: -0.9, max: 0.9)
+        check_grad(fn x -> Nx.sum(Nx.atanh(x)) end, x)
+      end
+    end
+  end
+
+  # ── Window op gradients ───────────────────────────────────────────
+
+  describe "window op gradients" do
+    property "grad of sum(window_sum(x, {2}))" do
+      check all(n <- integer(3..8), max_runs: 8) do
+        x = random_input(n)
+        check_grad(fn x -> Nx.sum(Nx.window_sum(x, {2})) end, x)
+      end
+    end
+
+    property "grad of sum(window_max(x, {2}))" do
+      check all(n <- integer(3..8), max_runs: 8) do
+        # Use distinct values so max has clear winner
+        x = random_input(n)
+        check_grad(fn x -> Nx.sum(Nx.window_max(x, {2})) end, x, atol: 0.1, rtol: 0.1)
+      end
+    end
+
+    property "grad of sum(window_min(x, {2}))" do
+      check all(n <- integer(3..8), max_runs: 8) do
+        x = random_input(n)
+        check_grad(fn x -> Nx.sum(Nx.window_min(x, {2})) end, x, atol: 0.1, rtol: 0.1)
+      end
+    end
+  end
+
+  # ── Gather/take gradients ─────────────────────────────────────────
+
+  describe "gather/take gradients" do
+    test "grad of sum(take(x, indices))" do
+      x = random_input(5)
+      check_grad(fn x -> Nx.sum(Nx.take(x, Nx.tensor([0, 2, 4]))) end, x)
+    end
+
+    test "grad of sum(gather(x, indices))" do
+      x = random_input(5)
+      check_grad(fn x -> Nx.sum(Nx.gather(x, Nx.tensor([[0], [2], [4]]))) end, x)
+    end
+  end
+
+  # ── Clip and select gradients ─────────────────────────────────────
+
+  describe "clip and select gradients" do
+    property "grad of sum(clip(x, 0, 1)) in passthrough region" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        # All values in passthrough region [0.1, 0.9]
+        x = random_input(n, min: 0.1, max: 0.9)
+        check_grad(fn x -> Nx.sum(Nx.clip(x, 0, 1)) end, x)
+      end
+    end
+
+    property "grad of sum(select(pred, x, 0))" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n, min: 0.5, max: 3.0)
+        pred = Nx.tensor(List.duplicate(1, n), type: :u8)
+        check_grad(fn x -> Nx.sum(Nx.select(pred, x, 0)) end, x)
+      end
+    end
+  end
+
+  # ── Gradient wrt both inputs ──────────────────────────────────────
+
+  describe "gradient wrt second input" do
+    property "grad of sum(x + y) wrt y" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n)
+        y = random_input(n)
+        check_grad(fn y -> Nx.sum(Nx.add(x, y)) end, y)
+      end
+    end
+
+    property "grad of sum(x * y) wrt y" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n)
+        y = random_input(n)
+        check_grad(fn y -> Nx.sum(Nx.multiply(x, y)) end, y)
+      end
+    end
+
+    property "grad of sum(x / y) wrt y" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n)
+        y = random_input(n, min: 0.5, max: 5.0)
+        check_grad(fn y -> Nx.sum(Nx.divide(x, y)) end, y)
+      end
+    end
+
+    property "grad of sum(x^y) wrt y" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n, min: 0.5, max: 3.0)
+        y = random_input(n, min: 0.5, max: 2.0)
+        check_grad(fn y -> Nx.sum(Nx.pow(x, y)) end, y)
+      end
+    end
+
+    property "grad of dot(x, y) wrt y" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n)
+        y = random_input(n)
+        check_grad(fn y -> Nx.dot(x, y) end, y)
+      end
+    end
+
+    property "grad of sum(atan2(x, y)) wrt y" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n, min: 0.5, max: 3.0)
+        y = random_input(n, min: 0.5, max: 3.0)
+        check_grad(fn y -> Nx.sum(Nx.atan2(x, y)) end, y)
+      end
+    end
+  end
+
+  # ── Gradient through as_type ──────────────────────────────────────
+
+  describe "gradient through as_type" do
+    property "grad flows through as_type f64->f32" do
+      check all(n <- integer(1..6), max_runs: 8) do
+        x = random_input(n)
+        check_grad(fn x -> Nx.sum(Nx.as_type(Nx.sin(x), :f32)) end, x)
+      end
+    end
+  end
+
+  # ── Vectorized gradient verification ──────────────────────────────
+
+  describe "vectorized gradient matches per-element" do
+    property "vectorized grad of sum(x^2) matches non-vectorized" do
+      check all(
+              batch <- integer(2..4),
+              n <- integer(2..6),
+              max_runs: 8
+            ) do
+        # Build per-row reference gradients
+        row_data =
+          for _ <- 1..batch do
+            random_input(n, min: -2.0, max: 2.0)
+          end
+
+        ref_grads =
+          Enum.map(row_data, fn x_row ->
+            Nx.Defn.grad(x_row, fn x -> Nx.sum(Nx.pow(x, 2)) end)
+          end)
+
+        # Build vectorized version
+        x_vec = Nx.stack(row_data) |> Nx.vectorize(:batch)
+        vec_grad = Nx.Defn.grad(x_vec, fn x -> Nx.sum(Nx.pow(x, 2)) end)
+        devec_grad = Nx.devectorize(vec_grad, keep_names: false)
+
+        # Compare each batch element
+        Enum.with_index(ref_grads, fn expected, i ->
+          actual =
+            Nx.slice_along_axis(devec_grad, i, 1, axis: 0) |> Nx.squeeze(axes: [0])
+
+          diff =
+            Nx.subtract(actual, expected)
+            |> Nx.abs()
+            |> Nx.reduce_max()
+            |> Nx.to_number()
+
+          assert diff < 0.01
+        end)
+      end
+    end
+  end
 end
