@@ -479,6 +479,53 @@ defmodule Nx.FuzzGradTest do
         check_grad(fn x -> Nx.sum(Nx.window_min(x, {2})) end, x, atol: 0.1, rtol: 0.1)
       end
     end
+
+    property "grad of sum(window_sum(x, {3}, strides: [2]))" do
+      check all(n <- integer(5..12), max_runs: 8) do
+        x = random_input(n)
+        check_grad(fn x -> Nx.sum(Nx.window_sum(x, {3}, strides: [2])) end, x)
+      end
+    end
+
+    property "grad of sum(window_sum(x, {2}, padding: :same))" do
+      check all(n <- integer(3..8), max_runs: 8) do
+        x = random_input(n)
+        check_grad(fn x -> Nx.sum(Nx.window_sum(x, {2}, padding: :same)) end, x)
+      end
+    end
+
+    property "grad of sum(window_max(x, {3}, strides: [2]))" do
+      check all(n <- integer(5..12), max_runs: 8) do
+        x = random_input(n)
+
+        check_grad(fn x -> Nx.sum(Nx.window_max(x, {3}, strides: [2])) end, x,
+          atol: 0.1,
+          rtol: 0.1
+        )
+      end
+    end
+
+    property "grad of 2D window_sum" do
+      check all(
+              rows <- integer(3..6),
+              cols <- integer(3..6),
+              max_runs: 5
+            ) do
+        x = random_input(rows * cols) |> Nx.reshape({rows, cols})
+        check_grad(fn x -> Nx.sum(Nx.window_sum(x, {2, 2})) end, x)
+      end
+    end
+
+    property "grad of 2D window_sum with strides" do
+      check all(
+              rows <- integer(4..8),
+              cols <- integer(4..8),
+              max_runs: 5
+            ) do
+        x = random_input(rows * cols) |> Nx.reshape({rows, cols})
+        check_grad(fn x -> Nx.sum(Nx.window_sum(x, {2, 2}, strides: [2, 2])) end, x)
+      end
+    end
   end
 
   # ── Gather/take gradients ─────────────────────────────────────────
