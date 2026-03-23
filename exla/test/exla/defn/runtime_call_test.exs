@@ -208,4 +208,40 @@ defmodule EXLA.Defn.RuntimeCallTest do
     assert_equal(result.y, y)
     assert_receive {:container_fun, ^ref}
   end
+
+  # Bug: runtime_call with tuple input inside while silently zeros
+  # out captured tensors. Regular defn code raises "expressions come
+  # from different contexts" for captured tensors inside while, but
+  # runtime_call bypasses this check and passes 0 instead.
+
+  def sum_pair_callback({a, b}, _opts), do: Nx.add(a, b)
+
+  defn runtime_call_tuple_captured_in_while(x, y) do
+    {result, _} =
+      while {x, count = Nx.tensor(0)}, Nx.less(count, 1) do
+        summed = Nx.runtime_call(x, {x, y}, &sum_pair_callback/2)
+        {summed, count + 1}
+      end
+
+    result
+  end
+
+  @tag :capture_log
+  test "runtime_call with tuple input zeroes captured tensor inside while" do
+    # y is captured (not in while state). On EXLA this crashes with
+    # shape_mismatch. On the evaluator, the callback receives
+    # {x=1.0, y=0} instead of {x=1.0, y=10.0}, returning 1.0
+    # instead of 11.0.
+    #
+    # When fixed, change to:
+    #   result = runtime_call_tuple_captured_in_while(Nx.tensor(1.0), Nx.tensor(10.0))
+    #   assert_equal(result, Nx.tensor(11.0))
+    {pid, ref} =
+      spawn_monitor(fn ->
+        runtime_call_tuple_captured_in_while(Nx.tensor(1.0), Nx.tensor(10.0))
+      end)
+
+    assert_receive {:DOWN, ^ref, :process, ^pid, reason}
+    assert reason != :normal
+  end
 end
