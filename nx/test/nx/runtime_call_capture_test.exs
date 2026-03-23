@@ -92,4 +92,35 @@ defmodule Nx.WhileTupleCaptureTest do
     result = Nx.to_number(both_in_state(Nx.tensor(1.0), Nx.tensor(42.0)))
     assert result == 42.0
   end
+
+  # ── Scoping: where else does capture work correctly? ─────────────
+
+  defn capture_in_condition(x, limit) do
+    {result, _} =
+      while {x, count = Nx.tensor(0)}, Nx.less(count, limit) do
+        {Nx.add(x, 1), count + 1}
+      end
+
+    result
+  end
+
+  test "captured tensor in while condition correctly raises" do
+    assert_raise RuntimeError, ~r/different contexts/, fn ->
+      capture_in_condition(Nx.tensor(0.0), Nx.tensor(3))
+    end
+  end
+
+  defn cond_capture(x, y) do
+    if Nx.greater(x, 0) do
+      {x, y}
+    else
+      {Nx.negate(x), y}
+    end
+  end
+
+  test "captured tensor in cond branches works correctly" do
+    # Cond does NOT have this bug — captured tensors are preserved
+    {_a, b} = cond_capture(Nx.tensor(5.0), Nx.tensor(42.0))
+    assert Nx.to_number(b) == 42.0
+  end
 end
