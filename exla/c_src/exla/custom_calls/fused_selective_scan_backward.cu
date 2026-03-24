@@ -56,16 +56,15 @@
 
 constexpr float DT_MIN = 0.001f;
 constexpr float DT_MAX = 0.1f;
-// MAX_SEQ_LEN controls per-thread local memory: MAX_SEQ_LEN * MAX_STATE * 4 bytes.
-// At 1024*32 = 128KB/thread, GPU local memory (DRAM-backed) thrashes L2 cache,
-// causing 100-500x slowdown at small hidden dims. 128*32 = 16KB/thread is fine.
-// Sequences > MAX_SEQ_LEN fall back to Elixir implementation.
-#define MAX_SEQ_LEN 128
 #define MAX_STATE 32
 
 // ============================================================================
 // Kernel
 // ============================================================================
+
+#ifdef EXLA_FFI
+namespace {  // anonymous namespace — internal linkage per compilation unit
+#endif
 
 __global__ void fused_selective_scan_backward_kernel(
     const io_type* __restrict__ x,           // [B, T, H]
@@ -78,13 +77,13 @@ __global__ void fused_selective_scan_backward_kernel(
     io_type* __restrict__ grad_dt,           // [B, T, H]
     float* __restrict__ grad_B,            // [B, T, S] — atomicAdd target (stays float for atomicAdd)
     float* __restrict__ grad_C,            // [B, T, S] — atomicAdd target (stays float for atomicAdd)
+    float* __restrict__ workspace,         // [B, H, T, S] — h_prev storage (global memory)
     int batch, int seq_len, int hidden, int state_size
 ) {
     int b = blockIdx.x;
     int h = threadIdx.x + blockIdx.y * blockDim.x;
 
     if (b >= batch || h >= hidden) return;
-    if (seq_len > MAX_SEQ_LEN || state_size > MAX_STATE) return;
 
     // Load A diagonal for this hidden dim
     float A_diag[MAX_STATE];
@@ -95,10 +94,10 @@ __global__ void fused_selective_scan_backward_kernel(
     // ========================================
     // Pass 1: Forward — recompute and store h_state per timestep
     // ========================================
-    // We store h_state[t][s] in local arrays for the backward pass
-    // h_prev_store[t][s] = h_state before update at timestep t
+    // h_prev values stored in global memory workspace[b][h][t][s]
     float h_state[MAX_STATE];
-    float h_prev_store[MAX_SEQ_LEN][MAX_STATE];
+    int ws_stride = seq_len * state_size;
+    float* my_h_prev = workspace + (b * hidden + h) * ws_stride;
 
     for (int s = 0; s < state_size && s < MAX_STATE; s++) {
         h_state[s] = 0.0f;
@@ -113,7 +112,7 @@ __global__ void fused_selective_scan_backward_kernel(
         int bc_idx = b * seq_len * state_size + t * state_size;
 
         for (int s = 0; s < state_size && s < MAX_STATE; s++) {
-            h_prev_store[t][s] = h_state[s];
+            my_h_prev[t * state_size + s] = h_state[s];
 
             float A_bar = expf(dt_t * A_diag[s]);
             float B_bar = dt_t * IO_LOAD(B, bc_idx + s);
@@ -144,7 +143,7 @@ __global__ void fused_selective_scan_backward_kernel(
         for (int s = 0; s < state_size && s < MAX_STATE; s++) {
             float C_s = IO_LOAD(C, bc_idx + s);
             float B_s = IO_LOAD(B, bc_idx + s);
-            float h_prev_s = h_prev_store[t][s];
+            float h_prev_s = my_h_prev[t * state_size + s];
             float A_bar = expf(dt_t * A_diag[s]);
 
             // h_after_update[s] = A_bar * h_prev_s + dt_t * B_s * x_t
@@ -185,6 +184,10 @@ __global__ void fused_selective_scan_backward_kernel(
 // Standalone launch wrapper (C-linkage for NIF / dlopen)
 // ============================================================================
 
+#ifdef EXLA_FFI
+}  // anonymous namespace
+#endif
+
 #ifndef EXLA_FFI
 
 extern "C" {
@@ -212,6 +215,11 @@ int fused_selective_scan_backward_launch(
     cudaMemsetAsync(grad_B, 0, bts * sizeof(float), stream);
     cudaMemsetAsync(grad_C, 0, bts * sizeof(float), stream);
 
+    // Allocate workspace for h_prev storage: [B, H, T, S]
+    size_t ws_size = (size_t)batch * hidden * seq_len * state_size * sizeof(float);
+    float* workspace;
+    cudaMallocAsync(&workspace, ws_size, stream);
+
     int threads_per_block = (hidden < 256) ? hidden : 256;
     int blocks_y = (hidden + threads_per_block - 1) / threads_per_block;
     dim3 grid(batch, blocks_y);
@@ -220,8 +228,11 @@ int fused_selective_scan_backward_launch(
     fused_selective_scan_backward_kernel<<<grid, block, 0, stream>>>(
         x, dt, A, B, C, grad_output,
         grad_x, grad_dt, grad_B, grad_C,
+        workspace,
         batch, seq_len, hidden, state_size
     );
+
+    cudaFreeAsync(workspace, stream);
 
     return (int)cudaGetLastError();
 }
@@ -239,6 +250,8 @@ int fused_selective_scan_backward_launch(
 #include "xla/ffi/api/ffi.h"
 
 namespace ffi = xla::ffi;
+
+namespace {  // anonymous namespace — prevents symbol collision between f32/bf16
 
 ffi::Error fused_selective_scan_backward_ffi_impl(
     cudaStream_t stream,
@@ -269,6 +282,11 @@ ffi::Error fused_selective_scan_backward_ffi_impl(
     cudaMemsetAsync(reinterpret_cast<float*>(grad_C->untyped_data()), 0,
                     bts * sizeof(float), stream);
 
+    // Allocate workspace for h_prev storage: [B, H, T, S]
+    size_t ws_size = (size_t)batch * hidden * seq_len * state_size * sizeof(float);
+    float* workspace;
+    cudaMallocAsync(&workspace, ws_size, stream);
+
     int threads_per_block = (hidden < 256) ? hidden : 256;
     int blocks_y = (hidden + threads_per_block - 1) / threads_per_block;
     dim3 grid(batch, blocks_y);
@@ -285,8 +303,11 @@ ffi::Error fused_selective_scan_backward_ffi_impl(
         reinterpret_cast<io_type*>(grad_dt->untyped_data()),
         reinterpret_cast<float*>(grad_B->untyped_data()),
         reinterpret_cast<float*>(grad_C->untyped_data()),
+        workspace,
         batch, seq_len, hidden, state_size
     );
+
+    cudaFreeAsync(workspace, stream);
 
     cudaError_t err = cudaGetLastError();
     if (err != cudaSuccess) {
@@ -296,8 +317,10 @@ ffi::Error fused_selective_scan_backward_ffi_impl(
     return ffi::Error::Success();
 }
 
+}  // anonymous namespace
+
 XLA_FFI_DEFINE_HANDLER_SYMBOL(
-    fused_selective_scan_backward, fused_selective_scan_backward_ffi_impl,
+    HANDLER_SYMBOL(fused_selective_scan_backward), fused_selective_scan_backward_ffi_impl,
     ffi::Ffi::Bind()
         .Ctx<ffi::PlatformStream<cudaStream_t>>()
         .Arg<ffi::Buffer<FFI_IO_TYPE>>()   // x
@@ -313,6 +336,6 @@ XLA_FFI_DEFINE_HANDLER_SYMBOL(
 );
 
 XLA_FFI_REGISTER_HANDLER(XLA_FFI_GetApi(),
-    "exla_fused_selective_scan_backward_" PRECISION_SUFFIX, "CUDA", fused_selective_scan_backward);
+    "exla_fused_selective_scan_backward_" PRECISION_SUFFIX, "CUDA", HANDLER_SYMBOL(fused_selective_scan_backward));
 
 #endif  // EXLA_FFI
