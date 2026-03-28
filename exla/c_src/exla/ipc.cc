@@ -8,7 +8,7 @@
 
 // Function to create or open a shared memory object and set its size
 int get_ipc_handle(const char* memname, size_t memsize) {
-  int fd = shm_open(memname, O_CREAT | O_RDWR, 0666);
+  int fd = shm_open(memname, O_CREAT | O_RDWR, 0600);
   if (fd == -1) {
     return -1;
   }
