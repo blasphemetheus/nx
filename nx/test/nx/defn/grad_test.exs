@@ -4943,15 +4943,18 @@ defmodule Nx.Defn.GradTest do
       assert grad == Nx.cos(x)
     end
 
-    test "raises on heterogenous vectorization combinations" do
-      x_vec = Nx.tensor([[1, 2, 3], [4, 5, 6]]) |> Nx.vectorize(:x)
-      y_vec = Nx.tensor([10, 20]) |> Nx.vectorize(:y)
+    # Option A: heterogenous vectorized inputs are aligned at the boundary via
+    # broadcast_vectors, so each gradient carries the union of vec axes.
+    test "supports heterogenous vectorization combinations" do
+      x_vec = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]]) |> Nx.vectorize(:x)
+      y_vec = Nx.tensor([10.0, 20.0]) |> Nx.vectorize(:y)
 
-      assert_raise ArgumentError,
-                   ~r/grad does not support inputs with different vectorized axis names/,
-                   fn ->
-                     Nx.Defn.grad({x_vec, y_vec}, fn {a, b} -> Nx.multiply(a, b) end)
-                   end
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {a, b} -> Nx.multiply(a, b) end)
+
+      union = [x: 2, y: 2]
+      assert grad_x.vectorized_axes == union
+      assert grad_y.vectorized_axes == union
     end
 
     test "supports same-axis vectorization combinations" do
@@ -5150,22 +5153,24 @@ defmodule Nx.Defn.GradTest do
       assert grad == Nx.tensor([[1], [1], [1]]) |> Nx.vectorize(x: 3)
     end
 
-    @tag :skip
+    # Option A: under output-shape semantics, both grads carry the union of
+    # vec axes (matches forward pass which broadcast_vectors implicitly).
     test "mixed vectorized axes with add" do
       x_vec = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:x)
       y_vec = Nx.tensor([10.0, 20.0]) |> Nx.vectorize(:y)
       {grad_x, grad_y} = Nx.Defn.grad({x_vec, y_vec}, fn {a, b} -> Nx.add(a, b) end)
-      assert grad_x.vectorized_axes == x_vec.vectorized_axes
-      assert grad_y.vectorized_axes == y_vec.vectorized_axes
+      union = [x: 2, y: 2]
+      assert grad_x.vectorized_axes == union
+      assert grad_y.vectorized_axes == union
     end
 
-    @tag :skip
     test "mixed vectorized axes with multiply" do
       x_vec = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:x)
       y_vec = Nx.tensor([10.0, 20.0]) |> Nx.vectorize(:y)
       {grad_x, grad_y} = Nx.Defn.grad({x_vec, y_vec}, fn {a, b} -> Nx.multiply(a, b) end)
-      assert grad_x.vectorized_axes == x_vec.vectorized_axes
-      assert grad_y.vectorized_axes == y_vec.vectorized_axes
+      union = [x: 2, y: 2]
+      assert grad_x.vectorized_axes == union
+      assert grad_y.vectorized_axes == union
     end
 
     @tag :skip
@@ -5185,7 +5190,6 @@ defmodule Nx.Defn.GradTest do
       assert grad_x.vectorized_axes == x_vec.vectorized_axes
     end
 
-    @tag :skip
     test "three different vectorized axes" do
       x_vec = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:x)
       y_vec = Nx.tensor([10.0, 20.0]) |> Nx.vectorize(:y)
@@ -5196,12 +5200,12 @@ defmodule Nx.Defn.GradTest do
           Nx.add(Nx.multiply(a, b), c)
         end)
 
-      assert grad_x.vectorized_axes == x_vec.vectorized_axes
-      assert grad_y.vectorized_axes == y_vec.vectorized_axes
-      assert grad_z.vectorized_axes == z_vec.vectorized_axes
+      union = [x: 2, y: 2, z: 1]
+      assert grad_x.vectorized_axes == union
+      assert grad_y.vectorized_axes == union
+      assert grad_z.vectorized_axes == union
     end
 
-    @tag :skip
     test "two vectorized inputs through sin(add)" do
       x_vec = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:x)
       y_vec = Nx.tensor([0.5, 1.0]) |> Nx.vectorize(:y)
@@ -5209,8 +5213,9 @@ defmodule Nx.Defn.GradTest do
       {grad_x, grad_y} =
         Nx.Defn.grad({x_vec, y_vec}, fn {a, b} -> Nx.sin(Nx.add(a, b)) end)
 
-      assert grad_x.vectorized_axes == x_vec.vectorized_axes
-      assert grad_y.vectorized_axes == y_vec.vectorized_axes
+      union = [x: 2, y: 2]
+      assert grad_x.vectorized_axes == union
+      assert grad_y.vectorized_axes == union
     end
 
     # ── check_vectorized_grad tests (from vectorized_grad_test) ──────

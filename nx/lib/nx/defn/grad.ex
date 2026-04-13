@@ -5,6 +5,8 @@ defmodule Nx.Defn.Grad do
   alias Nx.Tensor, as: T
 
   def transform(to_grad, fun, transform) do
+    to_grad = apply_boundary_broadcast(to_grad)
+
     {to_grad, ids} =
       Composite.traverse(to_grad, %{}, fn to_grad, ids ->
         to_grad =
@@ -28,7 +30,6 @@ defmodule Nx.Defn.Grad do
 
     output_vectorized_axes = transformed_expr.vectorized_axes
     batch_count = length(output_vectorized_axes)
-    validate_vectorized_grad!(to_grad)
     to_grad_ids = {to_grad, ids, batch_count}
 
     # Seed the backward pass in devectorized space.
@@ -52,23 +53,20 @@ defmodule Nx.Defn.Grad do
     Expr.constant(%{t | names: names, type: {:f, 32}}, float, [])
   end
 
-  defp validate_vectorized_grad!(to_grad) do
-    vec_axes_sets =
-      [to_grad]
-      |> Composite.flatten_list()
-      |> Enum.map(&Keyword.keys(&1.vectorized_axes))
-      |> Enum.reject(&(&1 == []))
-      |> Enum.uniq()
+  # Option A — output-shape semantics for heterogenous vectorized inputs.
+  # When `to_grad` inputs carry different vectorized axes (e.g. x has [foo: 2],
+  # y has [bar: 3]), align them to the union of axes via `broadcast_vectors`.
+  # Each gradient then carries all output vec axes; the forward pass would have
+  # done the same alignment implicitly, so this matches "grad mirrors output".
+  defp apply_boundary_broadcast(to_grad) do
+    flat = Composite.flatten_list([to_grad])
 
-    case vec_axes_sets do
-      [_, _ | _] ->
-        raise ArgumentError,
-              "grad does not support inputs with different vectorized axis names. " <>
-                "Found: #{inspect(vec_axes_sets)}. " <>
-                "All vectorized inputs must share the same axis names"
-
-      _ ->
-        :ok
+    if length(flat) > 1 do
+      broadcast = Nx.broadcast_vectors(flat)
+      {result, []} = Composite.traverse(to_grad, broadcast, fn _, [h | t] -> {h, t} end)
+      result
+    else
+      to_grad
     end
   end
 
