@@ -308,7 +308,7 @@ defmodule Nx.Defn.Grad do
     case nodes do
       %{^id => _} ->
         {nodes, grads} = traverse_parents(id, to_grad_ids, parents, {nodes, grads})
-        {{ans, vectorized_names}, nodes} = Map.pop!(nodes, id)
+        {{ans, _vectorized_names}, nodes} = Map.pop!(nodes, id)
         %T{data: %Expr{op: op, args: args}} = ans
         {gs, grads} = Map.pop(grads, id)
 
@@ -348,12 +348,6 @@ defmodule Nx.Defn.Grad do
          parent_names
        ) do
     Keyword.keys(vectorized_axes) ++ Enum.filter(names, &(&1 in parent_names))
-  end
-
-  defp revectorize_node(node, vectorized_names) do
-    vectorized_names = compute_arg_vectorized_names(node, vectorized_names)
-
-    Nx.vectorize(node, vectorized_names)
   end
 
   defp update_grads(:elem, [%{type: {:tuple, size}} = tuple, pos], _ans, g, _to_grad_ids, grads) do
