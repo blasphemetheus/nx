@@ -5170,6 +5170,43 @@ defmodule Nx.Defn.GradTest do
       assert grad_y.vectorized_axes == y_vec.vectorized_axes
     end
 
+    # Demonstrates the semantic question for heterogenous vec axes.
+    # f(x, y) = sum(x * y), x: vec[foo:2], y: vec[bar:2]
+    #
+    # In devectorized space the output is shape {2, 2} with values:
+    #   [foo:0, bar:0] = 2*3 = 6     [foo:0, bar:1] = 2*4 = 8
+    #   [foo:1, bar:0] = 5*3 = 15    [foo:1, bar:1] = 5*4 = 20
+    #
+    # The total derivative of the SUM of all output instances:
+    #   d/dx[i] sum_{i,j}(x[i]*y[j]) = sum_j(y[j]) = 7    (independent of i)
+    #   d/dy[j] sum_{i,j}(x[i]*y[j]) = sum_i(x[i]) = 7    (independent of j)
+    #
+    # This matches how Nx grad already unbroadcasts non-vec broadcasting dims
+    # via `unbroadcast`. It is also the only interpretation that's compatible
+    # with using grad for gradient-based optimization (where the grad of a
+    # scalar loss is what optimizers consume).
+    #
+    # An alternative "slice bar:0" interpretation (proposed on issue #1533)
+    # would give:
+    #   grad_x = [3.0, 3.0]   (just y[0], discarding y[1])
+    #   grad_y = [2.0, 2.0]   (just x[0], discarding x[1])
+    # That answer is wrong for any optimizer use case.
+    test "heterogenous vec grad is total derivative, not arbitrary slice" do
+      x_vec = Nx.tensor([2.0, 5.0]) |> Nx.vectorize(:foo)
+      y_vec = Nx.tensor([3.0, 4.0]) |> Nx.vectorize(:bar)
+
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {x, y} ->
+          Nx.sum(Nx.multiply(x, y))
+        end)
+
+      expected_grad_x = Nx.tensor([7.0, 7.0]) |> Nx.vectorize(:foo)
+      expected_grad_y = Nx.tensor([7.0, 7.0]) |> Nx.vectorize(:bar)
+
+      assert grad_x == expected_grad_x
+      assert grad_y == expected_grad_y
+    end
+
     @tag :skip
     test "dot with mixed vectorized axes" do
       x_vec = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:x)
