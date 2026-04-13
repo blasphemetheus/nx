@@ -5,6 +5,8 @@ defmodule Nx.Defn.Grad do
   alias Nx.Tensor, as: T
 
   def transform(to_grad, fun, transform) do
+    {to_grad, original_axes_list} = apply_boundary_broadcast(to_grad)
+
     {to_grad, ids} =
       Composite.traverse(to_grad, %{}, fn to_grad, ids ->
         to_grad =
@@ -28,7 +30,6 @@ defmodule Nx.Defn.Grad do
 
     output_vectorized_axes = transformed_expr.vectorized_axes
     batch_count = length(output_vectorized_axes)
-    validate_vectorized_grad!(to_grad)
     to_grad_ids = {to_grad, ids, batch_count}
 
     # Seed the backward pass in devectorized space.
@@ -44,6 +45,8 @@ defmodule Nx.Defn.Grad do
         end
       )
 
+    graded = collapse_to_original_axes(graded, original_axes_list)
+
     {expr, graded}
   end
 
@@ -52,23 +55,58 @@ defmodule Nx.Defn.Grad do
     Expr.constant(%{t | names: names, type: {:f, 32}}, float, [])
   end
 
-  defp validate_vectorized_grad!(to_grad) do
-    vec_axes_sets =
-      [to_grad]
-      |> Composite.flatten_list()
-      |> Enum.map(&Keyword.keys(&1.vectorized_axes))
-      |> Enum.reject(&(&1 == []))
-      |> Enum.uniq()
+  # Option B — input-shape semantics for heterogenous vectorized inputs.
+  #
+  # `apply_boundary_broadcast` aligns inputs to the union of vec axes (so the
+  # forward pass and grad recursion see consistent shapes) but also returns
+  # each leaf's *original* vec axes. After grad runs, `collapse_to_original_axes`
+  # sums out any vec axes a given input did not originally have. The result is
+  # that each gradient mirrors its corresponding input's vec shape — analogous
+  # to how Nx grad already unbroadcasts non-vec broadcast dims.
+  defp apply_boundary_broadcast(to_grad) do
+    flat = Composite.flatten_list([to_grad])
+    original_axes_list = Enum.map(flat, & &1.vectorized_axes)
 
-    case vec_axes_sets do
-      [_, _ | _] ->
-        raise ArgumentError,
-              "grad does not support inputs with different vectorized axis names. " <>
-                "Found: #{inspect(vec_axes_sets)}. " <>
-                "All vectorized inputs must share the same axis names"
+    if length(flat) > 1 do
+      broadcast = Nx.broadcast_vectors(flat)
+      {result, []} = Composite.traverse(to_grad, broadcast, fn _, [h | t] -> {h, t} end)
+      {result, original_axes_list}
+    else
+      {to_grad, original_axes_list}
+    end
+  end
 
-      _ ->
-        :ok
+  defp collapse_to_original_axes(graded, original_axes_list) do
+    {result, []} =
+      Composite.traverse(graded, original_axes_list, fn grad, [orig | rest] ->
+        {collapse_foreign_vec_axes(grad, orig), rest}
+      end)
+
+    result
+  end
+
+  # Only collapse for inputs that originally had vec axes. Non-vectorized inputs
+  # are still allowed to inherit output vec axes (preserves Nx's pre-existing
+  # behavior where a scalar input can yield a vec-shaped grad).
+  defp collapse_foreign_vec_axes(grad, []), do: grad
+
+  defp collapse_foreign_vec_axes(grad, original_axes) do
+    original_keys = Keyword.keys(original_axes)
+    current_axes = grad.vectorized_axes
+
+    foreign_positions =
+      current_axes
+      |> Enum.with_index()
+      |> Enum.filter(fn {{name, _}, _} -> name not in original_keys end)
+      |> Enum.map(fn {_, idx} -> idx end)
+
+    if foreign_positions == [] do
+      grad
+    else
+      devec = Nx.devectorize(grad, keep_names: false)
+      summed = Nx.sum(devec, axes: foreign_positions)
+      remaining = Enum.filter(current_axes, fn {n, _} -> n in original_keys end)
+      Nx.vectorize(summed, remaining)
     end
   end
 
