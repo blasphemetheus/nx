@@ -5177,6 +5177,102 @@ defmodule Nx.Defn.GradTest do
       assert grad_y.vectorized_axes == union
     end
 
+    # ── Heterogenous-vec value tests (Option A: per-instance gradients) ───
+    #
+    # Under output-shape semantics every gradient in a heterogenous-axes
+    # `grad` call carries *all* output vec axes (the union, in
+    # broadcast_vectors-canonical order — the first input's axes first,
+    # then any new axes from later inputs). Each (foo:i, bar:j) element
+    # holds the per-instance partial derivative; nothing is collapsed.
+
+    # f(x, y) = sum(x * y), x: vec[foo:2], y: vec[bar:2]
+    #
+    # Per-instance partials:
+    #   grad_x[foo:i, bar:j] = d/dx[i] (x[i] * y[j]) = y[j]
+    #   grad_y[foo:i, bar:j] = d/dy[j] (x[i] * y[j]) = x[i]
+    test "heterogenous vec grad: multiply (per-instance partials)" do
+      x_vec = Nx.tensor([2.0, 5.0]) |> Nx.vectorize(:foo)
+      y_vec = Nx.tensor([3.0, 4.0]) |> Nx.vectorize(:bar)
+
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {x, y} ->
+          Nx.sum(Nx.multiply(x, y))
+        end)
+
+      assert grad_x ==
+               Nx.tensor([[3.0, 4.0], [3.0, 4.0]]) |> Nx.vectorize(foo: 2, bar: 2)
+
+      assert grad_y ==
+               Nx.tensor([[2.0, 2.0], [5.0, 5.0]]) |> Nx.vectorize(foo: 2, bar: 2)
+    end
+
+    # f(x, y) = sum(x + y), x: vec[foo:2], y: vec[bar:3]
+    #
+    # Per-instance partials are constant 1 everywhere — the gradient of
+    # x[i] + y[j] w.r.t. either input is 1.
+    test "heterogenous vec grad: add (constant per-instance partials)" do
+      x_vec = Nx.tensor([2.0, 5.0]) |> Nx.vectorize(:foo)
+      y_vec = Nx.tensor([3.0, 4.0, 6.0]) |> Nx.vectorize(:bar)
+
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {x, y} ->
+          Nx.sum(Nx.add(x, y))
+        end)
+
+      ones = Nx.tensor([[1.0, 1.0, 1.0], [1.0, 1.0, 1.0]])
+      assert grad_x == ones |> Nx.vectorize(foo: 2, bar: 3)
+      assert grad_y == ones |> Nx.vectorize(foo: 2, bar: 3)
+    end
+
+    # f(x, y) = sum(sin(x + y)), x: vec[foo:2], y: vec[bar:2]
+    #
+    # Per-instance partials:
+    #   grad_x[foo:i, bar:j] = d/dx[i] sin(x[i] + y[j]) = cos(x[i] + y[j])
+    #   grad_y[foo:i, bar:j] = d/dy[j] sin(x[i] + y[j]) = cos(x[i] + y[j])
+    # Same matrix for both inputs.
+    test "heterogenous vec grad: sin(add) (per-instance partials)" do
+      x_vec = Nx.tensor([0.5, 1.0]) |> Nx.vectorize(:foo)
+      y_vec = Nx.tensor([0.0, 0.3]) |> Nx.vectorize(:bar)
+
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {x, y} ->
+          Nx.sum(Nx.sin(Nx.add(x, y)))
+        end)
+
+      expected =
+        Nx.tensor([
+          [:math.cos(0.5), :math.cos(0.8)],
+          [:math.cos(1.0), :math.cos(1.3)]
+        ])
+
+      assert grad_x.vectorized_axes == [foo: 2, bar: 2]
+      assert grad_y.vectorized_axes == [foo: 2, bar: 2]
+
+      assert_all_close(Nx.devectorize(grad_x), expected, atol: 1.0e-6)
+      assert_all_close(Nx.devectorize(grad_y), expected, atol: 1.0e-6)
+    end
+
+    # f(x, y) = sum(x^2 * y), x: vec[foo:2], y: vec[bar:2]
+    #
+    # Per-instance partials:
+    #   grad_x[foo:i, bar:j] = d/dx[i] (x[i]^2 * y[j]) = 2 * x[i] * y[j]
+    #   grad_y[foo:i, bar:j] = d/dy[j] (x[i]^2 * y[j]) = x[i]^2
+    test "heterogenous vec grad: x^2 * y (asymmetric per-instance partials)" do
+      x_vec = Nx.tensor([2.0, 5.0]) |> Nx.vectorize(:foo)
+      y_vec = Nx.tensor([3.0, 4.0]) |> Nx.vectorize(:bar)
+
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {x, y} ->
+          Nx.sum(Nx.multiply(Nx.pow(x, 2), y))
+        end)
+
+      assert grad_x ==
+               Nx.tensor([[12.0, 16.0], [30.0, 40.0]]) |> Nx.vectorize(foo: 2, bar: 2)
+
+      assert grad_y ==
+               Nx.tensor([[4.0, 4.0], [25.0, 25.0]]) |> Nx.vectorize(foo: 2, bar: 2)
+    end
+
     # `unbroadcast` inside the dot gradient does not account for vectorized
     # axes on the operands, so the contracted form fails for any vectorized
     # input. Separate dot-gradient bug, tracked outside this PR.
