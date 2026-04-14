@@ -100,13 +100,39 @@ defmodule Nx.Defn.Grad do
       |> Enum.filter(fn {{name, _}, _} -> name not in original_keys end)
       |> Enum.map(fn {_, idx} -> idx end)
 
-    if foreign_positions == [] do
+    collapsed =
+      if foreign_positions == [] do
+        grad
+      else
+        devec = Nx.devectorize(grad, keep_names: false)
+        summed = Nx.sum(devec, axes: foreign_positions)
+        remaining = Enum.filter(current_axes, fn {n, _} -> n in original_keys end)
+        Nx.vectorize(summed, remaining)
+      end
+
+    # The remaining vec axes are in `broadcast_vectors`-canonical order, which
+    # may differ from the input's original order. Reorder so the gradient's
+    # vec axes match the input's exactly.
+    reorder_vec_axes(collapsed, original_axes)
+  end
+
+  defp reorder_vec_axes(grad, target_axes) do
+    if grad.vectorized_axes == target_axes do
       grad
     else
+      current_axes = grad.vectorized_axes
+      n_vec = length(current_axes)
+
+      current_to_idx =
+        current_axes
+        |> Enum.with_index()
+        |> Map.new(fn {{name, _}, idx} -> {name, idx} end)
+
+      vec_perm = Enum.map(target_axes, fn {name, _} -> Map.fetch!(current_to_idx, name) end)
       devec = Nx.devectorize(grad, keep_names: false)
-      summed = Nx.sum(devec, axes: foreign_positions)
-      remaining = Enum.filter(current_axes, fn {n, _} -> n in original_keys end)
-      Nx.vectorize(summed, remaining)
+      inner_axes = Enum.to_list(n_vec..(tuple_size(devec.shape) - 1)//1)
+      transposed = Nx.transpose(devec, axes: vec_perm ++ inner_axes)
+      Nx.vectorize(transposed, target_axes)
     end
   end
 

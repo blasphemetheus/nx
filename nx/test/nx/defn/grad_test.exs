@@ -5257,6 +5257,33 @@ defmodule Nx.Defn.GradTest do
       assert_all_close(Nx.devectorize(grad_y), expected_grad_y, atol: 1.0e-6)
     end
 
+    # When two heterogenous-axes inputs share vec axes in *different orders*,
+    # broadcast_vectors picks one canonical order for the forward graph; the
+    # collapse step has to reorder each grad's vec axes back to match its
+    # input's original order, otherwise grad_y.vectorized_axes != y.vectorized_axes.
+    test "heterogenous vec grad: same axes in different orders preserves input order" do
+      x_vec =
+        Nx.iota({2, 3}, type: :f32)
+        |> Nx.vectorize(:b)
+        |> Nx.vectorize(:a)
+
+      y_vec =
+        Nx.iota({3, 2}, type: :f32)
+        |> Nx.vectorize(:a)
+        |> Nx.vectorize(:b)
+
+      assert x_vec.vectorized_axes == [b: 2, a: 3]
+      assert y_vec.vectorized_axes == [a: 3, b: 2]
+
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {x, y} ->
+          Nx.sum(Nx.multiply(x, y))
+        end)
+
+      assert grad_x.vectorized_axes == x_vec.vectorized_axes
+      assert grad_y.vectorized_axes == y_vec.vectorized_axes
+    end
+
     # f(x, y) = sum(x^2 * y), x: vec[foo:2], y: vec[bar:2]
     #
     # d/dx[i] sum_{i,j}(x[i]^2 * y[j]) = 2 * x[i] * sum_j(y[j])
