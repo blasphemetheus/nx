@@ -5138,6 +5138,10 @@ defmodule Nx.Defn.GradTest do
 
     # ── Skipped edge cases ───────────────────────────────────────────
 
+    # Same axis name, different sizes (input has [x: 3], output has [x: 1]):
+    # they are conceptually different axes that share a name, but the grad
+    # boundary devectorization gets confused about which one to seed against.
+    # Tracked as a separate edge case bug, not addressed by this PR.
     @tag :skip
     test "edge case where the same name changes meaning raises clear error" do
       x = Nx.tensor([[1], [2], [3]]) |> Nx.vectorize(x: 3)
@@ -5173,6 +5177,9 @@ defmodule Nx.Defn.GradTest do
       assert grad_y.vectorized_axes == union
     end
 
+    # `unbroadcast` inside the dot gradient does not account for vectorized
+    # axes on the operands, so the contracted form fails for any vectorized
+    # input. Separate dot-gradient bug, tracked outside this PR.
     @tag :skip
     test "dot with mixed vectorized axes" do
       x_vec = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:x)
@@ -5181,6 +5188,8 @@ defmodule Nx.Defn.GradTest do
       assert grad_x.vectorized_axes == x_vec.vectorized_axes
     end
 
+    # Same root cause as the test above — dot gradient `unbroadcast` doesn't
+    # know about vec axes. Separate dot-gradient bug, tracked outside this PR.
     @tag :skip
     test "dot with multiple vectorized axes and batch axes" do
       x = Nx.tensor([[[1.0, 2.0], [3.0, 4.0]], [[5.0, 6.0], [7.0, 8.0]]])
@@ -5301,6 +5310,10 @@ defmodule Nx.Defn.GradTest do
       check_vectorized_grad(x, fn x -> Nx.sum(Nx.cumulative_sum(x)) end)
     end
 
+    # Cholesky is an `apply_vectorized` op — it devectorizes its input
+    # internally and re-vectorizes the result. That internal re-vectorization
+    # is incompatible with the boundary-wrapper grad which runs the recursion
+    # in fully-devectorized space. Tracked separately as an op-level fix.
     @tag :skip
     test "cholesky grad (batched cholesky grad)" do
       x =
@@ -5319,6 +5332,8 @@ defmodule Nx.Defn.GradTest do
       end)
     end
 
+    # Same root cause as the cholesky case above — triangular_solve is also
+    # an `apply_vectorized` op and re-vectorizes internally. Tracked separately.
     @tag :skip
     test "triangular_solve grad with captured a (duplicate batch names)" do
       a = Nx.tensor([[1.0, 0.0], [2.0, 3.0]], type: :f32)
@@ -5335,6 +5350,9 @@ defmodule Nx.Defn.GradTest do
       check_vectorized_grad(x, fn x -> Nx.sum(Nx.conv(x, k)) end)
     end
 
+    # Same root cause as the cholesky/triangular_solve cases above — cond is
+    # also an `apply_vectorized` op and re-vectorizes internally, which the
+    # boundary wrapper cannot reconcile with its devectorized recursion.
     @tag :skip
     test "cond with vectorized input (cannot vectorize rank 0)" do
       x = Nx.tensor([[2.0, 3.0], [-5.0, -6.0], [1.0, 1.0]], type: :f32)
