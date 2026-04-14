@@ -5211,6 +5211,74 @@ defmodule Nx.Defn.GradTest do
       assert grad_y == expected_grad_y
     end
 
+    # f(x, y) = sum(x + y), x: vec[foo:2], y: vec[bar:3]
+    #
+    # d/dx[i] sum_{i,j}(x[i] + y[j]) = bar_size = 3   (x[i] appears in 3 outputs)
+    # d/dy[j] sum_{i,j}(x[i] + y[j]) = foo_size = 2   (y[j] appears in 2 outputs)
+    test "heterogenous vec grad: add (constant gradients)" do
+      x_vec = Nx.tensor([2.0, 5.0]) |> Nx.vectorize(:foo)
+      y_vec = Nx.tensor([3.0, 4.0, 6.0]) |> Nx.vectorize(:bar)
+
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {x, y} ->
+          Nx.sum(Nx.add(x, y))
+        end)
+
+      assert grad_x == Nx.tensor([3.0, 3.0]) |> Nx.vectorize(:foo)
+      assert grad_y == Nx.tensor([2.0, 2.0, 2.0]) |> Nx.vectorize(:bar)
+    end
+
+    # f(x, y) = sum(sin(x + y)), x: vec[foo:2], y: vec[bar:2]
+    #
+    # d/dx[i] sum_{i,j} sin(x[i] + y[j]) = sum_j cos(x[i] + y[j])
+    # d/dy[j] sum_{i,j} sin(x[i] + y[j]) = sum_i cos(x[i] + y[j])
+    #
+    # The gradients vary across BOTH axes — a 1-sized slice approach would
+    # discard half the contribution and give a wrong answer.
+    test "heterogenous vec grad: sin(add) (gradients vary across both axes)" do
+      x_vec = Nx.tensor([0.5, 1.0]) |> Nx.vectorize(:foo)
+      y_vec = Nx.tensor([0.0, 0.3]) |> Nx.vectorize(:bar)
+
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {x, y} ->
+          Nx.sum(Nx.sin(Nx.add(x, y)))
+        end)
+
+      expected_grad_x =
+        Nx.tensor([:math.cos(0.5) + :math.cos(0.8), :math.cos(1.0) + :math.cos(1.3)])
+
+      expected_grad_y =
+        Nx.tensor([:math.cos(0.5) + :math.cos(1.0), :math.cos(0.8) + :math.cos(1.3)])
+
+      assert grad_x.vectorized_axes == [foo: 2]
+      assert grad_y.vectorized_axes == [bar: 2]
+
+      assert_all_close(Nx.devectorize(grad_x), expected_grad_x, atol: 1.0e-6)
+      assert_all_close(Nx.devectorize(grad_y), expected_grad_y, atol: 1.0e-6)
+    end
+
+    # f(x, y) = sum(x^2 * y), x: vec[foo:2], y: vec[bar:2]
+    #
+    # d/dx[i] sum_{i,j}(x[i]^2 * y[j]) = 2 * x[i] * sum_j(y[j])
+    # d/dy[j] sum_{i,j}(x[i]^2 * y[j]) = sum_i(x[i]^2)
+    #
+    # With x = [2.0, 5.0], y = [3.0, 4.0]:
+    #   grad_x[0] = 2 * 2 * 7 = 28
+    #   grad_x[1] = 2 * 5 * 7 = 70
+    #   grad_y[0] = grad_y[1] = 4 + 25 = 29
+    test "heterogenous vec grad: x^2 * y (asymmetric across foo)" do
+      x_vec = Nx.tensor([2.0, 5.0]) |> Nx.vectorize(:foo)
+      y_vec = Nx.tensor([3.0, 4.0]) |> Nx.vectorize(:bar)
+
+      {grad_x, grad_y} =
+        Nx.Defn.grad({x_vec, y_vec}, fn {x, y} ->
+          Nx.sum(Nx.multiply(Nx.pow(x, 2), y))
+        end)
+
+      assert grad_x == Nx.tensor([28.0, 70.0]) |> Nx.vectorize(:foo)
+      assert grad_y == Nx.tensor([29.0, 29.0]) |> Nx.vectorize(:bar)
+    end
+
     # `unbroadcast` inside the dot gradient does not account for vectorized
     # axes on the operands, so the contracted form fails for any vectorized
     # input. Separate dot-gradient bug, tracked outside this PR.
