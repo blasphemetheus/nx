@@ -27,7 +27,10 @@ defmodule Nx.Defn.Grad do
     {parents, nodes} = parents_tree(transformed_expr, ids)
 
     to_grad_ids = {to_grad, ids}
-    grads = %{transformed_expr.data.id => [constant(1.0, transformed_expr)]}
+    # Devectorize the seed so gradients flow in devectorized space.
+    # to_grad re-vectorizes the final result to match the original target.
+    seed_expr = Nx.devectorize(transformed_expr, keep_names: true)
+    grads = %{transformed_expr.data.id => [constant(1.0, seed_expr)]}
 
     {graded, _} =
       Composite.traverse(
@@ -214,7 +217,21 @@ defmodule Nx.Defn.Grad do
     {nodes, grads} = acc
 
     res = sum_grad(Map.get(grads, id, []))
-    {Nx.broadcast(res, arg), {nodes, grads}}
+
+    # Gradients are computed in devectorized space.
+    # Re-vectorize the result to match the original target's vectorization.
+    res =
+      case arg.vectorized_axes do
+        [] ->
+          Nx.broadcast(res, arg)
+
+        vectorized_axes ->
+          devec_arg = Nx.devectorize(arg, keep_names: true)
+          res = Nx.broadcast(res, devec_arg)
+          Nx.vectorize(res, vectorized_axes)
+      end
+
+    {res, {nodes, grads}}
   end
 
   defp sum_grad([]), do: Expr.tensor(0.0)
@@ -233,23 +250,6 @@ defmodule Nx.Defn.Grad do
         {{ans, vectorized_names}, nodes} = Map.pop!(nodes, id)
         %T{data: %Expr{op: op, args: args}} = ans
         {gs, grads} = Map.pop(grads, id)
-
-        {args, ans} =
-          if vectorized_names != [] do
-            args =
-              Enum.map(args, fn
-                %T{} = arg ->
-                  revectorize_node(arg, vectorized_names)
-
-                opt ->
-                  opt
-              end)
-
-            ans = Nx.vectorize(ans, vectorized_names)
-            {args, ans}
-          else
-            {args, ans}
-          end
 
         case gs do
           nil ->
@@ -277,12 +277,6 @@ defmodule Nx.Defn.Grad do
          parent_names
        ) do
     Keyword.keys(vectorized_axes) ++ Enum.filter(names, &(&1 in parent_names))
-  end
-
-  defp revectorize_node(node, vectorized_names) do
-    vectorized_names = compute_arg_vectorized_names(node, vectorized_names)
-
-    Nx.vectorize(node, vectorized_names)
   end
 
   defp update_grads(:elem, [%{type: {:tuple, size}} = tuple, pos], _ans, g, _to_grad_ids, grads) do
@@ -485,8 +479,8 @@ defmodule Nx.Defn.Grad do
     ]
   end
 
-  defp grad(:squeeze, [x, axes], _ans, g) do
-    [{x, Nx.broadcast(g, x.shape, axes: Nx.axes(x.shape) -- axes)}]
+  defp grad(:squeeze, [x, _axes], _ans, g) do
+    [{x, Nx.reshape(g, x)}]
   end
 
   defp grad(:reshape, [x], _ans, g) do
@@ -680,7 +674,7 @@ defmodule Nx.Defn.Grad do
         g,
         window_dimensions,
         strides: base_dilation,
-        padding: List.duplicate({0, 0}, Nx.rank(x)),
+        padding: :valid,
         window_dilations: window_dilation
       )
 
@@ -734,7 +728,7 @@ defmodule Nx.Defn.Grad do
     t_shape = t.shape
 
     num_elements = Tuple.product(i_shape) |> div(elem(i_shape, tuple_size(i_shape) - 1))
-    updates_shape = for i <- Nx.axes(t), i not in i_axes, do: elem(t_shape, i)
+    updates_shape = for idx <- Nx.axes(t), idx not in i_axes, do: elem(t_shape, idx)
 
     indices = Nx.reshape(i, {num_elements, :auto})
     updates = Nx.reshape(g, List.to_tuple([num_elements | updates_shape]))
