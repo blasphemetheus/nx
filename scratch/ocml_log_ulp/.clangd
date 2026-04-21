@@ -1,0 +1,14 @@
+# Nix clang-wrapper injects -cxx-isystem paths for libstdc++ at compile
+# time, but clangd doesn't call the wrapper — it calls clang directly,
+# so it misses them. Explicitly add what the wrapper provides on this
+# host.
+#
+# This file is local-env quality-of-life only. When submitted to the
+# PR it can be safely ignored; hipcc / g++ on a standard system don't
+# need it.
+CompileFlags:
+  Add:
+    - -std=c++17
+    - -cxx-isystem/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/include/c++/15.2.0
+    - -cxx-isystem/nix/store/sca0pf46jmxva40qahkcwys5c1lvk6n2-gcc-15.2.0/include/c++/15.2.0/x86_64-unknown-linux-gnu
+    - -isystem/nix/store/j8irrc0mpx029dw0rmadsjylg7h31ync-glibc-2.42-51-dev/include
