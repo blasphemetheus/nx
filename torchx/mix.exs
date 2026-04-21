@@ -49,7 +49,8 @@ defmodule Torchx.MixProject do
       {:nx, "~> 0.12.0"},
       # {:nx, path: "../nx"},
       {:fine, "~> 0.1.0", runtime: false},
-      {:ex_doc, "~> 0.29", only: :docs}
+      {:ex_doc, "~> 0.29", only: :docs},
+      {:stream_data, "~> 1.0", only: :test}
     ]
   end
 
