@@ -557,4 +557,66 @@ defmodule Nx.FuzzLinAlgTest do
       assert Nx.shape(grad) == {1, 2, 2}
     end
   end
+
+  # ── Task #15: extend batched-grad probes to the remaining linalg ops
+  #
+  # Covers ops that weren't in the first batched-grad sweep: invert,
+  # solve, determinant, norm, pinv, matrix_power, matrix_rank. Each
+  # property exercises the op's grad on a batched input and asserts the
+  # grad has the same shape as the input. Failures are follow-up issues
+  # / fix-PR candidates of the same class as #1740/#1741/#1742/#1743.
+
+  describe "gradients through linalg (batched) — extended" do
+    property "grad of sum(invert(A)) on batched square input" do
+      check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
+        grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.invert(x)) end)
+        assert Nx.shape(grad) == Nx.shape(a)
+      end
+    end
+
+    property "grad of sum(solve(A, b)) on batched square input" do
+      check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
+        batch = elem(Nx.shape(a), 0)
+        n = elem(Nx.shape(a), 1)
+        b = Nx.broadcast(Nx.tensor(1.0, type: Nx.type(a)), {batch, n})
+        grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.solve(x, b)) end)
+        assert Nx.shape(grad) == Nx.shape(a)
+      end
+    end
+
+    property "grad of determinant(A) on batched square input" do
+      check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
+        grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.determinant(x)) end)
+        assert Nx.shape(grad) == Nx.shape(a)
+      end
+    end
+
+    property "grad of norm(A) on batched input" do
+      check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
+        grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.norm(x)) end)
+        assert Nx.shape(grad) == Nx.shape(a)
+      end
+    end
+
+    property "grad of sum(pinv(A)) on batched square input" do
+      check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
+        grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.pinv(x)) end)
+        assert Nx.shape(grad) == Nx.shape(a)
+      end
+    end
+
+    property "grad of sum(matrix_power(A, 2)) on batched square input" do
+      check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
+        grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.matrix_power(x, 2)) end)
+        assert Nx.shape(grad) == Nx.shape(a)
+      end
+    end
+
+    property "grad of sum(adjoint(A)) on batched square input" do
+      check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
+        grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.adjoint(x)) end)
+        assert Nx.shape(grad) == Nx.shape(a)
+      end
+    end
+  end
 end
