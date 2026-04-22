@@ -1,33 +1,41 @@
-Thanks for the review — the 2.22 ULP figure changes how I'm thinking about this PR.
+Thanks for both numbers — 2.22 ULP for `log` and 0.58 ULP for `log1p`. Taken together they reframe how I'm thinking about this PR.
 
-**Reconciling the numbers.** OCML.md lists `log` f32 at 3 ULP and XLA's ROCm accuracy budget (`kLogF32Budget.rocm_gpu.regular`) is 3, integer-typed — both documented bounds are fully consistent with a measured fractional max of 2.22 (integer ceiling). I initially read those as independent evidence for a ~3 ULP measurement, but on closer look they're just the integer rounding of whatever the true fractional bound is. So your 2.22 figure doesn't contradict either.
+**Reconciling the docs.** OCML.md lists `log` f32 at 3 ULP and `log1p` f32 at 2 ULP; XLA's `kLogF32Budget.rocm_gpu.regular` is 3 — all consistent with a measured 2.22 (documented bounds are integer-valued contracts).
 
-The one remaining question on the docs side: OCML.md compares `log` (3) to `log1p` (2). If `log` is actually 2.22 fractional and `log1p` is ~2.0, the gap is real but smaller than the integer rounding suggests, and OCML.md could reasonably be updated to reflect that — but that's a doc cleanup, not a reason to change `__ocml_log_f32`.
+**What log1p's 0.58 says about the PR's real target.** `log1p` beats its documented 2-ULP bound by ~3.4× in practice. The absolute measured gap between `log` (2.22) and `log1p` (0.58) is ~1.6 ULP. My PR's stated "3 ULP → 2 ULP" target was based on the documented integer bounds, not measured behavior — so if `lnep` routing for `log` lands near log1p's 0.58 the real improvement is much larger than the PR title advertises; if it lands near 2.0, it's much smaller. Only measuring will tell us which.
 
-**Reframing on my side.** My "3 ULP → 2 ULP" pitch was based on the documented integer bound. If the current fractional max is ~2.22 and log1p is ~2.0, the actual improvement this PR would offer is ~0.22 ULP (roughly 10% relative), not a full ULP. That's a real but modest accuracy win, and it changes the perf-vs-accuracy calculus — especially against your point about satisfied users.
+(Caveat: `log` and `log1p` are evaluated over different input ranges, so the 1.6 ULP "gap" is an analogy, not a guarantee the gap closes on the full `log` domain.)
 
-**What would unblock me.** Two measurements I'd like to see before pushing further:
+**On "satisfied users" — a concrete unhappy user.** XLA's accuracy budgets have a ROCm-specific carve-out in [`accuracy_budget.h`](https://github.com/openxla/xla/blob/main/xla/codegen/intrinsic/accuracy/accuracy_budget.h):
 
-1. **Actual fractional ULP max for the current `__ocml_log_f32`**, to confirm the 2.22 figure end-to-end.
-2. **Actual fractional ULP max for the proposed `lnep`-routed path**, to confirm it really hits ≤ 2.0.
-
-For (1), I put together a small self-contained sweep program that tests every normal positive f32 against an f64 reference and reports max fractional ULP: **[GIST_URL_HERE]**.
-
-```
-hipcc -O2 -o test_ocml_log_ulp test_ocml_log_ulp.hip.cpp
-./test_ocml_log_ulp
+```c
+constexpr AccuracyBudget kLogF32Budget = {
+    /*cpu=*/     {/*regular=*/1, /*subnormal=*/0},
+    /*gpu=*/     {/*regular=*/1, /*subnormal=*/0},   // NVIDIA / generic GPU path
+    /*rocm_gpu=*/UlpBudget{/*regular=*/3, /*subnormal=*/0},  // AMD carve-out
+};
 ```
 
-Methodology is validated: the CPU fallback (`g++` against glibc `logf`) reports max fractional ULP = 0.818, matching glibc's known near-correctly-rounded behavior. Whatever the HIP run reports is a trustworthy exhaustive-sweep maximum, not a methodology artifact.
+The `gpu = 1` line is the contract the NVIDIA path satisfies; the `rocm_gpu = 3` line exists specifically because ocml `log` is looser. That's a downstream user who is demonstrably *not* satisfied with the current behavior — they've had to carry an AMD-specific exception to keep their tests green. Tightening ocml `log` toward the 1-ULP contract NVIDIA meets would let this carve-out go away.
 
-For (2), I can re-run the same sweep on a build of this PR once (1) is resolved.
+**What I'd like to measure.** Three fractional-ULP sweeps on current ocml:
 
-**On perf.** If the lnep path shows a real regression on the workloads that matter, one option is to gate it behind an opt-in macro (e.g. `OCML_LOG_ACCURATE`) so the current `v_log_f32`-based fast path stays default. That keeps your users on today's behavior and lets applications that need tighter accuracy opt in. Happy to restructure the PR that way.
+1. `__ocml_log_f32` — confirms the 2.22 figure end-to-end.
+2. `__ocml_log1p_f32` — confirms the 0.58 figure with the same methodology.
+3. The PR's `lnep`-routed `__ocml_log_f32` — tells us where the new path actually lands.
 
-**Possible outcomes:**
+Self-contained sweep program at **[GIST_URL_HERE]** — tests every normal positive f32 against an f64 reference and reports max fractional ULP. CPU fallback (`g++` against glibc `logf`) reports 0.818 max fractional ULP, which matches glibc's known near-correctly-rounded behavior — enough to trust the harness.
 
-- (1) confirms ≤ 2.22 **and** (2) shows no improvement or a perf regression → PR not worth it, I'll close.
-- (1) is higher than 2.22 or (2) shows a real improvement → PR stands, possibly behind the opt-in flag.
-- (1) confirms ~2.22 and (2) shows 2.0 → a 0.22 ULP win at some perf cost — worth a conversation about whether it's worth shipping.
+**Two asks on the perf side.**
 
-Either way, measuring is cheap; let's do that before deciding.
+1. If you can share approximate cycle counts or relative perf on the current `v_log_f32`-fastpath vs `lnep` path (or let me know which benchmark to run), I can size the accuracy-vs-perf tradeoff concretely.
+2. If `lnep` routing is measurably slower on workloads that matter, I can gate it behind an opt-in macro (e.g. `OCML_LOG_ACCURATE`, paralleling the existing `ocml-accuracy` knobs) so today's fast path stays default and applications that need tighter accuracy opt in. Happy to restructure the PR that way if it's acceptable.
+
+**Where I see this landing, by measurement (3):**
+
+- `~0.58` (log1p-level accuracy) with small perf cost → merge as default. OCML.md's log row can be separately updated to reflect measured values.
+- `~0.58` with real perf cost → merge behind an opt-in flag.
+- `~2.0` (just clears the 2-ULP doc target) → the ~0.2 ULP real improvement isn't worth a perf cost; close.
+- Doesn't beat 2.22 meaningfully → close.
+
+The measurement side is inexpensive; I'd rather have numbers in hand than argue framings.
