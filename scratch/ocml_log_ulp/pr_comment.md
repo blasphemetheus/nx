@@ -24,7 +24,7 @@ The `gpu = 1` line is the contract the NVIDIA path satisfies; the `rocm_gpu = 3`
 2. `__ocml_log1p_f32` — confirms the 0.58 figure with the same methodology.
 3. The PR's `lnep`-routed `__ocml_log_f32` — tells us where the new path actually lands.
 
-Self-contained sweep program at **[GIST_URL_HERE]** — tests every normal positive f32 against an f64 reference and reports max fractional ULP. CPU fallback (`g++` against glibc `logf`) reports 0.818 max fractional ULP, which matches glibc's known near-correctly-rounded behavior — enough to trust the harness.
+Self-contained sweep program at **https://gist.github.com/blasphemetheus/77197d676530280398afd943be618b5a** — tests every normal positive f32 against an f64 reference and reports max fractional ULP. CPU fallback (`g++` against glibc `logf`) reports 0.818 max fractional ULP, which matches glibc's known near-correctly-rounded behavior — enough to trust the harness.
 
 **Two asks on the perf side.**
 
