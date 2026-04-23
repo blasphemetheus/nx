@@ -402,14 +402,17 @@ defmodule Nx.FuzzLinAlgTest do
   # own tracking issue / fix PR.
 
   describe "gradients through linalg (batched)" do
-    property "grad of sum(Cholesky(A)) on batched positive-definite input" do
+    # Tracks cholesky_grad gap in PR #1731 — the PR's fix is partial and still
+    # fails for batched input. Class: same batched-grad class as #1741-#1746.
+    property "[meta #1748] grad of sum(Cholesky(A)) on batched positive-definite input" do
       check all(a <- batched_positive_definite(4, 3), max_runs: 5) do
         grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.cholesky(x)) end)
         assert Nx.shape(grad) == Nx.shape(a)
       end
     end
 
-    property "grad of sum(Q + R) for QR on batched square input" do
+    # Class: same batched-grad class as #1741-#1746. No QR-specific issue filed.
+    property "[meta #1748] grad of sum(Q + R) for QR on batched square input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         grad =
           Nx.Defn.grad(a, fn x ->
@@ -421,7 +424,9 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    property "grad of sum(L + U) for LU on batched square input" do
+    # Upstream: https://github.com/elixir-nx/nx/issues/1742
+    # Root cause: lu_grad uses unqualified Nx.dot; wrong axis contractions with leading batch dim.
+    property "[#1742] grad of sum(L + U) for LU on batched square input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         grad =
           Nx.Defn.grad(a, fn x ->
@@ -433,7 +438,9 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    property "grad of sum(U + s + V) for SVD on batched square input" do
+    # Upstream: https://github.com/elixir-nx/nx/issues/1743
+    # Root cause: svd_grad pattern-matches {m, n} = Nx.shape(input); fails on 3D+.
+    property "[#1743] grad of sum(U + s + V) for SVD on batched square input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         grad =
           Nx.Defn.grad(a, fn x ->
@@ -445,7 +452,9 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    property "grad of sum(eigvals) for eigh on batched symmetric input" do
+    # Upstream: https://github.com/elixir-nx/nx/issues/1740
+    # See BUG-1740-A / BUG-1740-B pins below for specific reproducers.
+    property "[#1740] grad of sum(eigvals) for eigh on batched symmetric input" do
       check all(a <- batched_positive_definite(4, 3), max_runs: 5) do
         # positive_definite matrices are symmetric; eigh is defined for symmetric inputs.
         grad =
@@ -458,7 +467,9 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    property "grad of sum(triangular_solve(A, b)) on batched lower-triangular A" do
+    # Upstream: https://github.com/elixir-nx/nx/issues/1741
+    # Root cause: Nx.dot inside triangular_solve grad has shape-mismatch on batched input.
+    property "[#1741] grad of sum(triangular_solve(A, b)) on batched lower-triangular A" do
       check all(a <- batched_positive_definite(4, 3), max_runs: 5) do
         # Use cholesky(a) as a batched lower-triangular matrix, and an arbitrary b.
         batch = elem(Nx.shape(a), 0)
@@ -526,11 +537,14 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    # TRACKING: eigh grad 2D-input reshape bug.
-    # The grad path reshapes a scalar intermediate into {1, N, N},
-    # which fails because the scalar has shape {}. The grad infra seems
-    # to require eigh to receive a 3D tensor.
-    test "eigh grad: 2D input raises reshape error (BUG)" do
+    # BUG-1740-A — 2D eigh grad raises reshape error.
+    # Upstream: https://github.com/elixir-nx/nx/issues/1740
+    # Class: defn/grad formula bug. Fires on BinaryBackend AND EXLA,
+    # independent of the :verify_binary_size compile-time flag.
+    # Root cause hypothesis: the grad path reshapes a scalar intermediate
+    # into {1, N, N}, assuming 3D input. A 2D input produces a scalar
+    # cotangent with shape {} that can't be reshaped into {2, 2}.
+    test "[BUG-1740-A] eigh grad: 2D input raises reshape error" do
       x = Nx.tensor([[4.0, 2.0], [2.0, 5.0]], type: :f32)
 
       assert_raise ArgumentError, ~r/cannot reshape/, fn ->
@@ -538,10 +552,18 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    # TRACKING: eigh grad f64 dtype bug.
-    # Grad path has an internal :f32 assumption; f64 input triggers
-    # "expected 32 bits got: 64 bits" during a tensor binary read.
-    test "eigh grad: f64 batched input raises dtype error (BUG)" do
+    # BUG-1740-B — f64 eigh grad constructs a binary whose size doesn't
+    # match the declared f64 stride (hardcoded 32-bit assumption somewhere
+    # in the eigh grad intermediate tensor construction).
+    # Upstream: https://github.com/elixir-nx/nx/issues/1740
+    # Class: BinaryBackend bug, LATENT in end-user apps.
+    # Visible only when :verify_binary_size is compile-time-on (see
+    # nx/config/config.exs and nx/lib/nx/binary_backend.ex:117). End-user
+    # apps depending on :nx as a hex dep do NOT have this flag on, so
+    # the malformed binary is silently accepted and downstream ops
+    # consume wrong-size data. This test surfaces the bug loudly only
+    # because mix test loads nx's config.exs.
+    test "[BUG-1740-B] eigh grad: f64 batched input raises dtype error" do
       x = Nx.tensor([[[4.0, 2.0], [2.0, 5.0]]], type: :f64)
 
       assert_raise ArgumentError, ~r/expected 32 bits got: 64 bits/, fn ->
@@ -567,14 +589,17 @@ defmodule Nx.FuzzLinAlgTest do
   # / fix-PR candidates of the same class as #1740/#1741/#1742/#1743.
 
   describe "gradients through linalg (batched) — extended" do
-    property "grad of sum(invert(A)) on batched square input" do
+    # Upstream: https://github.com/elixir-nx/nx/issues/1744
+    # Root cause: custom_grad at nx/lib/nx/lin_alg.ex:866 uses Nx.dot without batch axes.
+    property "[#1744] grad of sum(invert(A)) on batched square input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.invert(x)) end)
         assert Nx.shape(grad) == Nx.shape(a)
       end
     end
 
-    property "grad of sum(solve(A, b)) on batched square input" do
+    # Upstream: https://github.com/elixir-nx/nx/issues/1745
+    property "[#1745] grad of sum(solve(A, b)) on batched square input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         batch = elem(Nx.shape(a), 0)
         n = elem(Nx.shape(a), 1)
@@ -584,35 +609,41 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    property "grad of determinant(A) on batched square input" do
+    # Upstream: https://github.com/elixir-nx/nx/issues/1746
+    # Note: 3×3 determinant grad happens to work; 4×4 and larger fail.
+    property "[#1746] grad of determinant(A) on batched square input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.determinant(x)) end)
         assert Nx.shape(grad) == Nx.shape(a)
       end
     end
 
-    property "grad of norm(A) on batched input" do
+    # Class: same batched-grad class as #1741-#1746. Not separately filed.
+    property "[meta #1748] grad of norm(A) on batched input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.norm(x)) end)
         assert Nx.shape(grad) == Nx.shape(a)
       end
     end
 
-    property "grad of sum(pinv(A)) on batched square input" do
+    # Class: same batched-grad class as #1741-#1746. Not separately filed.
+    property "[meta #1748] grad of sum(pinv(A)) on batched square input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.pinv(x)) end)
         assert Nx.shape(grad) == Nx.shape(a)
       end
     end
 
-    property "grad of sum(matrix_power(A, 2)) on batched square input" do
+    # Class: same batched-grad class as #1741-#1746. Not separately filed.
+    property "[meta #1748] grad of sum(matrix_power(A, 2)) on batched square input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.matrix_power(x, 2)) end)
         assert Nx.shape(grad) == Nx.shape(a)
       end
     end
 
-    property "grad of sum(adjoint(A)) on batched square input" do
+    # Class: same batched-grad class as #1741-#1746. Not separately filed.
+    property "[meta #1748] grad of sum(adjoint(A)) on batched square input" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
         grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.adjoint(x)) end)
         assert Nx.shape(grad) == Nx.shape(a)

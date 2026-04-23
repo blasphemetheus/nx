@@ -38,7 +38,10 @@ defmodule Nx.FuzzSerializationTest do
       refute rem(bit_size(bin), 8) == 0
     end
 
-    test "from_binary rejects the bitstring that to_binary produces (u4, 3 elements)" do
+    # BUG-FROMBIN-u4-3elem — Nx.from_binary's is_binary guard rejects bitstrings.
+    # Fix: guard becomes is_bitstring (to_binary/from_binary are an inverse pair).
+    # See FUZZ_FINDINGS/from_binary_rejects_sub_byte_bitstrings.md.
+    test "[BUG-FROMBIN-u4-3elem] from_binary rejects the bitstring that to_binary produces (u4, 3 elements)" do
       t = Nx.tensor([0, 7, 15], type: :u4)
       bin = Nx.to_binary(t)
 
@@ -51,7 +54,7 @@ defmodule Nx.FuzzSerializationTest do
       #   assert_equal(rt, t)
     end
 
-    test "u2 tensor with 3 elements fails the same way" do
+    test "[BUG-FROMBIN-u2-3elem] u2 tensor with 3 elements fails the same way" do
       t = Nx.tensor([0, 1, 2], type: :u2)
       bin = Nx.to_binary(t)
       assert bit_size(bin) == 6
@@ -208,7 +211,10 @@ defmodule Nx.FuzzSerializationTest do
     # Nx.Backend.chunk/5 uses `tail::binary` in :s and :u branches;
     # should be `tail::bitstring` (as the float branch already does).
 
-    test "u4 tensor crashes inspect (pins bug — flip when fixed)" do
+    # BUG-INSPECT-u4 — Nx.Backend.chunk/5 uses tail::binary; should be tail::bitstring.
+    # Float branch already does it right. Affects BinaryBackend AND Torchx.
+    # See FUZZ_FINDINGS/inspect_crashes_on_sub_byte_int_tensors.md.
+    test "[BUG-INSPECT-u4] u4 tensor crashes inspect" do
       t = Nx.tensor([0, 1, 2, 3], type: :u4)
 
       result = inspect(t)
@@ -220,14 +226,14 @@ defmodule Nx.FuzzSerializationTest do
       #   assert result =~ "[0, 1, 2, 3]"
     end
 
-    test "s2 tensor crashes inspect" do
+    test "[BUG-INSPECT-s2] s2 tensor crashes inspect" do
       t = Nx.tensor([-2, -1, 0, 1], type: :s2)
       result = inspect(t)
       assert result =~ "Inspect.Error"
       assert result =~ "MatchError"
     end
 
-    test "u4 of size 2 also crashes (tail misaligned after one element)" do
+    test "[BUG-INSPECT-u4-size2] u4 of size 2 also crashes (tail misaligned after one element)" do
       # [0, 1] = 8 bits total. After consuming one u4, tail is 4 bits —
       # not byte-aligned, so chunk/5 crashes.
       t = Nx.tensor([0, 1], type: :u4)
