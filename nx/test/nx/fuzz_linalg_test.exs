@@ -552,17 +552,24 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    # BUG-1740-B — f64 eigh grad constructs a binary whose size doesn't
-    # match the declared f64 stride (hardcoded 32-bit assumption somewhere
-    # in the eigh grad intermediate tensor construction).
+    # BUG-1740-B — f64 eigh grad has an internal type-tag mismatch in an
+    # intermediate tensor: somewhere in the grad path, a scalar tensor is
+    # declared `{:f, 32}` but receives 64-bit binary data.
     # Upstream: https://github.com/elixir-nx/nx/issues/1740
-    # Class: BinaryBackend bug, LATENT in end-user apps.
-    # Visible only when :verify_binary_size is compile-time-on (see
-    # nx/config/config.exs and nx/lib/nx/binary_backend.ex:117). End-user
-    # apps depending on :nx as a hex dep do NOT have this flag on, so
-    # the malformed binary is silently accepted and downstream ops
-    # consume wrong-size data. This test surfaces the bug loudly only
-    # because mix test loads nx's config.exs.
+    # Class: BinaryBackend bug — surfaces as an ArgumentError only when
+    # the :verify_binary_size compile-time flag is on (see
+    # nx/config/config.exs and nx/lib/nx/binary_backend.ex:117).
+    #
+    # IMPORTANT NUANCE: probing with the flag OFF (the default for end-
+    # user apps depending on :nx as a hex dep) shows the final grad VALUE
+    # is numerically identical to the f32 grad for simple test cases
+    # (d(trace)/dA = I, d(sum λ²)/dA). The malformed intermediate tensor
+    # doesn't corrupt observable output in the cases we can easily
+    # construct. The assert_raise below pins the "loud" behavior only —
+    # a value-based f64-specific pin isn't easily writable because f32
+    # and f64 produce the same numbers. The bug is real (type tag is
+    # wrong) but the severity is "latent internal inconsistency," not
+    # "silent wrong results for users."
     test "[BUG-1740-B] eigh grad: f64 batched input raises dtype error" do
       x = Nx.tensor([[[4.0, 2.0], [2.0, 5.0]]], type: :f64)
 
