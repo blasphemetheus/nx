@@ -585,6 +585,46 @@ defmodule Nx.FuzzLinAlgTest do
       grad = Nx.Defn.grad(x, fn a -> {s, _} = Nx.LinAlg.eigh(a); Nx.sum(s) end)
       assert Nx.shape(grad) == {1, 2, 2}
     end
+
+    # BUG-1740-B-value — value-level exposure of the f64 grad bug at 4×4.
+    # Upstream: https://github.com/elixir-nx/nx/issues/1740
+    # The [BUG-1740-B] pin above captures the loud verifier error at 2×2
+    # with :verify_binary_size on. This test captures the *observable*
+    # failure at 4×4: the f64 grad of sum(log(eigvals)) returns entries
+    # with magnitude > 1e15 where the f32 grad returns values in the
+    # 1e-4 to 1e-5 range. Probed with the flag OFF: max |f64 - f32|
+    # is ~5.5e25 on this input, demonstrating the internal type-tag
+    # mismatch does propagate to observable wrong output at this size.
+    #
+    # Runs under mix test (flag ON): currently fails either via the
+    # assert_raise path or via the assert_all_close below. When #1740
+    # is fixed, the grad should return values comparable to f32 within
+    # reasonable precision, and this test will pass.
+    @tag :skip
+    test "[BUG-1740-B-value] f64 eigh grad on 4×4 diverges catastrophically from f32" do
+      y64 =
+        Nx.tensor(
+          [
+            [
+              [5.0, 1.3, 0.7, 0.2],
+              [1.3, 6.0, 0.5, 0.1],
+              [0.7, 0.5, 7.0, 0.4],
+              [0.2, 0.1, 0.4, 8.0]
+            ]
+          ],
+          type: :f64
+        )
+
+      y32 = Nx.as_type(y64, :f32)
+      obj = fn a -> {s, _v} = Nx.LinAlg.eigh(a); Nx.sum(Nx.log(s)) end
+
+      grad64 = Nx.Defn.grad(y64, obj) |> Nx.as_type(:f32)
+      grad32 = Nx.Defn.grad(y32, obj)
+
+      # Correct contract: f64 grad should agree with f32 grad to ~1e-3.
+      # Currently: max diff observed ≈ 5.5e25 on this host.
+      assert_all_close(grad64, grad32, atol: 1.0e-3, rtol: 1.0e-3)
+    end
   end
 
   # ── Task #15: extend batched-grad probes to the remaining linalg ops
