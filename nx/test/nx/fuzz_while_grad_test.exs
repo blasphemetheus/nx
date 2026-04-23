@@ -78,6 +78,9 @@ defmodule Nx.FuzzWhileGradTest do
       end
     end
 
+    # NOTE: currently fails due to BUG-1747 (see describe block below for
+    # the minimal pin). power_via_loop uses `Nx.multiply(acc, x)`, which
+    # is the exact body shape that miscomputes the backward pass.
     property "d/dx power_via_loop(x, n) == n * x^(n-1)" do
       check all(
               x <- float(min: 0.5, max: 2.0),
@@ -164,6 +167,52 @@ defmodule Nx.FuzzWhileGradTest do
         expected = Nx.tensor(n * :math.cos(n * x), type: :f32)
         assert_all_close(grad, expected, atol: 1.0e-3)
       end
+    end
+  end
+
+  # ── BUG-1747 pin: x-dependent body Jacobian miscomputes backward ───
+
+  describe "grad through while body with x-dependent Jacobian (BUG-1747)" do
+    # BUG-1747 — `Nx.Defn.grad` through a `while` loop miscomputes the
+    # gradient w.r.t. any variable whose presence makes the loop body's
+    # Jacobian ∂body/∂acc depend on that variable.
+    # Upstream: https://github.com/elixir-nx/nx/issues/1747
+    # Class: Nx.Defn.while reverse-mode AD. Forward pass is correct;
+    # only the backward pass is wrong.
+    # Root cause hypothesis: the backward pass drops a term in the
+    # reverse-accumulation when the body has a multiplicative
+    # (not additive) dependence on the differentiated variable.
+    # Catastrophic near zero — at x=0.001, grad of x³ returns 1.0
+    # instead of 3e-6 (333,334× off). Any optimizer starting near the
+    # origin steps in a spurious direction.
+
+    defn square_via_while(x) do
+      {acc, _, _} =
+        while {acc = Nx.tensor(1.0, type: :f32), i = 0, x = x}, Nx.less(i, 2) do
+          {Nx.multiply(acc, x), i + 1, x}
+        end
+
+      acc
+    end
+
+    test "[BUG-1747] forward x² via while is correct" do
+      x = Nx.tensor(0.5, type: :f32)
+      assert_all_close(square_via_while(x), Nx.tensor(0.25, type: :f32), atol: 1.0e-5)
+    end
+
+    test "[BUG-1747] backward of x² via while pins wrong grad (1.25, should be 1.0)" do
+      # Pins CURRENT broken behavior. When #1747 is fixed, this assertion
+      # will fail and the test should be flipped to the correct value
+      # (2·x = 1.0 at x=0.5). The issue body documents the ratio as:
+      # Nx returns Σₖ x^(2k) for k=0..n-1 instead of the correct n·x^(n-1).
+      x = Nx.tensor(0.5, type: :f32)
+      grad = Nx.Defn.grad(x, &square_via_while/1)
+
+      # Buggy value: 1 + x² = 1.25 at x=0.5 (Σₖ x^(2k) for k=0..1).
+      assert_all_close(grad, Nx.tensor(1.25, type: :f32), atol: 1.0e-5)
+
+      # Once fixed, replace with:
+      #   assert_all_close(grad, Nx.tensor(1.0, type: :f32), atol: 1.0e-5)
     end
   end
 
