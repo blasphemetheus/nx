@@ -28,7 +28,10 @@ defmodule Nx.FuzzIndexedOpsTest do
       Nx.sum(Nx.put_slice(t, [1], patch))
     end
 
-    test "grad wrt update with captured target crashes (pins bug — flip when fixed)" do
+    # BUG-DISPATCH-put_slice-grad — one-line fix: dispatch via impl!(t, patch).
+    # Class: mixed concrete + Expr multi-tensor dispatch.
+    # See FUZZ_FINDINGS/put_slice_grad_mixed_backend_dispatch.md.
+    test "[BUG-DISPATCH-put_slice-grad] grad wrt update with captured target crashes" do
       # Pins the CURRENT wrong behavior. When Nx.put_slice is fixed to
       # dispatch via impl!(tensor, slice), this assert_raise will fail
       # and the test should be flipped to assert_all_close below.
@@ -74,7 +77,8 @@ defmodule Nx.FuzzIndexedOpsTest do
     # The bug is not grad-specific — any Nx.Defn.jit closure over a
     # concrete tensor hits the same impl!/1 dispatch path.
 
-    test "jit(fn p -> put_slice(captured_t, p) end) crashes" do
+    # BUG-DISPATCH-put_slice-jit — same fix as grad variant; bug is not grad-specific.
+    test "[BUG-DISPATCH-put_slice-jit] jit(fn p -> put_slice(captured_t, p) end) crashes" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       jitted = Nx.Defn.jit(fn p -> Nx.sum(Nx.put_slice(t, [1], p)) end)
 
@@ -83,7 +87,8 @@ defmodule Nx.FuzzIndexedOpsTest do
       end
     end
 
-    test "jit(fn lo -> clip(captured_t, lo, hi) end) crashes" do
+    # BUG-DISPATCH-clip-jit — same class as put_slice dispatch.
+    test "[BUG-DISPATCH-clip-jit] jit(fn lo -> clip(captured_t, lo, hi) end) crashes" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       jitted = Nx.Defn.jit(fn lo -> Nx.clip(t, lo, 10.0) end)
 
@@ -92,7 +97,10 @@ defmodule Nx.FuzzIndexedOpsTest do
       end
     end
 
-    test "jit(fn idx -> take(captured_t, idx) end) crashes (Expr.parameter class)" do
+    # BUG-EXPRBLOCK-take-jit — different class (Expr.expr_block, not impl!/1 dispatch).
+    # Fix: Expr.expr_block should Enum.map(args, &to_expr/1) before calling parameter/2.
+    # See FUZZ_FINDINGS/take_grad_with_captured_indices.md.
+    test "[BUG-EXPRBLOCK-take-jit] jit(fn idx -> take(captured_t, idx) end) crashes" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       jitted = Nx.Defn.jit(fn idx -> Nx.take(t, idx) end)
 
@@ -112,7 +120,7 @@ defmodule Nx.FuzzIndexedOpsTest do
     defn clip_sum(t, lo, hi), do: Nx.sum(Nx.clip(t, lo, hi))
     defn gather_sum(t, idx), do: Nx.sum(Nx.gather(t, idx))
 
-    test "clip: grad wrt min with captured target crashes" do
+    test "[BUG-DISPATCH-clip-grad-min] clip: grad wrt min with captured target crashes" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       hi = Nx.tensor(4.5)
 
@@ -121,7 +129,7 @@ defmodule Nx.FuzzIndexedOpsTest do
       end
     end
 
-    test "clip: grad wrt max with captured target crashes" do
+    test "[BUG-DISPATCH-clip-grad-max] clip: grad wrt max with captured target crashes" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       lo = Nx.tensor(1.5)
 
@@ -130,7 +138,7 @@ defmodule Nx.FuzzIndexedOpsTest do
       end
     end
 
-    test "gather: calling with concrete source + Expr indices crashes" do
+    test "[BUG-DISPATCH-gather] gather: concrete source + Expr indices crashes" do
       # Grad wrt indices is semantically meaningless (int type), but
       # the dispatch should still route to Expr rather than crash.
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
@@ -153,7 +161,7 @@ defmodule Nx.FuzzIndexedOpsTest do
       Nx.window_reduce(t, acc, {2}, fn a, b -> Nx.max(a, b) end)
     end
 
-    test "reduce: grad wrt acc with captured source crashes" do
+    test "[BUG-DISPATCH-reduce] reduce: grad wrt acc with captured source crashes" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
 
       assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
@@ -161,7 +169,7 @@ defmodule Nx.FuzzIndexedOpsTest do
       end
     end
 
-    test "window_reduce: grad wrt acc with captured source crashes" do
+    test "[BUG-DISPATCH-window_reduce] window_reduce: grad wrt acc with captured source crashes" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
 
       assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
@@ -181,7 +189,7 @@ defmodule Nx.FuzzIndexedOpsTest do
 
     defn take_sum(t, idx), do: Nx.sum(Nx.take(t, idx))
 
-    test "grad wrt t with captured concrete indices crashes (pins bug)" do
+    test "[BUG-EXPRBLOCK-take-grad] grad wrt t with captured concrete indices crashes" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       idx = Nx.tensor([0, 2, 4], type: :s32)
 
@@ -210,7 +218,7 @@ defmodule Nx.FuzzIndexedOpsTest do
       Nx.sum(Nx.take_along_axis(t, idx, axis: 0))
     end
 
-    test "take_along_axis: grad wrt t with captured indices crashes (same bug class)" do
+    test "[BUG-EXPRBLOCK-take_along_axis] take_along_axis: grad wrt t with captured indices crashes" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       idx = Nx.tensor([0, 2, 4], type: :s32)
 
@@ -226,7 +234,7 @@ defmodule Nx.FuzzIndexedOpsTest do
       Nx.multiply(close, Nx.sum(a))
     end
 
-    test "all_close: grad with captured b crashes (same bug class)" do
+    test "[BUG-EXPRBLOCK-all_close] all_close: grad with captured b crashes" do
       a = Nx.tensor([1.0, 2.0, 3.0])
       b = Nx.tensor([1.0, 2.0, 3.0])
 
