@@ -593,8 +593,19 @@ defmodule Nx.FuzzLinAlgTest do
     # failure at 4×4: the f64 grad of sum(log(eigvals)) returns entries
     # with magnitude > 1e15 where the f32 grad returns values in the
     # 1e-4 to 1e-5 range. Probed with the flag OFF: max |f64 - f32|
-    # is ~5.5e25 on this input, demonstrating the internal type-tag
-    # mismatch does propagate to observable wrong output at this size.
+    # is ~5.5e25 on this input.
+    #
+    # Root cause (confirmed via Nx.Defn.debug_expr on the grad):
+    # nx/lib/nx/lin_alg.ex:1388 — eigh's default `eps: 1.0e-4` is a raw
+    # float literal that defn types as {:f, 32}. The constant flows into
+    # block_eigh's while-body convergence checks and emerges in the
+    # backward pass as f32 intermediates (e.g. `reshape 0.0001 f32[1][1]`
+    # and multiple `elem fd, N f32[1][2][2]` nodes in the grad expr),
+    # which then collide with the f64 data stride in a scalar tensor.
+    # Fix direction: scale the eps default to the input tensor's float
+    # type (f32 → 1.0e-4; f64 → ~1.0e-10 or similar) and/or cast the
+    # literal via Nx.tensor(1.0e-4, type: output_type) before threading
+    # it into the while body.
     #
     # Runs under mix test (flag ON): currently fails either via the
     # assert_raise path or via the assert_all_close below. When #1740
