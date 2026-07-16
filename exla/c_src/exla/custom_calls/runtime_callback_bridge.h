@@ -39,6 +39,10 @@ struct OutputBuffer {
   uint8_t *data = nullptr;
   size_t size = 0;
 
+  // The 1-arg constructor suppresses the implicit default constructor,
+  // which the CUDA path needs for its declare-then-fill staging pattern
+  // (runtime_callback_cuda.cc) — CPU-only CI never compiles that file.
+  OutputBuffer() = default;
   OutputBuffer(const xla::ffi::AnyBuffer &buf);
 };
 
