@@ -42,6 +42,7 @@ defmodule Nx.MixProject do
     [
       {:complex, "~> 0.7"},
       {:telemetry, "~> 0.4.0 or ~> 1.0"},
+      {:stream_data, "~> 1.0", only: :test},
       {:ex_doc, "~> 0.29", only: :docs},
       {:makeup, "~> 1.2.1", only: :docs},
       {:makeup_syntect, "~> 0.1", only: :docs}
