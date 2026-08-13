@@ -225,6 +225,23 @@ defmodule Nx.Defn.Grad do
     {parents, Map.put(nodes, id, updated_node)}
   end
 
+  defp parents_args(:checkpoint, %{data: %{args: [input, _expr, fun, param]}} = t, id, acc) do
+    # Re-trace the body against the original input, producing a fresh
+    # expression tree. The backward pass differentiates this duplicate
+    # tree, so gradient expressions do not reference the forward body's
+    # intermediates — they are recomputed from the saved input instead.
+    expr = fun.(input)
+
+    {parents, nodes} =
+      Composite.reduce(expr, acc, fn expr, {parents, nodes} ->
+        parents = Map.update(parents, expr.data.id, [id], &[id | &1])
+        recur_parents_tree(expr, {parents, nodes})
+      end)
+
+    updated_node = put_in(t.data.args, [input, expr, fun, param])
+    {parents, Map.put(nodes, id, updated_node)}
+  end
+
   # We register cond as a special node to avoid pretraversing it.
   # Instead we traverse it early on on the grad computation.
   defp parents_args(:cond, _, id, {parents, nodes}) do
@@ -259,6 +276,9 @@ defmodule Nx.Defn.Grad do
 
   defp reduce_args(:io_call, %{data: %{args: [tensor_expr | _]}}, acc, fun),
     do: Composite.reduce(tensor_expr, acc, fun)
+
+  defp reduce_args(:checkpoint, %{data: %{args: [input | _]}}, acc, fun),
+    do: fun.(input, acc)
 
   defp reduce_args(:while, %{data: %{args: [initial | _]}}, acc, fun),
     do: Composite.reduce(initial, acc, fun)
@@ -418,6 +438,17 @@ defmodule Nx.Defn.Grad do
   end
 
   defp update_grads(:block, [_struct, _in_args, expr, _callback], _ans, gs, _to_grad_ids, grads) do
+    gs = List.wrap(gs)
+
+    {grads, []} =
+      Composite.reduce(expr, {grads, gs}, fn child, {grads, [g | gs]} ->
+        {Map.update(grads, child.data.id, [g], &[g | &1]), gs}
+      end)
+
+    grads
+  end
+
+  defp update_grads(:checkpoint, [_input, expr, _fun, _param], _ans, gs, _to_grad_ids, grads) do
     gs = List.wrap(gs)
 
     {grads, []} =
