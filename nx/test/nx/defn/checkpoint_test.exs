@@ -1143,4 +1143,66 @@ defmodule Nx.Defn.CheckpointTest do
       assert grad_checkpoint_used_twice(x) == grad_plain_used_twice(x)
     end
   end
+
+  # --- Rematerialization proxy: body execution counts ---
+  #
+  # Peak-memory itself is not directly observable in unit tests, but the
+  # mechanism that produces the memory saving is: the backward pass must
+  # RE-EXECUTE the checkpointed body instead of reusing the forward pass's
+  # intermediates. We observe executions with an io_call side effect inside
+  # the body. If a future change (or, on EXLA, common-subexpression
+  # elimination without an optimization barrier) dedupes the rematerialized
+  # tree against the forward one, these counts silently drop back to 1 and
+  # the memory benefit is gone even though every gradient stays correct.
+
+  describe "rematerialization execution counts" do
+    defp counted_body(x, parent) do
+      x
+      |> Nx.exp()
+      |> Nx.io_call(fn _ -> send(parent, :body_ran) end)
+      |> Nx.sin()
+    end
+
+    test "baseline: without checkpoint the body runs exactly once in value_and_grad" do
+      parent = self()
+
+      {_value, _grad} =
+        Nx.Defn.value_and_grad(Nx.tensor([1.0, 2.0]), fn x ->
+          Nx.sum(counted_body(x, parent))
+        end)
+
+      assert_received :body_ran
+      refute_received :body_ran
+    end
+
+    test "value_and_grad runs the checkpointed body twice: forward + rematerialized backward" do
+      parent = self()
+
+      {_value, _grad} =
+        Nx.Defn.value_and_grad(Nx.tensor([1.0, 2.0]), fn x ->
+          x
+          |> Nx.Defn.checkpoint(fn x -> counted_body(x, parent) end)
+          |> Nx.sum()
+        end)
+
+      assert_received :body_ran
+      assert_received :body_ran
+      refute_received :body_ran
+    end
+
+    test "eager: checkpoint output is re-evaluated per downstream consumer, never cached" do
+      parent = self()
+
+      fun = fn x ->
+        y = Nx.Defn.checkpoint(x, fn x -> counted_body(x, parent) end)
+        Nx.add(y, Nx.multiply(y, 2.0))
+      end
+
+      Nx.Defn.jit_apply(fun, [Nx.tensor([1.0, 2.0])])
+
+      assert_received :body_ran
+      assert_received :body_ran
+      refute_received :body_ran
+    end
+  end
 end
