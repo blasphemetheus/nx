@@ -284,11 +284,20 @@ defmodule Nx.Defn.Evaluator do
 
   defp decrement_parents([cache | caches], id) do
     case cache do
-      %{^id => {:result, count, value}} -> [decrement_cache(cache, id, count, value) | caches]
-      %{^id => {:args, count, args}} -> [%{cache | id => {:args, count - 1, args}} | caches]
-      %{^id => {:recompute, 1, _fun}} -> [Map.delete(cache, id) | caches]
-      %{^id => {:recompute, count, fun}} -> [%{cache | id => {:recompute, count - 1, fun}} | caches]
-      %{} -> [cache | decrement_parents(caches, id)]
+      %{^id => {:result, count, value}} ->
+        [decrement_cache(cache, id, count, value) | caches]
+
+      %{^id => {:args, count, args}} ->
+        [%{cache | id => {:args, count - 1, args}} | caches]
+
+      %{^id => {:recompute, 1, _fun}} ->
+        [Map.delete(cache, id) | caches]
+
+      %{^id => {:recompute, count, fun}} ->
+        [%{cache | id => {:recompute, count - 1, fun}} | caches]
+
+      %{} ->
+        [cache | decrement_parents(caches, id)]
     end
   end
 
