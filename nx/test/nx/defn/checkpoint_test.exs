@@ -1204,5 +1204,41 @@ defmodule Nx.Defn.CheckpointTest do
       assert_received :body_ran
       refute_received :body_ran
     end
+
+    # FUTURE (EXLA): the execution-count tests above only protect the
+    # Evaluator. Under EXLA the whole grad graph compiles to one XLA
+    # computation and the analogous regression is different: XLA's
+    # common-subexpression elimination can merge the rematerialized
+    # backward subtree with the forward body (they are structurally
+    # identical), silently restoring O(n) activation memory while all
+    # gradient tests keep passing. There is no EXLA lowering for
+    # :checkpoint yet — today it raises FunctionClauseError in
+    # EXLA.Defn.to_operator/4 — so this test cannot be written here.
+    # Once lowering exists (requires a stablehlo.optimization_barrier
+    # emitter in EXLA.MLIR.Value and a cached_recur_operator clause,
+    # mirroring JAX's remat lowering in jax/_src/ad_checkpoint.py,
+    # prevent_cse=True), the EXLA-side structural assertion belongs in
+    # exla/test and looks like:
+    #
+    #     test "checkpoint region is fenced by an optimization barrier" do
+    #       mlir =
+    #         EXLA.to_mlir_module(
+    #           fn x ->
+    #             Nx.Defn.value_and_grad(x, fn x ->
+    #               x
+    #               |> Nx.Defn.checkpoint(fn x -> x |> Nx.exp() |> Nx.sin() end)
+    #               |> Nx.sum()
+    #             end)
+    #           end,
+    #           [Nx.template({4}, :f32)]
+    #         )
+    #
+    #       assert mlir =~ "stablehlo.optimization_barrier"
+    #     end
+    #
+    # plus a GPU-tagged integration test comparing peak device memory
+    # with/without checkpoints on a deep chain (the barrier assertion is
+    # structural; only a real allocation measurement proves the saving
+    # end-to-end).
   end
 end
