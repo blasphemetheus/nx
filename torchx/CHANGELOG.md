@@ -1,5 +1,15 @@
 # Changelog
 
+## v0.13.1 (2026-08-10)
+
+  * Update to latest Nx to resolve bug (#1804)
+
+## v0.13.0 (2026-07-17)
+
+  * Update to latest Nx
+  * Add backend documentation guides
+  * Fix NIF/`on_load` ordering when loading LibTorch shared libraries
+
 ## v0.12.0 (2026-05-15)
 
   * Update to latest Nx

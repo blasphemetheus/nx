@@ -39,7 +39,7 @@ defmodule Nx.Defn.Expr do
 
     * `while(initial, condition, body)`
 
-    * `hook(data, callback_spec)`
+    * `io_call(data, callback_spec)`
 
     * `runtime_call(out, tensor_or_container, opts, fun)`
 
@@ -170,9 +170,17 @@ defmodule Nx.Defn.Expr do
 
       zero =
         Composite.traverse(last, fn leaf ->
-          vectorized_axes = Nx.to_tensor(leaf).vectorized_axes
+          %T{vectorized_axes: vectorized_axes, shape: shape} = leaf = Nx.to_tensor(leaf)
 
-          Nx.broadcast(0, Nx.devectorize(leaf).shape) |> Nx.vectorize(vectorized_axes)
+          if vectorized_axes == [] do
+            Nx.broadcast(0, shape)
+          else
+            Nx.revectorize(
+              Nx.broadcast(0, Nx.devectorize(leaf, keep_names: false).shape),
+              vectorized_axes,
+              target_shape: shape
+            )
+          end
         end)
 
       # here we build the `other` clauses into a remaining cond that also contains `last`.
@@ -420,58 +428,13 @@ defmodule Nx.Defn.Expr do
     out
   end
 
-  defp expr_block(struct, in_args, fun) do
-    {args, opts} = Enum.split_while(in_args, &(not is_list(&1)))
-    params = Enum.with_index(args, &parameter/2)
-
-    case apply(fun, [struct | params ++ opts]) do
-      %{data: %{context: context}} = res ->
-        expr(res, context, :block, [struct, in_args, res, fun])
-
-      t when is_tuple(t) ->
-        context = elem(t, 0).data.context
-        out = tuple_out(tuple_size(t))
-        tuple(expr(out, context, :block, [struct, in_args, t, fun]), Tuple.to_list(t))
-    end
-  end
-
   ## Nx.Defn AST callbacks
 
   @doc false
   def id(), do: make_ref()
 
   @doc false
-  def add_hook(%Nx.Defn.Token{} = token, expr, name, function)
-      when is_atom(name) and (is_function(function) or is_nil(function)) do
-    expr = to_container_expr(expr)
-    token = Nx.Defn.Token.add_hook(token, expr, name, function)
-    {token, expr}
-  end
-
-  @doc false
-  def attach_token(%Nx.Defn.Token{hooks: []}, expr), do: to_container_expr(expr)
-
-  def attach_token(%Nx.Defn.Token{hooks: hooks}, expr) do
-    expr = to_container_expr(expr)
-
-    hooks
-    |> Enum.reverse()
-    |> Enum.reduce(expr, fn %{expr: hooked_expr, name: name, callback: callback}, acc ->
-      hooked_expr = to_container_expr(hooked_expr)
-      inner_spec = hook_callback_spec(name, callback)
-      hook(acc, {:token_hook, hooked_expr, inner_spec})
-    end)
-  end
-
-  defp hook_callback_spec(name, nil) when is_atom(name), do: {:named, name, nil}
-
-  defp hook_callback_spec(name, callback) when is_atom(name) and is_function(callback, 1),
-    do: {:named, name, callback}
-
-  defp hook_callback_spec(_name, callback) when is_function(callback, 1), do: {:fn, callback}
-
-  @doc false
-  def hook(tensor_or_container, callback_spec) do
+  def io_call(tensor_or_container, callback_spec) do
     tensor_expr =
       Composite.traverse(tensor_or_container, fn
         %T{} = t -> to_expr(t)
@@ -492,19 +455,19 @@ defmodule Nx.Defn.Expr do
       end
 
     root =
-      expr(root_type, context, :hook, [
+      expr(root_type, context, :io_call, [
         tensor_expr,
         callback_spec,
         user_template,
         ref
       ])
 
-    hook_data_from_root(root, user_template, context)
+    io_call_data_from_root(root, user_template, context)
   end
 
-  defp hook_data_from_root(root, %T{}, _context), do: root
+  defp io_call_data_from_root(root, %T{}, _context), do: root
 
-  defp hook_data_from_root(root, user_template, context) do
+  defp io_call_data_from_root(root, user_template, context) do
     {container_expr, _} =
       Composite.traverse(user_template, {0, root}, fn
         %T{} = template, {i, root} ->
@@ -861,7 +824,21 @@ defmodule Nx.Defn.Expr do
 
   @impl true
   def block(struct, _output \\ nil, in_args, fun) do
-    expr_block(struct, in_args, fun)
+    {args, opts} = Enum.split_while(in_args, &(not is_list(&1)))
+    {args, context} = to_exprs(args)
+    context = context || :root
+    in_args = args ++ opts
+    params = Enum.with_index(args, fn arg, pos -> parameter(arg, context, pos) end)
+
+    case apply(fun, [struct | params ++ opts]) do
+      %{data: %{context: context}} = res ->
+        expr(res, context, :block, [struct, in_args, res, fun])
+
+      t when is_tuple(t) ->
+        context = elem(t, 0).data.context
+        out = tuple_out(tuple_size(t))
+        tuple(expr(out, context, :block, [struct, in_args, t, fun]), Tuple.to_list(t))
+    end
   end
 
   @impl true
@@ -1797,32 +1774,18 @@ defmodule Nx.Defn.Expr do
     {var_name, store_line(state, :parameters, parameter, type_shape)}
   end
 
-  defp cached_recur_inspect(:hook, args, type_shape, state) do
+  defp cached_recur_inspect(:io_call, args, type_shape, state) do
     [data, callback_spec, _template, _ref] = args
     {data, state} = recur_inspect(data, state)
     var_name = var_name(state)
 
-    {expr, state} =
+    expr =
       case callback_spec do
-        {:token_hook, hooked_expr, inner_spec} ->
-          {hooked_expr, state} = recur_inspect(hooked_expr, state)
-
-          hook_io =
-            case inner_spec do
-              {:named, name, _} ->
-                IO.iodata_to_binary(["hook ", Atom.to_string(name), ": ", hooked_expr])
-
-              {:fn, fun} ->
-                IO.iodata_to_binary(["hook ", hooked_expr, ", ", inspect(fun)])
-            end
-
-          {IO.iodata_to_binary([var_name, " = ", hook_io, "; ", data]), state}
-
         {:named, name, _} ->
-          {IO.iodata_to_binary([var_name, " = hook ", Atom.to_string(name), ": ", data]), state}
+          IO.iodata_to_binary([var_name, " = io_call ", Atom.to_string(name), ": ", data])
 
         {:fn, fun} ->
-          {IO.iodata_to_binary([var_name, " = hook ", data, ", ", inspect(fun)]), state}
+          IO.iodata_to_binary([var_name, " = io_call ", data, ", ", inspect(fun)])
       end
 
     {var_name, store_line(state, :exprs, expr, type_shape)}
