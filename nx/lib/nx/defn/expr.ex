@@ -428,6 +428,29 @@ defmodule Nx.Defn.Expr do
     out
   end
 
+  @doc """
+  Creates a `checkpoint` tensor expression.
+
+  Args stored: `[input, body_expr, fun, param]`
+  - `input` — the saved activation expression
+  - `body_expr` — the traced forward result
+  - `fun` — the body function for re-tracing in grad
+  - `param` — the parameter node used during tracing (for evaluator)
+  """
+  def checkpoint(input, fun) when is_function(fun, 1) do
+    param = parameter(input, 0)
+
+    case fun.(param) do
+      %{data: %{context: context}} = res ->
+        expr(res, context, :checkpoint, [input, res, fun, param])
+
+      t when is_tuple(t) ->
+        context = elem(t, 0).data.context
+        out = expr(tuple_out(tuple_size(t)), context, :checkpoint, [input, t, fun, param])
+        tuple(out, Tuple.to_list(t))
+    end
+  end
+
   ## Nx.Defn AST callbacks
 
   @doc false
@@ -1813,6 +1836,9 @@ defmodule Nx.Defn.Expr do
     {in_args_io, state} = Enum.map_reduce(in_args, state, &recur_inspect/2)
     {[inspect(struct) | in_args_io], state}
   end
+
+  defp traverse_args(:checkpoint, [input, _body_expr, _fun, _param], state),
+    do: traverse_args([input], state)
 
   defp traverse_args(:metadata, [tensor, %{inspect: inspect}], state),
     do: traverse_args([tensor, inspect], state)

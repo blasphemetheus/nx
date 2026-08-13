@@ -161,6 +161,19 @@ defmodule Nx.Defn.Tree do
     {[struct, in_args, expr, callback], acc}
   end
 
+  def apply_args(%T{data: %Expr{op: :checkpoint, args: args}}, type, acc, fun) do
+    [input, expr, callback, param] = args
+    {input, acc} = fun.(input, acc)
+
+    {expr, acc} =
+      case type do
+        :all -> Composite.traverse(expr, acc, fun)
+        :scope -> {expr, acc}
+      end
+
+    {[input, expr, callback, param], acc}
+  end
+
   def apply_args(%T{data: %Expr{op: :io_call, args: args}}, _type, acc, fun) do
     [tensor_expr, callback_spec, template, ref] = args
     {tensor_expr, acc} = Composite.traverse(tensor_expr, acc, fun)
