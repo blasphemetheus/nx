@@ -177,6 +177,70 @@ defmodule Nx.FuzzFloatEdgeTest do
     end
   end
 
+  describe "unary limits on non-finite inputs (correct rows)" do
+    # Ops whose non-finite handling is currently correct on BinaryBackend.
+    # Each entry: {op, f(nan), f(+inf), f(-inf)} as to_flat_list values.
+    @correct_limits [
+      {:sinh, :nan, :infinity, :neg_infinity},
+      {:cosh, :nan, :infinity, :infinity},
+      {:exp, :nan, :infinity, 0.0},
+      {:expm1, :nan, :infinity, -1.0},
+      {:abs, :nan, :infinity, :infinity},
+      {:negate, :nan, :neg_infinity, :infinity},
+      {:sqrt, :nan, :infinity, :nan},
+      {:sigmoid, :nan, 1.0, 0.0}
+    ]
+
+    test "limit table holds" do
+      for {op, at_nan, at_inf, at_ninf} <- @correct_limits do
+        for {input, expected} <- [
+              {:nan, at_nan},
+              {:infinity, at_inf},
+              {:neg_infinity, at_ninf}
+            ] do
+          t = Nx.tensor(input, type: {:f, 64})
+          result = apply(Nx, op, [t]) |> Nx.to_flat_list() |> hd()
+          assert result == expected, "#{op}(#{input}) = #{inspect(result)}, want #{expected}"
+        end
+      end
+    end
+  end
+
+  describe "known bugs: unary non-finite ([BUG-UNARY-NONFINITE])" do
+    # See FUZZ_FINDINGS/unary_nonfinite_crashes_and_wrong_values.md.
+    # Flip these pins when fixed: floor/ceil/round are identity on
+    # non-finites, atanh(non-finite) is NaN, tanh(±Inf) = ±1.0,
+    # sign(NaN) = NaN, sign(-Inf) = -1.0.
+
+    test "floor/ceil/round crash on every non-finite input" do
+      for op <- [:floor, :ceil, :round],
+          input <- [:nan, :infinity, :neg_infinity] do
+        t = Nx.tensor(input, type: {:f, 64})
+        assert catch_error(apply(Nx, op, [t]))
+      end
+    end
+
+    test "atanh crashes on non-finite input" do
+      for input <- [:nan, :infinity, :neg_infinity] do
+        t = Nx.tensor(input, type: {:f, 64})
+        assert catch_error(Nx.atanh(t))
+      end
+    end
+
+    test "tanh(+/-Inf) returns NaN instead of +/-1.0" do
+      assert Nx.to_flat_list(Nx.tanh(Nx.tensor(:infinity, type: {:f, 64}))) == [:nan]
+      assert Nx.to_flat_list(Nx.tanh(Nx.tensor(:neg_infinity, type: {:f, 64}))) == [:nan]
+    end
+
+    test "sign(NaN) returns 1.0 instead of NaN" do
+      assert Nx.to_flat_list(Nx.sign(Nx.tensor(:nan, type: {:f, 64}))) == [1.0]
+    end
+
+    test "sign(-Inf) returns +1.0 instead of -1.0" do
+      assert Nx.to_flat_list(Nx.sign(Nx.tensor(:neg_infinity, type: {:f, 64}))) == [1.0]
+    end
+  end
+
   describe "known bugs: f64 overflow ([BUG-F64-OVERFLOW])" do
     # See FUZZ_FINDINGS/f64_binary_op_overflow_arithmetic_error.md.
     # IEEE 754 requires +Infinity in all four cases below. Flip these pins to
@@ -211,15 +275,19 @@ defmodule Nx.FuzzFloatEdgeTest do
   describe "cancellation" do
     property "summing (x, -x(1+eps)) pairs matches the analytic residual" do
       check all(t <- FuzzGen.cancellation_tensor(), max_runs: 50) do
-        # each pair contributes -x * 1.0e-14; f64 has plenty of headroom to
-        # represent both the terms and the residual, so a correct summation
-        # is close to the analytic value at loose relative tolerance
-        xs = t |> Nx.to_flat_list() |> Enum.take_every(2)
-        expected = -1.0e-14 * Enum.sum(xs)
+        # Reference: a sequential f64 fold in Elixir — same precision, same
+        # rounding regime. The analytic value -1e-14*Σx is NOT a valid oracle
+        # here: the residual of each pair is quantized to ulp(x), which can
+        # be a few percent of the residual itself. Tolerance is a few ulps
+        # of the largest term times the element count (summation-order slack).
+        values = Nx.to_flat_list(t)
+        expected = Enum.reduce(values, 0.0, &(&2 + &1))
+        max_abs = values |> Enum.map(&abs/1) |> Enum.max()
+        atol = max(length(values) * max_abs * 4.0e-16, 1.0e-300)
 
         assert_all_close(Nx.sum(t), Nx.tensor(expected, type: {:f, 64}),
-          rtol: 1.0e-2,
-          atol: 1.0e-30
+          rtol: 1.0e-12,
+          atol: atol
         )
       end
     end

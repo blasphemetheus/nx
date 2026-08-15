@@ -63,9 +63,12 @@ defmodule Nx.FuzzTest do
   end
 
   defp tensor(shape_gen \\ non_empty_shape(), type_gen \\ numeric_type()) do
+    # Retrofit (FUZZ_ROADMAP T1.1): values now mix iota with hostile-but-finite
+    # values (negatives, ±0.0, fractional, magnitude spread). NaN/Inf stay in
+    # fuzz_float_edge_test.exs, whose oracles understand them.
     bind(shape_gen, fn shape ->
       bind(type_gen, fn type ->
-        constant(Nx.iota(shape, type: type))
+        FuzzGen.value_mixed_tensor(shape, Nx.Type.normalize!(type))
       end)
     end)
   end

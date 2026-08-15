@@ -17,17 +17,45 @@ defmodule Nx.FuzzSequenceTest do
   # Each op is an atom name. apply_op/2 dispatches to the implementation.
 
   @op_names [
-    :abs, :negate, :sign,
-    :sin, :cos, :tanh, :sigmoid, :exp, :log, :sqrt, :rsqrt,
-    :flatten, :squeeze_ones, :new_axis_0, :new_axis_last, :reverse,
-    :sum, :mean, :product,
-    :sum_axis0, :reduce_max_axis0,
-    :add_1, :sub_1, :mul_2, :add_0, :mul_1,
-    :to_f32, :to_s32, :to_f64,
+    :abs,
+    :negate,
+    :sign,
+    :sin,
+    :cos,
+    :tanh,
+    :sigmoid,
+    :exp,
+    :log,
+    :sqrt,
+    :rsqrt,
+    :flatten,
+    :squeeze_ones,
+    :new_axis_0,
+    :new_axis_last,
+    :reverse,
+    :sum,
+    :mean,
+    :product,
+    :sum_axis0,
+    :reduce_max_axis0,
+    :add_1,
+    :sub_1,
+    :mul_2,
+    :add_0,
+    :mul_1,
+    :to_f32,
+    :to_s32,
+    :to_f64,
     # Richer ops (task #20)
-    :window_sum_2, :pad_1, :diff_1, :tile_2,
-    :gather_first, :indexed_put_zero, :random_reshape,
-    :sort_asc, :cumulative_sum
+    :window_sum_2,
+    :pad_1,
+    :diff_1,
+    :tile_2,
+    :gather_first,
+    :indexed_put_zero,
+    :random_reshape,
+    :sort_asc,
+    :cumulative_sum
   ]
 
   defp apply_op(:abs, t), do: Nx.abs(t)
@@ -43,12 +71,15 @@ defmodule Nx.FuzzSequenceTest do
   defp apply_op(:rsqrt, t), do: Nx.rsqrt(Nx.add(Nx.abs(Nx.as_type(t, :f32)), 1.0))
 
   defp apply_op(:flatten, t), do: Nx.flatten(t)
+
   defp apply_op(:squeeze_ones, t) do
     ones = for {d, i} <- Enum.with_index(Tuple.to_list(Nx.shape(t))), d == 1, do: i
     if ones == [], do: t, else: Nx.squeeze(t, axes: ones)
   end
+
   defp apply_op(:new_axis_0, t), do: Nx.new_axis(t, 0)
   defp apply_op(:new_axis_last, t), do: Nx.new_axis(t, -1)
+
   defp apply_op(:reverse, t) do
     if tuple_size(Nx.shape(t)) == 0, do: t, else: Nx.reverse(t)
   end
@@ -60,6 +91,7 @@ defmodule Nx.FuzzSequenceTest do
   defp apply_op(:sum_axis0, t) do
     if tuple_size(Nx.shape(t)) == 0, do: t, else: Nx.sum(Nx.as_type(t, :f32), axes: [0])
   end
+
   defp apply_op(:reduce_max_axis0, t) do
     if tuple_size(Nx.shape(t)) == 0, do: t, else: Nx.reduce_max(t, axes: [0])
   end
@@ -77,6 +109,7 @@ defmodule Nx.FuzzSequenceTest do
   # Richer ops (task #20)
   defp apply_op(:window_sum_2, t) do
     rank = tuple_size(Nx.shape(t))
+
     if rank == 0 do
       t
     else
@@ -88,6 +121,7 @@ defmodule Nx.FuzzSequenceTest do
 
   defp apply_op(:pad_1, t) do
     rank = tuple_size(Nx.shape(t))
+
     if rank == 0 do
       t
     else
@@ -98,6 +132,7 @@ defmodule Nx.FuzzSequenceTest do
 
   defp apply_op(:diff_1, t) do
     rank = tuple_size(Nx.shape(t))
+
     if rank == 0 or elem(Nx.shape(t), rank - 1) < 2 do
       t
     else
@@ -107,6 +142,7 @@ defmodule Nx.FuzzSequenceTest do
 
   defp apply_op(:tile_2, t) do
     rank = tuple_size(Nx.shape(t))
+
     if rank == 0 or Nx.size(t) > 500 do
       t
     else
@@ -117,6 +153,7 @@ defmodule Nx.FuzzSequenceTest do
 
   defp apply_op(:gather_first, t) do
     rank = tuple_size(Nx.shape(t))
+
     if rank == 0 do
       t
     else
@@ -128,6 +165,7 @@ defmodule Nx.FuzzSequenceTest do
 
   defp apply_op(:indexed_put_zero, t) do
     rank = tuple_size(Nx.shape(t))
+
     if rank == 0 do
       t
     else
@@ -140,6 +178,7 @@ defmodule Nx.FuzzSequenceTest do
   # Random reshape to compatible shape (task #21)
   defp apply_op(:random_reshape, t) do
     size = Nx.size(t)
+
     if size <= 1 do
       t
     else
@@ -163,7 +202,9 @@ defmodule Nx.FuzzSequenceTest do
     factors = factorize(size)
     # Pick a random grouping of factors
     case Enum.random(1..min(length(factors), 4)) do
-      1 -> {size}
+      1 ->
+        {size}
+
       n_dims ->
         dims = group_factors(factors, n_dims)
         List.to_tuple(dims)
@@ -171,6 +212,7 @@ defmodule Nx.FuzzSequenceTest do
   end
 
   defp factorize(1), do: [1]
+
   defp factorize(n) when n > 1 do
     Enum.reduce(2..n, {n, []}, fn f, {remaining, factors} ->
       do_factor(remaining, f, factors)
@@ -182,12 +224,14 @@ defmodule Nx.FuzzSequenceTest do
   defp do_factor(remaining, f, factors) when rem(remaining, f) == 0 do
     do_factor(div(remaining, f), f, [f | factors])
   end
+
   defp do_factor(remaining, _f, factors), do: {remaining, factors}
 
   defp group_factors(factors, n_dims) when length(factors) <= n_dims do
     padding = List.duplicate(1, n_dims - length(factors))
     Enum.shuffle(factors ++ padding)
   end
+
   defp group_factors(factors, n_dims) do
     # Randomly merge adjacent factors until we have n_dims groups
     factors
@@ -234,31 +278,35 @@ defmodule Nx.FuzzSequenceTest do
     # 2. All dimensions are non-negative integers
     for {d, i} <- Enum.with_index(Tuple.to_list(shape)) do
       assert is_integer(d) and d >= 0,
-        "#{step_name}: dimension #{i} is #{inspect(d)}"
+             "#{step_name}: dimension #{i} is #{inspect(d)}"
     end
 
     # 3. Type is valid
     {type_class, type_bits} = Nx.type(tensor)
+
     assert type_class in [:u, :s, :f, :bf, :c],
-      "#{step_name}: invalid type class #{inspect(type_class)}"
+           "#{step_name}: invalid type class #{inspect(type_class)}"
+
     assert is_integer(type_bits) and type_bits > 0,
-      "#{step_name}: invalid type bits #{inspect(type_bits)}"
+           "#{step_name}: invalid type bits #{inspect(type_bits)}"
 
     # 4. Size matches shape product
     expected_size = if shape == {}, do: 1, else: Tuple.product(shape)
+
     assert Nx.size(tensor) == expected_size,
-      "#{step_name}: size #{Nx.size(tensor)} != expected #{expected_size}"
+           "#{step_name}: size #{Nx.size(tensor)} != expected #{expected_size}"
 
     # 5. Rank matches shape tuple_size
     assert Nx.rank(tensor) == tuple_size(shape),
-      "#{step_name}: rank mismatch"
+           "#{step_name}: rank mismatch"
 
     # 6. Can extract data without crashing (if reasonably sized)
     if Nx.size(tensor) <= 1000 do
       flat = Nx.to_flat_list(tensor)
       assert is_list(flat), "#{step_name}: to_flat_list returned non-list"
+
       assert length(flat) == expected_size,
-        "#{step_name}: flat list length #{length(flat)} != #{expected_size}"
+             "#{step_name}: flat list length #{length(flat)} != #{expected_size}"
     end
 
     tensor
@@ -282,9 +330,12 @@ defmodule Nx.FuzzSequenceTest do
               shape <- initial_shape(),
               type <- initial_type(),
               ops <- op_sequence(3, 8),
+              # T1.1 retrofit: hostile-but-finite values; max_mag keeps
+              # exp() in the chain vocabulary finite (exp(20) ~ 4.8e8)
+              tensor <-
+                FuzzGen.value_mixed_tensor(shape, Nx.Type.normalize!(type), max_mag: 20.0),
               max_runs: 50
             ) do
-        tensor = Nx.iota(shape, type: type)
         check_invariants(tensor, "initial")
         {final, _steps} = run_sequence(tensor, ops)
         assert is_struct(final, Nx.Tensor)
@@ -296,9 +347,10 @@ defmodule Nx.FuzzSequenceTest do
               shape <- initial_shape(),
               type <- initial_type(),
               ops <- op_sequence(8, 15),
+              tensor <-
+                FuzzGen.value_mixed_tensor(shape, Nx.Type.normalize!(type), max_mag: 20.0),
               max_runs: 30
             ) do
-        tensor = Nx.iota(shape, type: type)
         {final, _steps} = run_sequence(tensor, ops)
         assert is_struct(final, Nx.Tensor)
       end
@@ -877,7 +929,7 @@ defmodule Nx.FuzzSequenceTest do
       final_processes = length(Process.list())
       # Allow some variance (up to 10 processes) but no unbounded growth
       assert final_processes - initial_processes < 10,
-        "Process count grew from #{initial_processes} to #{final_processes}"
+             "Process count grew from #{initial_processes} to #{final_processes}"
     end
 
     test "100-op sequence doesn't crash" do
@@ -905,8 +957,9 @@ defmodule Nx.FuzzSequenceTest do
       Process.sleep(50)
 
       final_processes = length(Process.list())
+
       assert final_processes - initial_processes < 10,
-        "Process leak: #{initial_processes} -> #{final_processes}"
+             "Process leak: #{initial_processes} -> #{final_processes}"
     end
   end
 end

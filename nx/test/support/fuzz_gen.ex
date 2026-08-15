@@ -118,6 +118,72 @@ defmodule FuzzGen do
     end)
   end
 
+  @doc """
+  Drop-in replacement for `Nx.iota`-valued tensors in the smoke suites:
+  mixes iota with hostile-but-finite values — negatives, ±0.0, fractional
+  values, magnitude spread — while excluding NaN/Inf/denormals, whose
+  semantics are owned by `fuzz_float_edge_test.exs` (and currently trip
+  [BUG-F64-OVERFLOW] / [BUG-UNARY-NONFINITE] if fed into arbitrary ops).
+
+  The float band is product-safe: |x| <= max_mag with max_mag^64 finite in
+  f64 and the f32 encode path clamping overflow to Inf correctly.
+  """
+  def value_mixed_tensor(shape, type, opts \\ []) do
+    max_mag = Keyword.get(opts, :max_mag, 1.0e3)
+
+    case {Tuple.product(shape), type} do
+      {0, _} ->
+        constant(Nx.iota(shape, type: type))
+
+      {_, {:c, _}} ->
+        constant(Nx.iota(shape, type: type))
+
+      {n, {t, _}} when t in [:f, :bf] ->
+        frequency([
+          {2, constant(Nx.iota(shape, type: type))},
+          {3, hostile_float_tensor(shape, n, type, max_mag)}
+        ])
+
+      {n, {t, _}} when t in [:s, :u] ->
+        frequency([
+          {2, constant(Nx.iota(shape, type: type))},
+          {3, hostile_int_tensor(shape, n, type)}
+        ])
+    end
+  end
+
+  defp hostile_float_tensor(shape, count, type, max_mag) do
+    specials = [0.0, -0.0, 1.0, -1.0, 0.5, -0.5, 2.0, -2.0, max_mag, -max_mag, 1.0e-3]
+
+    elem_gen =
+      frequency([
+        {4, float(min: -max_mag, max: max_mag)},
+        {1, member_of(specials)}
+      ])
+
+    bind(list_of(elem_gen, length: count), fn vals ->
+      constant(vals |> Nx.tensor(type: type) |> Nx.reshape(shape))
+    end)
+  end
+
+  defp hostile_int_tensor(shape, count, {sign, bits} = type) do
+    {lo, hi} =
+      case sign do
+        :s -> {-Bitwise.bsl(1, bits - 1), Bitwise.bsl(1, bits - 1) - 1}
+        :u -> {0, Bitwise.bsl(1, bits) - 1}
+      end
+
+    elem_gen =
+      frequency([
+        {4, integer(lo..hi)},
+        {1, member_of(Enum.uniq([lo, hi, 0, 1, -1] |> Enum.filter(&(&1 >= lo and &1 <= hi))))}
+      ])
+
+    bind(list_of(elem_gen, length: count), fn vals ->
+      constant(vals |> Nx.tensor(type: type) |> Nx.reshape(shape))
+    end)
+  end
+
   ## Bit-level classification (independent oracle — no Nx involved)
 
   @doc "Classify every element of a float tensor from its raw bits."
