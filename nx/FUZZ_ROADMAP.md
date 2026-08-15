@@ -45,16 +45,21 @@ Status key: [ ] planned · [~] in progress · [x] landed
 
 ### Tier 1 — highest expected bug yield
 
-- [~] **T1.1 Bit-pattern float generator.** Random bit patterns reinterpreted as
-  floats (hits NaN payloads, ±Inf, denormals, −0.0, full exponent range) +
-  cancellation-prone constructions. New shared generator in `test/support/`,
-  new `fuzz_float_edge_test.exs` suite with NaN/Inf-aware oracles, then
-  retrofit into existing smoke/invariant suites where domains allow.
-- [ ] **T1.2 `Nx.block` differential fuzz.** Each of the 21 block structs
-  carries a traced default implementation — compare backend lowering vs default
-  callback, and sweep each struct's option matrix (`mode`, `full_matrices?`,
-  `eps`, `k`, `axis`, …). Structural invariants where analytic (Q·R == A,
-  top_k sorted, cumsum vs sum).
+- [x] **T1.1 Bit-pattern float generator.** Landed 2026-08-14: `FuzzGen`
+  (`test/support/fuzz_gen.ex`) + `fuzz_float_edge_test.exs` (20 properties,
+  NaN/Inf-aware oracles) + hostile-finite retrofit into `fuzz_test.exs` and
+  `fuzz_sequence_test.exs`. **Found 2 HIGH bugs on first contact**:
+  [f64 binary-op overflow](FUZZ_FINDINGS/f64_binary_op_overflow_arithmetic_error.md)
+  and [unary non-finite crashes/wrong values](FUZZ_FINDINGS/unary_nonfinite_crashes_and_wrong_values.md).
+- [x] **T1.2 `Nx.block` differential fuzz.** Landed 2026-08-14:
+  `fuzz_block_test.exs` (15 properties) — jit-vs-eager route differential per
+  block API + structural invariants (Q·R==A, L·Lᵀ==A, P·L·U==A, SVD/Eigh
+  reconstruction, top_k traceability, cumulative vs Enum.scan, all_close vs
+  Elixir reference, FFT2/RFFT round trips) with option sweeps (qr mode,
+  full_matrices?, reverse, rtol/atol). No live bugs found — the historical
+  expr_block dispatch bug was fixed upstream by the block rework. The
+  *native-lowering* differential (EXLA custom calls vs default callback)
+  needs a backend and belongs to T3.1's differential completion.
 - [ ] **T1.3 `Nx.Random` properties.** split/fold_in determinism and
   independence, moment checks per distribution, choice/shuffle permutation
   invariants, vectorized keys.
