@@ -60,9 +60,14 @@ Status key: [ ] planned · [~] in progress · [x] landed
   expr_block dispatch bug was fixed upstream by the block rework. The
   *native-lowering* differential (EXLA custom calls vs default callback)
   needs a backend and belongs to T3.1's differential completion.
-- [ ] **T1.3 `Nx.Random` properties.** split/fold_in determinism and
-  independence, moment checks per distribution, choice/shuffle permutation
-  invariants, vectorized keys.
+- [x] **T1.3 `Nx.Random` properties.** Landed 2026-08-14:
+  `fuzz_random_props_test.exs` (12 properties) — bitwise determinism per
+  seed, stream distinctness across seeds/new_key, split subkey stream
+  independence, fold_in determinism+distinctness, uniform/randint
+  range+shape+type contracts, moment checks at ~7 standard errors
+  (deterministic per generated seed, so not flaky), shuffle permutation +
+  determinism + non-identity, choice population membership + sample count,
+  vectorized-key batch stream distinctness. No live bugs found.
 - [ ] **T1.4 Conv value oracle.** Reference im2col+dot implementation (or
   cross-backend comparison) behind the existing parameter sweep — conv is
   currently shape-checked only.
