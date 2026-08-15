@@ -79,16 +79,22 @@ Status key: [ ] planned · [~] in progress · [x] landed
 
 ### Tier 2 — v1.0-specific
 
-- [ ] **T2.1 Error-contract fuzz.** Property: invalid inputs raise Nx-owned
-  `ArgumentError` with a useful message — never bare
-  `ArithmeticError`/`MatchError`/`FunctionClauseError` (the reshape-`:auto` /
-  sub-byte-inspect class). API freeze makes error behavior contract.
+- [x] **T2.1 Error-contract fuzz.** Landed 2026-08-14:
+  `fuzz_error_contract_test.exs` — 24-case invalid-input table + randomized
+  dimension-mismatch properties. Contract is nearly clean: only violation is
+  the known reshape-two-`:auto` ArithmeticError leak (pinned). Documented
+  non-raising semantics excluded: slice start-clamping, uneven split.
 - [ ] **T2.2 New-API metamorphic sweep.** `pad_outer` 4 modes (involution/
   periodicity identities), `rfft`/`irfft` round-trip + Parseval, `fft2` vs
   composed 1-D FFTs, f8/e4m3fn saturation (no-Inf type) + `Nx.Floating`
   round-trips, sub-byte arithmetic promotion.
-- [ ] **T2.3 `cond`-under-grad + multi-axis vectorization.** Historical bug
-  factory (#1729/#1730 were vectorized+cond); both configurations unfuzzed.
+- [x] **T2.3 `cond`-under-grad + multi-axis vectorization.** Landed 2026-08-14:
+  `fuzz_cond_vectorized_grad_test.exs` — 7 properties with closed-form
+  derivative oracles: grad through cond/nested-cond/data-dependent-pred,
+  doubly-vectorized reductions and binary ops vs plain-axis reference,
+  doubly-vectorized grad, and grad-through-cond-with-vectorized-input (the
+  exact #1729/#1730 configuration — passes on current main; that bug class
+  is confirmed dead).
 
 ### Tier 3 — infrastructure hardening
 
