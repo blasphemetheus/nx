@@ -46,10 +46,10 @@ defmodule TorchxDifferentialFuzzTest do
     b = run_under(@torchx_backend, fun) |> Nx.backend_copy(Nx.BinaryBackend)
 
     assert Nx.shape(a) == Nx.shape(b),
-      "shape mismatch: binary #{inspect(Nx.shape(a))} vs torchx #{inspect(Nx.shape(b))}"
+           "shape mismatch: binary #{inspect(Nx.shape(a))} vs torchx #{inspect(Nx.shape(b))}"
 
     assert Nx.type(a) == Nx.type(b),
-      "type mismatch: binary #{inspect(Nx.type(a))} vs torchx #{inspect(Nx.type(b))}"
+           "type mismatch: binary #{inspect(Nx.type(a))} vs torchx #{inspect(Nx.type(b))}"
 
     assert_all_close(a, b, atol: atol, rtol: rtol)
   end
@@ -89,10 +89,14 @@ defmodule TorchxDifferentialFuzzTest do
               vals <- list_of(float(min: 0.1, max: 3.0), length: n),
               max_runs: 10
             ) do
-        diff(fn ->
-          x = Nx.tensor(vals, type: :f32)
-          Nx.log(Nx.exp(x))
-        end, atol: 1.0e-5, rtol: 1.0e-5)
+        diff(
+          fn ->
+            x = Nx.tensor(vals, type: :f32)
+            Nx.log(Nx.exp(x))
+          end,
+          atol: 1.0e-5,
+          rtol: 1.0e-5
+        )
       end
     end
   end
@@ -126,10 +130,14 @@ defmodule TorchxDifferentialFuzzTest do
               vals <- list_of(float(min: -50.0, max: 50.0), length: n),
               max_runs: 10
             ) do
-        diff(fn ->
-          t = Nx.tensor(vals, type: :f32)
-          Nx.stack([Nx.argmax(t), Nx.argmin(t)])
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            t = Nx.tensor(vals, type: :f32)
+            Nx.stack([Nx.argmax(t), Nx.argmin(t)])
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
       end
     end
 
@@ -153,11 +161,15 @@ defmodule TorchxDifferentialFuzzTest do
               vb <- list_of(float(min: -3.0, max: 3.0), length: 9),
               max_runs: 10
             ) do
-        diff(fn ->
-          a = Nx.tensor(va, type: :f32) |> Nx.reshape({3, 3})
-          b = Nx.tensor(vb, type: :f32) |> Nx.reshape({3, 3})
-          Nx.dot(a, b)
-        end, atol: 1.0e-5, rtol: 1.0e-5)
+        diff(
+          fn ->
+            a = Nx.tensor(va, type: :f32) |> Nx.reshape({3, 3})
+            b = Nx.tensor(vb, type: :f32) |> Nx.reshape({3, 3})
+            Nx.dot(a, b)
+          end,
+          atol: 1.0e-5,
+          rtol: 1.0e-5
+        )
       end
     end
 
@@ -166,11 +178,15 @@ defmodule TorchxDifferentialFuzzTest do
               vals <- list_of(float(min: -1.0, max: 1.0), length: 9),
               max_runs: 10
             ) do
-        diff(fn ->
-          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
-          a = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(r, 0.1))
-          Nx.LinAlg.determinant(a)
-        end, atol: 1.0e-5, rtol: 1.0e-4)
+        diff(
+          fn ->
+            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
+            a = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(r, 0.1))
+            Nx.LinAlg.determinant(a)
+          end,
+          atol: 1.0e-5,
+          rtol: 1.0e-4
+        )
       end
     end
 
@@ -179,11 +195,15 @@ defmodule TorchxDifferentialFuzzTest do
               vals <- list_of(float(min: -1.0, max: 1.0), length: 9),
               max_runs: 10
             ) do
-        diff(fn ->
-          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
-          a = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(r, 0.1))
-          Nx.LinAlg.invert(a)
-        end, atol: 1.0e-4, rtol: 1.0e-4)
+        diff(
+          fn ->
+            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
+            a = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(r, 0.1))
+            Nx.LinAlg.invert(a)
+          end,
+          atol: 1.0e-4,
+          rtol: 1.0e-4
+        )
       end
     end
 
@@ -192,12 +212,16 @@ defmodule TorchxDifferentialFuzzTest do
               vals <- list_of(float(min: -1.0, max: 1.0), length: 9),
               max_runs: 8
             ) do
-        diff(fn ->
-          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
-          sym = Nx.add(r, Nx.transpose(r)) |> Nx.divide(2.0)
-          spd = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(sym, 0.1))
-          Nx.LinAlg.cholesky(spd)
-        end, atol: 1.0e-5, rtol: 1.0e-4)
+        diff(
+          fn ->
+            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
+            sym = Nx.add(r, Nx.transpose(r)) |> Nx.divide(2.0)
+            spd = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(sym, 0.1))
+            Nx.LinAlg.cholesky(spd)
+          end,
+          atol: 1.0e-5,
+          rtol: 1.0e-4
+        )
       end
     end
   end
@@ -229,10 +253,14 @@ defmodule TorchxDifferentialFuzzTest do
     end
 
     test "c64 exp" do
-      diff(fn ->
-        a = Nx.tensor([Complex.new(0.5, 1.0), Complex.new(-1.0, 2.0)], type: :c64)
-        Nx.exp(a)
-      end, atol: 1.0e-5, rtol: 1.0e-4)
+      diff(
+        fn ->
+          a = Nx.tensor([Complex.new(0.5, 1.0), Complex.new(-1.0, 2.0)], type: :c64)
+          Nx.exp(a)
+        end,
+        atol: 1.0e-5,
+        rtol: 1.0e-4
+      )
     end
 
     test "c64 abs" do
@@ -277,12 +305,17 @@ defmodule TorchxDifferentialFuzzTest do
               vb <- list_of(float(min: -1.0, max: 1.0), length: 9),
               max_runs: 8
             ) do
-        diff(fn ->
-          a = Nx.tensor(va, type: :f32) |> Nx.reshape({3, 3})
-          b = Nx.tensor(vb, type: :f32) |> Nx.reshape({3, 3})
-          Nx.Defn.grad({a, b}, fn {x, y} -> Nx.sum(Nx.dot(x, y)) end)
-          |> elem(0)
-        end, atol: 1.0e-5, rtol: 1.0e-4)
+        diff(
+          fn ->
+            a = Nx.tensor(va, type: :f32) |> Nx.reshape({3, 3})
+            b = Nx.tensor(vb, type: :f32) |> Nx.reshape({3, 3})
+
+            Nx.Defn.grad({a, b}, fn {x, y} -> Nx.sum(Nx.dot(x, y)) end)
+            |> elem(0)
+          end,
+          atol: 1.0e-5,
+          rtol: 1.0e-4
+        )
       end
     end
   end
@@ -307,9 +340,13 @@ defmodule TorchxDifferentialFuzzTest do
               vb <- list_of(integer(0..1000), length: n),
               max_runs: 10
             ) do
-        diff(fn ->
-          Nx.bitwise_xor(Nx.tensor(va, type: :s32), Nx.tensor(vb, type: :s32))
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            Nx.bitwise_xor(Nx.tensor(va, type: :s32), Nx.tensor(vb, type: :s32))
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
       end
     end
   end
@@ -328,11 +365,15 @@ defmodule TorchxDifferentialFuzzTest do
               max_runs: 8
             ) do
         # Q^T Q should be identity; both backends should agree.
-        diff(fn ->
-          a = Nx.tensor(vals, type: :f32) |> Nx.reshape({4, 4})
-          {q, _r} = Nx.LinAlg.qr(a)
-          Nx.dot(Nx.transpose(q), q)
-        end, atol: 1.0e-5, rtol: 1.0e-4)
+        diff(
+          fn ->
+            a = Nx.tensor(vals, type: :f32) |> Nx.reshape({4, 4})
+            {q, _r} = Nx.LinAlg.qr(a)
+            Nx.dot(Nx.transpose(q), q)
+          end,
+          atol: 1.0e-5,
+          rtol: 1.0e-4
+        )
       end
     end
 
@@ -341,11 +382,15 @@ defmodule TorchxDifferentialFuzzTest do
               vals <- list_of(float(min: -1.0, max: 1.0), length: 16),
               max_runs: 8
             ) do
-        diff(fn ->
-          a = Nx.tensor(vals, type: :f32) |> Nx.reshape({4, 4})
-          {_u, s, _v} = Nx.LinAlg.svd(a)
-          s
-        end, atol: 1.0e-4, rtol: 1.0e-4)
+        diff(
+          fn ->
+            a = Nx.tensor(vals, type: :f32) |> Nx.reshape({4, 4})
+            {_u, s, _v} = Nx.LinAlg.svd(a)
+            s
+          end,
+          atol: 1.0e-4,
+          rtol: 1.0e-4
+        )
       end
     end
 
@@ -353,13 +398,17 @@ defmodule TorchxDifferentialFuzzTest do
       :rand.seed(:exsss, {80, 81, 82})
       vals = for _ <- 1..16, do: (:rand.uniform() - 0.5) * 2.0
 
-      diff(fn ->
-        a = Nx.tensor(vals, type: :f32) |> Nx.reshape({4, 4})
-        sym = Nx.divide(Nx.add(a, Nx.transpose(a)), 2.0)
-        {eigvals, _eigvecs} = Nx.LinAlg.eigh(sym)
-        # Sort to avoid ordering differences.
-        Nx.sort(eigvals)
-      end, atol: 1.0e-4, rtol: 1.0e-4)
+      diff(
+        fn ->
+          a = Nx.tensor(vals, type: :f32) |> Nx.reshape({4, 4})
+          sym = Nx.divide(Nx.add(a, Nx.transpose(a)), 2.0)
+          {eigvals, _eigvecs} = Nx.LinAlg.eigh(sym)
+          # Sort to avoid ordering differences.
+          Nx.sort(eigvals)
+        end,
+        atol: 1.0e-4,
+        rtol: 1.0e-4
+      )
     end
   end
 
@@ -368,10 +417,14 @@ defmodule TorchxDifferentialFuzzTest do
     # argsort on a tensor with ties is a likely divergence.
 
     test "argsort of unique values agrees" do
-      diff(fn ->
-        t = Nx.tensor([3.0, 1.0, 4.0, 1.5, 9.0, 2.0, 6.0], type: :f32)
-        Nx.argsort(t)
-      end, atol: 0.0, rtol: 0.0)
+      diff(
+        fn ->
+          t = Nx.tensor([3.0, 1.0, 4.0, 1.5, 9.0, 2.0, 6.0], type: :f32)
+          Nx.argsort(t)
+        end,
+        atol: 0.0,
+        rtol: 0.0
+      )
     end
 
     test "argsort with ties: BinaryBackend and Torchx may differ" do
@@ -379,10 +432,15 @@ defmodule TorchxDifferentialFuzzTest do
       # or [1,0,3,2,4] — both are valid answers.
       result =
         try do
-          diff(fn ->
-            t = Nx.tensor([1, 1, 2, 2, 3], type: :s32)
-            Nx.argsort(t)
-          end, atol: 0.0, rtol: 0.0)
+          diff(
+            fn ->
+              t = Nx.tensor([1, 1, 2, 2, 3], type: :s32)
+              Nx.argsort(t)
+            end,
+            atol: 0.0,
+            rtol: 0.0
+          )
+
           :agreed
         rescue
           ExUnit.AssertionError -> :diverged
@@ -394,10 +452,14 @@ defmodule TorchxDifferentialFuzzTest do
     test "sort (not argsort) with ties agrees" do
       # Sort itself produces the same sorted values regardless of
       # tie-breaking.
-      diff(fn ->
-        t = Nx.tensor([1.0, 1.0, 2.0, 2.0, 3.0, 1.5, 1.5], type: :f32)
-        Nx.sort(t)
-      end, atol: 0.0, rtol: 0.0)
+      diff(
+        fn ->
+          t = Nx.tensor([1.0, 1.0, 2.0, 2.0, 3.0, 1.5, 1.5], type: :f32)
+          Nx.sort(t)
+        end,
+        atol: 0.0,
+        rtol: 0.0
+      )
     end
   end
 
@@ -407,11 +469,16 @@ defmodule TorchxDifferentialFuzzTest do
     test "u4 add (does Torchx support it?)" do
       result =
         try do
-          diff(fn ->
-            a = Nx.tensor([0, 1, 2, 3], type: :u4)
-            b = Nx.tensor([1, 1, 1, 1], type: :u4)
-            Nx.add(a, b)
-          end, atol: 0.0, rtol: 0.0)
+          diff(
+            fn ->
+              a = Nx.tensor([0, 1, 2, 3], type: :u4)
+              b = Nx.tensor([1, 1, 1, 1], type: :u4)
+              Nx.add(a, b)
+            end,
+            atol: 0.0,
+            rtol: 0.0
+          )
+
           :agreed
         rescue
           e -> {:raised, Exception.message(e) |> String.slice(0, 100)}
@@ -423,11 +490,16 @@ defmodule TorchxDifferentialFuzzTest do
     test "s2 addition probe" do
       result =
         try do
-          diff(fn ->
-            a = Nx.tensor([-2, -1, 0, 1], type: :s2)
-            b = Nx.tensor([1, 1, 0, -1], type: :s2)
-            Nx.add(a, b)
-          end, atol: 0.0, rtol: 0.0)
+          diff(
+            fn ->
+              a = Nx.tensor([-2, -1, 0, 1], type: :s2)
+              b = Nx.tensor([1, 1, 0, -1], type: :s2)
+              Nx.add(a, b)
+            end,
+            atol: 0.0,
+            rtol: 0.0
+          )
+
           :agreed
         rescue
           e -> {:raised, Exception.message(e) |> String.slice(0, 100)}
@@ -464,10 +536,14 @@ defmodule TorchxDifferentialFuzzTest do
               vals <- list_of(float(min: -5.0, max: 5.0), length: 6),
               max_runs: 10
             ) do
-        diff(fn ->
-          t = Nx.tensor(vals, type: :f32)
-          t |> Nx.reshape({2, 3}) |> Nx.reshape({6})
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            t = Nx.tensor(vals, type: :f32)
+            t |> Nx.reshape({2, 3}) |> Nx.reshape({6})
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
       end
     end
 
@@ -476,9 +552,13 @@ defmodule TorchxDifferentialFuzzTest do
               vals <- list_of(float(min: -5.0, max: 5.0), length: 12),
               max_runs: 10
             ) do
-        diff(fn ->
-          Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 4}) |> Nx.transpose()
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 4}) |> Nx.transpose()
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
       end
     end
 
@@ -487,11 +567,97 @@ defmodule TorchxDifferentialFuzzTest do
               vals <- list_of(float(min: -5.0, max: 5.0), length: 8),
               max_runs: 10
             ) do
-        diff(fn ->
-          t = Nx.tensor(vals, type: :f32)
-          idx = Nx.tensor([[0], [3], [5], [7]])
-          Nx.gather(t, idx)
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            t = Nx.tensor(vals, type: :f32)
+            idx = Nx.tensor([[0], [3], [5], [7]])
+            Nx.gather(t, idx)
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
+      end
+    end
+  end
+
+  # ── f64 differential (T3.1) ────────────────────────────────────────
+  # f64 was absent from this file; tolerances near machine epsilon since
+  # neither backend has reduced-precision hazards at f64.
+
+  describe "f64 differential" do
+    property "f64 element-wise math agrees tightly" do
+      check all(
+              n <- integer(2..16),
+              vals <- list_of(float(min: -100.0, max: 100.0), length: n),
+              max_runs: 10
+            ) do
+        for op <- [:exp, :sin, :tanh, :sqrt, :log] do
+          diff(
+            fn ->
+              x = Nx.tensor(vals, type: :f64)
+              x = if op in [:sqrt, :log], do: Nx.add(Nx.abs(x), 1.0e-6), else: x
+              apply(Nx, op, [x])
+            end,
+            atol: 1.0e-13,
+            rtol: 1.0e-12
+          )
+        end
+      end
+    end
+
+    property "f64 reductions and dot agree tightly" do
+      check all(
+              n <- integer(2..12),
+              vals <- list_of(float(min: -50.0, max: 50.0), length: n * n),
+              max_runs: 10
+            ) do
+        diff(
+          fn ->
+            a = Nx.tensor(vals, type: :f64) |> Nx.reshape({n, n})
+            Nx.concatenate([Nx.reshape(Nx.sum(a), {1}), Nx.flatten(Nx.dot(a, a))])
+          end,
+          atol: 1.0e-10,
+          rtol: 1.0e-10
+        )
+      end
+    end
+
+    test "f64 linalg agrees tightly (solve/determinant/cholesky)" do
+      :rand.seed(:exsss, {90, 91, 92})
+      vals = for _ <- 1..64, do: (:rand.uniform() - 0.5) * 0.2
+
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f64) |> Nx.reshape({8, 8})
+          a = Nx.add(Nx.eye(8, type: :f64), r)
+          spd = Nx.add(Nx.dot(a, Nx.transpose(a)), Nx.multiply(Nx.eye(8, type: :f64), 8.0))
+          b = Nx.iota({8}, type: :f64)
+
+          Nx.concatenate([
+            Nx.LinAlg.solve(a, b),
+            Nx.reshape(Nx.LinAlg.determinant(a), {1}),
+            Nx.flatten(Nx.LinAlg.cholesky(spd))
+          ])
+        end,
+        atol: 1.0e-9,
+        rtol: 1.0e-9
+      )
+    end
+
+    property "f64 grad agrees tightly across backends" do
+      check all(
+              n <- integer(2..8),
+              vals <- list_of(float(min: -2.0, max: 2.0), length: n),
+              max_runs: 10
+            ) do
+        diff(
+          fn ->
+            x = Nx.tensor(vals, type: :f64)
+            Nx.Defn.grad(x, fn t -> Nx.sum(Nx.multiply(Nx.tanh(t), t)) end)
+          end,
+          atol: 1.0e-12,
+          rtol: 1.0e-11
+        )
       end
     end
   end

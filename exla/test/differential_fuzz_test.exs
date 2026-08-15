@@ -53,10 +53,10 @@ defmodule DifferentialFuzzTest do
 
     # Shapes/types must match exactly; values within tolerance.
     assert Nx.shape(a) == Nx.shape(b),
-      "shape mismatch: binary #{inspect(Nx.shape(a))} vs exla #{inspect(Nx.shape(b))}"
+           "shape mismatch: binary #{inspect(Nx.shape(a))} vs exla #{inspect(Nx.shape(b))}"
 
     assert Nx.type(a) == Nx.type(b),
-      "type mismatch: binary #{inspect(Nx.type(a))} vs exla #{inspect(Nx.type(b))}"
+           "type mismatch: binary #{inspect(Nx.type(a))} vs exla #{inspect(Nx.type(b))}"
 
     assert_all_close(a, b, atol: atol, rtol: rtol)
   end
@@ -147,10 +147,14 @@ defmodule DifferentialFuzzTest do
               vals <- list_of(float(min: -50.0, max: 50.0), length: n),
               max_runs: 10
             ) do
-        diff(fn ->
-          t = Nx.tensor(vals, type: :f32)
-          Nx.stack([Nx.argmax(t), Nx.argmin(t)])
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            t = Nx.tensor(vals, type: :f32)
+            Nx.stack([Nx.argmax(t), Nx.argmin(t)])
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
       end
     end
   end
@@ -164,11 +168,15 @@ defmodule DifferentialFuzzTest do
               vb <- list_of(float(min: -3.0, max: 3.0), length: 9),
               max_runs: 10
             ) do
-        diff(fn ->
-          a = Nx.tensor(va, type: :f32) |> Nx.reshape({3, 3})
-          b = Nx.tensor(vb, type: :f32) |> Nx.reshape({3, 3})
-          Nx.dot(a, b)
-        end, atol: 1.0e-4, rtol: 1.0e-4)
+        diff(
+          fn ->
+            a = Nx.tensor(va, type: :f32) |> Nx.reshape({3, 3})
+            b = Nx.tensor(vb, type: :f32) |> Nx.reshape({3, 3})
+            Nx.dot(a, b)
+          end,
+          atol: 1.0e-4,
+          rtol: 1.0e-4
+        )
       end
     end
 
@@ -177,11 +185,15 @@ defmodule DifferentialFuzzTest do
               vals <- list_of(float(min: -1.0, max: 1.0), length: 9),
               max_runs: 10
             ) do
-        diff(fn ->
-          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
-          a = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(r, 0.1))
-          Nx.LinAlg.determinant(a)
-        end, atol: 1.0e-4, rtol: 1.0e-3)
+        diff(
+          fn ->
+            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
+            a = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(r, 0.1))
+            Nx.LinAlg.determinant(a)
+          end,
+          atol: 1.0e-4,
+          rtol: 1.0e-3
+        )
       end
     end
 
@@ -190,11 +202,15 @@ defmodule DifferentialFuzzTest do
               vals <- list_of(float(min: -1.0, max: 1.0), length: 9),
               max_runs: 8
             ) do
-        diff(fn ->
-          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
-          a = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(r, 0.1))
-          Nx.LinAlg.invert(a)
-        end, atol: 1.0e-4, rtol: 1.0e-3)
+        diff(
+          fn ->
+            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 3})
+            a = Nx.add(Nx.eye(3, type: :f32), Nx.multiply(r, 0.1))
+            Nx.LinAlg.invert(a)
+          end,
+          atol: 1.0e-4,
+          rtol: 1.0e-3
+        )
       end
     end
   end
@@ -208,12 +224,16 @@ defmodule DifferentialFuzzTest do
               vals <- list_of(float(min: -10.0, max: 10.0), length: n),
               max_runs: 10
             ) do
-        diff(fn ->
-          x = Nx.tensor(vals, type: :f32)
-          shifted = Nx.subtract(x, Nx.reduce_max(x))
-          exps = Nx.exp(shifted)
-          Nx.divide(exps, Nx.sum(exps))
-        end, atol: 1.0e-5, rtol: 1.0e-4)
+        diff(
+          fn ->
+            x = Nx.tensor(vals, type: :f32)
+            shifted = Nx.subtract(x, Nx.reduce_max(x))
+            exps = Nx.exp(shifted)
+            Nx.divide(exps, Nx.sum(exps))
+          end,
+          atol: 1.0e-5,
+          rtol: 1.0e-4
+        )
       end
     end
 
@@ -249,10 +269,14 @@ defmodule DifferentialFuzzTest do
               vals <- list_of(float(min: -3.0, max: 3.0), length: n),
               max_runs: 10
             ) do
-        diff(fn ->
-          t = Nx.tensor(vals, type: :f32)
-          Nx.Defn.grad(t, fn a -> Nx.sum(Nx.multiply(a, a)) end)
-        end, atol: 1.0e-4, rtol: 1.0e-4)
+        diff(
+          fn ->
+            t = Nx.tensor(vals, type: :f32)
+            Nx.Defn.grad(t, fn a -> Nx.sum(Nx.multiply(a, a)) end)
+          end,
+          atol: 1.0e-4,
+          rtol: 1.0e-4
+        )
       end
     end
 
@@ -265,12 +289,17 @@ defmodule DifferentialFuzzTest do
         # Can't close over the other matrix — Nx forbids mixing two
         # non-BinaryBackend tensor impls (Expr + EXLA). Pack both
         # matrices into a tuple passed as the fun's argument.
-        diff(fn ->
-          a = Nx.tensor(va, type: :f32) |> Nx.reshape({3, 3})
-          b = Nx.tensor(vb, type: :f32) |> Nx.reshape({3, 3})
-          Nx.Defn.grad({a, b}, fn {x, y} -> Nx.sum(Nx.dot(x, y)) end)
-          |> elem(0)
-        end, atol: 1.0e-4, rtol: 1.0e-4)
+        diff(
+          fn ->
+            a = Nx.tensor(va, type: :f32) |> Nx.reshape({3, 3})
+            b = Nx.tensor(vb, type: :f32) |> Nx.reshape({3, 3})
+
+            Nx.Defn.grad({a, b}, fn {x, y} -> Nx.sum(Nx.dot(x, y)) end)
+            |> elem(0)
+          end,
+          atol: 1.0e-4,
+          rtol: 1.0e-4
+        )
       end
     end
   end
@@ -295,11 +324,15 @@ defmodule DifferentialFuzzTest do
               vb <- list_of(integer(0..1000), length: n),
               max_runs: 10
             ) do
-        diff(fn ->
-          a = Nx.tensor(va, type: :s32)
-          b = Nx.tensor(vb, type: :s32)
-          Nx.bitwise_xor(a, b)
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            a = Nx.tensor(va, type: :s32)
+            b = Nx.tensor(vb, type: :s32)
+            Nx.bitwise_xor(a, b)
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
       end
     end
   end
@@ -312,10 +345,14 @@ defmodule DifferentialFuzzTest do
               vals <- list_of(float(min: -5.0, max: 5.0), length: 6),
               max_runs: 10
             ) do
-        diff(fn ->
-          t = Nx.tensor(vals, type: :f32)
-          t |> Nx.reshape({2, 3}) |> Nx.reshape({6})
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            t = Nx.tensor(vals, type: :f32)
+            t |> Nx.reshape({2, 3}) |> Nx.reshape({6})
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
       end
     end
 
@@ -324,9 +361,13 @@ defmodule DifferentialFuzzTest do
               vals <- list_of(float(min: -5.0, max: 5.0), length: 12),
               max_runs: 10
             ) do
-        diff(fn ->
-          Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 4}) |> Nx.transpose()
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            Nx.tensor(vals, type: :f32) |> Nx.reshape({3, 4}) |> Nx.transpose()
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
       end
     end
 
@@ -335,11 +376,15 @@ defmodule DifferentialFuzzTest do
               vals <- list_of(float(min: -5.0, max: 5.0), length: 8),
               max_runs: 10
             ) do
-        diff(fn ->
-          t = Nx.tensor(vals, type: :f32)
-          idx = Nx.tensor([[0], [3], [5], [7]])
-          Nx.gather(t, idx)
-        end, atol: 0.0, rtol: 0.0)
+        diff(
+          fn ->
+            t = Nx.tensor(vals, type: :f32)
+            idx = Nx.tensor([[0], [3], [5], [7]])
+            Nx.gather(t, idx)
+          end,
+          atol: 0.0,
+          rtol: 0.0
+        )
       end
     end
   end
@@ -353,11 +398,15 @@ defmodule DifferentialFuzzTest do
               kvals <- list_of(float(min: -1.0, max: 1.0), length: 9),
               max_runs: 6
             ) do
-        diff(fn ->
-          input = Nx.tensor(ivals, type: :f32) |> Nx.reshape({1, 1, 4, 4})
-          kernel = Nx.tensor(kvals, type: :f32) |> Nx.reshape({1, 1, 3, 3})
-          Nx.conv(input, kernel)
-        end, atol: 1.0e-4, rtol: 1.0e-4)
+        diff(
+          fn ->
+            input = Nx.tensor(ivals, type: :f32) |> Nx.reshape({1, 1, 4, 4})
+            kernel = Nx.tensor(kvals, type: :f32) |> Nx.reshape({1, 1, 3, 3})
+            Nx.conv(input, kernel)
+          end,
+          atol: 1.0e-4,
+          rtol: 1.0e-4
+        )
       end
     end
   end
@@ -385,11 +434,15 @@ defmodule DifferentialFuzzTest do
       vb = for _ <- 1..(32 * 32), do: (:rand.uniform() - 0.5) * 2.0
 
       assert_raise ExUnit.AssertionError, fn ->
-        diff(fn ->
-          aa = Nx.tensor(va, type: :f32) |> Nx.reshape({32, 32})
-          bb = Nx.tensor(vb, type: :f32) |> Nx.reshape({32, 32})
-          Nx.dot(aa, bb)
-        end, atol: 0.0, rtol: 1.0e-5)
+        diff(
+          fn ->
+            aa = Nx.tensor(va, type: :f32) |> Nx.reshape({32, 32})
+            bb = Nx.tensor(vb, type: :f32) |> Nx.reshape({32, 32})
+            Nx.dot(aa, bb)
+          end,
+          atol: 0.0,
+          rtol: 1.0e-5
+        )
       end
     end
 
@@ -399,11 +452,15 @@ defmodule DifferentialFuzzTest do
       vb = for _ <- 1..(128 * 128), do: (:rand.uniform() - 0.5) * 2.0
 
       assert_raise ExUnit.AssertionError, fn ->
-        diff(fn ->
-          aa = Nx.tensor(va, type: :f32) |> Nx.reshape({128, 128})
-          bb = Nx.tensor(vb, type: :f32) |> Nx.reshape({128, 128})
-          Nx.dot(aa, bb)
-        end, atol: 0.0, rtol: 1.0e-5)
+        diff(
+          fn ->
+            aa = Nx.tensor(va, type: :f32) |> Nx.reshape({128, 128})
+            bb = Nx.tensor(vb, type: :f32) |> Nx.reshape({128, 128})
+            Nx.dot(aa, bb)
+          end,
+          atol: 0.0,
+          rtol: 1.0e-5
+        )
       end
     end
 
@@ -417,11 +474,15 @@ defmodule DifferentialFuzzTest do
 
       fun = Nx.Defn.jit(fn aa, bb -> Nx.dot(aa, bb) end, precision: :highest)
 
-      diff(fn ->
-        aa = Nx.tensor(va, type: :f32) |> Nx.reshape({128, 128})
-        bb = Nx.tensor(vb, type: :f32) |> Nx.reshape({128, 128})
-        fun.(aa, bb)
-      end, atol: 0.0, rtol: 1.0e-5)
+      diff(
+        fn ->
+          aa = Nx.tensor(va, type: :f32) |> Nx.reshape({128, 128})
+          bb = Nx.tensor(vb, type: :f32) |> Nx.reshape({128, 128})
+          fun.(aa, bb)
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
     end
   end
 
@@ -438,11 +499,16 @@ defmodule DifferentialFuzzTest do
       # Default path: expected to diverge on Blackwell.
       default_failed =
         try do
-          diff(fn ->
-            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
-            a = Nx.add(Nx.eye(32, type: :f32), r)
-            Nx.LinAlg.determinant(a)
-          end, atol: 0.0, rtol: 1.0e-5)
+          diff(
+            fn ->
+              r = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
+              a = Nx.add(Nx.eye(32, type: :f32), r)
+              Nx.LinAlg.determinant(a)
+            end,
+            atol: 0.0,
+            rtol: 1.0e-5
+          )
+
           false
         rescue
           ExUnit.AssertionError -> true
@@ -455,10 +521,14 @@ defmodule DifferentialFuzzTest do
           precision: :highest
         )
 
-      diff(fn ->
-        r = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
-        control_fun.(r)
-      end, atol: 0.0, rtol: 1.0e-5)
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
+          control_fun.(r)
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
 
       # Info: whether default diverged on this machine.
       IO.puts("  [info] determinant 32x32 default diverged at rtol=1e-5? #{default_failed}")
@@ -468,78 +538,62 @@ defmodule DifferentialFuzzTest do
       :rand.seed(:exsss, {23, 24, 25})
       vals = for _ <- 1..(32 * 32), do: (:rand.uniform() - 0.5) * 0.1
 
-      result =
-        try do
-          diff(fn ->
-            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
-            a = Nx.add(Nx.eye(32, type: :f32), r)
-            Nx.LinAlg.invert(a)
-          end, atol: 0.0, rtol: 1.0e-5)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] invert 32x32 at rtol=1e-5: #{result}")
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
+          a = Nx.add(Nx.eye(32, type: :f32), r)
+          Nx.LinAlg.invert(a)
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
     end
 
     test "QR Q-matrix at 32x32" do
       :rand.seed(:exsss, {26, 27, 28})
       vals = for _ <- 1..(32 * 32), do: (:rand.uniform() - 0.5) * 0.5
 
-      result =
-        try do
-          diff(fn ->
-            a = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
-            {q, _r} = Nx.LinAlg.qr(a)
-            q
-          end, atol: 0.0, rtol: 1.0e-5)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] QR Q 32x32 at rtol=1e-5: #{result}")
+      diff(
+        fn ->
+          a = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
+          {q, _r} = Nx.LinAlg.qr(a)
+          q
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
     end
 
     test "SVD singular values at 32x32" do
       :rand.seed(:exsss, {29, 30, 31})
       vals = for _ <- 1..(32 * 32), do: (:rand.uniform() - 0.5) * 0.5
 
-      result =
-        try do
-          diff(fn ->
-            a = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
-            {_u, s, _v} = Nx.LinAlg.svd(a)
-            s
-          end, atol: 0.0, rtol: 1.0e-5)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] SVD s 32x32 at rtol=1e-5: #{result}")
+      diff(
+        fn ->
+          a = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
+          {_u, s, _v} = Nx.LinAlg.svd(a)
+          s
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
     end
 
     test "Cholesky on PSD matrix at 32x32" do
       :rand.seed(:exsss, {32, 33, 34})
       vals = for _ <- 1..(32 * 32), do: (:rand.uniform() - 0.5) * 0.1
 
-      result =
-        try do
-          diff(fn ->
-            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
-            # Make symmetric + diag-boosted for PSD
-            a = Nx.add(Nx.eye(32, type: :f32), Nx.multiply(r, 0.01))
-            sym = Nx.add(a, Nx.transpose(a)) |> Nx.divide(2.0)
-            Nx.LinAlg.cholesky(sym)
-          end, atol: 0.0, rtol: 1.0e-5)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] Cholesky 32x32 at rtol=1e-5: #{result}")
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({32, 32})
+          # Make symmetric + diag-boosted for PSD
+          a = Nx.add(Nx.eye(32, type: :f32), Nx.multiply(r, 0.01))
+          sym = Nx.add(a, Nx.transpose(a)) |> Nx.divide(2.0)
+          Nx.LinAlg.cholesky(sym)
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
     end
   end
 
@@ -556,22 +610,18 @@ defmodule DifferentialFuzzTest do
   describe "f16 differential" do
     test "f16 matmul 16×16 agrees within reduced precision" do
       :rand.seed(:exsss, {60, 61, 62})
-      va = for _ <- 1..256, do: (:rand.uniform() - 0.5)
-      vb = for _ <- 1..256, do: (:rand.uniform() - 0.5)
+      va = for _ <- 1..256, do: :rand.uniform() - 0.5
+      vb = for _ <- 1..256, do: :rand.uniform() - 0.5
 
-      result =
-        try do
-          diff(fn ->
-            a = Nx.tensor(va, type: :f16) |> Nx.reshape({16, 16})
-            b = Nx.tensor(vb, type: :f16) |> Nx.reshape({16, 16})
-            Nx.dot(a, b)
-          end, atol: 0.0, rtol: 5.0e-3)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] f16 matmul 16x16 at rtol=5e-3: #{result}")
+      diff(
+        fn ->
+          a = Nx.tensor(va, type: :f16) |> Nx.reshape({16, 16})
+          b = Nx.tensor(vb, type: :f16) |> Nx.reshape({16, 16})
+          Nx.dot(a, b)
+        end,
+        atol: 0.0,
+        rtol: 5.0e-3
+      )
     end
 
     test "f16 matmul 64×64 agrees within reduced precision" do
@@ -579,19 +629,15 @@ defmodule DifferentialFuzzTest do
       va = for _ <- 1..(64 * 64), do: (:rand.uniform() - 0.5) * 0.1
       vb = for _ <- 1..(64 * 64), do: (:rand.uniform() - 0.5) * 0.1
 
-      result =
-        try do
-          diff(fn ->
-            a = Nx.tensor(va, type: :f16) |> Nx.reshape({64, 64})
-            b = Nx.tensor(vb, type: :f16) |> Nx.reshape({64, 64})
-            Nx.dot(a, b)
-          end, atol: 0.0, rtol: 1.0e-2)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] f16 matmul 64x64 at rtol=1e-2: #{result}")
+      diff(
+        fn ->
+          a = Nx.tensor(va, type: :f16) |> Nx.reshape({64, 64})
+          b = Nx.tensor(vb, type: :f16) |> Nx.reshape({64, 64})
+          Nx.dot(a, b)
+        end,
+        atol: 0.0,
+        rtol: 1.0e-2
+      )
     end
 
     property "f16 sum agrees" do
@@ -629,12 +675,17 @@ defmodule DifferentialFuzzTest do
       va = for _ <- 1..16, do: (:rand.uniform() - 0.5) * 2.0
       vb = for _ <- 1..16, do: (:rand.uniform() - 0.5) * 2.0
 
-      diff(fn ->
-        a = Nx.tensor(va, type: :f16)
-        b = Nx.tensor(vb, type: :f16)
-        Nx.Defn.grad({a, b}, fn {x, y} -> Nx.sum(Nx.multiply(x, y)) end)
-        |> elem(0)
-      end, atol: 1.0e-3, rtol: 2.0e-3)
+      diff(
+        fn ->
+          a = Nx.tensor(va, type: :f16)
+          b = Nx.tensor(vb, type: :f16)
+
+          Nx.Defn.grad({a, b}, fn {x, y} -> Nx.sum(Nx.multiply(x, y)) end)
+          |> elem(0)
+        end,
+        atol: 1.0e-3,
+        rtol: 2.0e-3
+      )
     end
   end
 
@@ -645,22 +696,18 @@ defmodule DifferentialFuzzTest do
 
     test "bf16 matmul 16×16 agrees" do
       :rand.seed(:exsss, {70, 71, 72})
-      va = for _ <- 1..256, do: (:rand.uniform() - 0.5)
-      vb = for _ <- 1..256, do: (:rand.uniform() - 0.5)
+      va = for _ <- 1..256, do: :rand.uniform() - 0.5
+      vb = for _ <- 1..256, do: :rand.uniform() - 0.5
 
-      result =
-        try do
-          diff(fn ->
-            a = Nx.tensor(va, type: :bf16) |> Nx.reshape({16, 16})
-            b = Nx.tensor(vb, type: :bf16) |> Nx.reshape({16, 16})
-            Nx.dot(a, b)
-          end, atol: 0.0, rtol: 2.0e-2)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] bf16 matmul 16x16 at rtol=2e-2: #{result}")
+      diff(
+        fn ->
+          a = Nx.tensor(va, type: :bf16) |> Nx.reshape({16, 16})
+          b = Nx.tensor(vb, type: :bf16) |> Nx.reshape({16, 16})
+          Nx.dot(a, b)
+        end,
+        atol: 0.0,
+        rtol: 2.0e-2
+      )
     end
 
     test "bf16 matmul 64×64 agrees" do
@@ -668,19 +715,15 @@ defmodule DifferentialFuzzTest do
       va = for _ <- 1..(64 * 64), do: (:rand.uniform() - 0.5) * 0.1
       vb = for _ <- 1..(64 * 64), do: (:rand.uniform() - 0.5) * 0.1
 
-      result =
-        try do
-          diff(fn ->
-            a = Nx.tensor(va, type: :bf16) |> Nx.reshape({64, 64})
-            b = Nx.tensor(vb, type: :bf16) |> Nx.reshape({64, 64})
-            Nx.dot(a, b)
-          end, atol: 0.0, rtol: 3.0e-2)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] bf16 matmul 64x64 at rtol=3e-2: #{result}")
+      diff(
+        fn ->
+          a = Nx.tensor(va, type: :bf16) |> Nx.reshape({64, 64})
+          b = Nx.tensor(vb, type: :bf16) |> Nx.reshape({64, 64})
+          Nx.dot(a, b)
+        end,
+        atol: 0.0,
+        rtol: 3.0e-2
+      )
     end
 
     property "bf16 sum agrees" do
@@ -708,12 +751,17 @@ defmodule DifferentialFuzzTest do
       va = for _ <- 1..16, do: (:rand.uniform() - 0.5) * 2.0
       vb = for _ <- 1..16, do: (:rand.uniform() - 0.5) * 2.0
 
-      diff(fn ->
-        a = Nx.tensor(va, type: :bf16)
-        b = Nx.tensor(vb, type: :bf16)
-        Nx.Defn.grad({a, b}, fn {x, y} -> Nx.sum(Nx.multiply(x, y)) end)
-        |> elem(0)
-      end, atol: 2.0e-2, rtol: 2.0e-2)
+      diff(
+        fn ->
+          a = Nx.tensor(va, type: :bf16)
+          b = Nx.tensor(vb, type: :bf16)
+
+          Nx.Defn.grad({a, b}, fn {x, y} -> Nx.sum(Nx.multiply(x, y)) end)
+          |> elem(0)
+        end,
+        atol: 2.0e-2,
+        rtol: 2.0e-2
+      )
     end
   end
 
@@ -723,35 +771,27 @@ defmodule DifferentialFuzzTest do
     test "f16 with values near representable range" do
       # f16 max ≈ 65504; values in this range may flush-to-zero
       # differently between emulated and hardware paths.
-      result =
-        try do
-          diff(fn ->
-            x = Nx.tensor([65000.0, -65000.0, 0.001, -0.001], type: :f16)
-            Nx.add(x, x)
-          end, atol: 1.0, rtol: 1.0e-3)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] f16 near-max add: #{result}")
+      diff(
+        fn ->
+          x = Nx.tensor([65000.0, -65000.0, 0.001, -0.001], type: :f16)
+          Nx.add(x, x)
+        end,
+        atol: 1.0,
+        rtol: 1.0e-3
+      )
     end
 
     test "f16 sum of many small values (precision loss potential)" do
       # 1000 f16 values of 0.001 sum to 1.0 in infinite precision;
       # f16 precision loss may underestimate significantly.
-      result =
-        try do
-          diff(fn ->
-            x = Nx.broadcast(Nx.tensor(0.001, type: :f16), {1000})
-            Nx.sum(x)
-          end, atol: 0.1, rtol: 0.1)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] f16 sum 1000x 0.001: #{result}")
+      diff(
+        fn ->
+          x = Nx.broadcast(Nx.tensor(0.001, type: :f16), {1000})
+          Nx.sum(x)
+        end,
+        atol: 0.1,
+        rtol: 0.1
+      )
     end
   end
 
@@ -768,73 +808,57 @@ defmodule DifferentialFuzzTest do
     test "determinant 128x128 at rtol=1e-5" do
       vals = rand_vals(128 * 128, {40, 41, 42})
 
-      result =
-        try do
-          diff(fn ->
-            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({128, 128})
-            a = Nx.add(Nx.eye(128, type: :f32), r)
-            Nx.LinAlg.determinant(a)
-          end, atol: 0.0, rtol: 1.0e-5)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] determinant 128x128 at rtol=1e-5: #{result}")
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({128, 128})
+          a = Nx.add(Nx.eye(128, type: :f32), r)
+          Nx.LinAlg.determinant(a)
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
     end
 
     test "invert 128x128 at rtol=1e-5" do
       vals = rand_vals(128 * 128, {43, 44, 45})
 
-      result =
-        try do
-          diff(fn ->
-            r = Nx.tensor(vals, type: :f32) |> Nx.reshape({128, 128})
-            a = Nx.add(Nx.eye(128, type: :f32), r)
-            Nx.LinAlg.invert(a)
-          end, atol: 0.0, rtol: 1.0e-5)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] invert 128x128 at rtol=1e-5: #{result}")
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({128, 128})
+          a = Nx.add(Nx.eye(128, type: :f32), r)
+          Nx.LinAlg.invert(a)
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
     end
 
     test "QR Q-matrix 128x128 at rtol=1e-5" do
       vals = rand_vals(128 * 128, {46, 47, 48})
 
-      result =
-        try do
-          diff(fn ->
-            a = Nx.tensor(vals, type: :f32) |> Nx.reshape({128, 128})
-            {q, _r} = Nx.LinAlg.qr(a)
-            q
-          end, atol: 0.0, rtol: 1.0e-5)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] QR Q 128x128 at rtol=1e-5: #{result}")
+      diff(
+        fn ->
+          a = Nx.tensor(vals, type: :f32) |> Nx.reshape({128, 128})
+          {q, _r} = Nx.LinAlg.qr(a)
+          q
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
     end
 
     test "SVD s 128x128 at rtol=1e-5" do
       vals = rand_vals(128 * 128, {49, 50, 51})
 
-      result =
-        try do
-          diff(fn ->
-            a = Nx.tensor(vals, type: :f32) |> Nx.reshape({128, 128})
-            {_u, s, _v} = Nx.LinAlg.svd(a)
-            s
-          end, atol: 0.0, rtol: 1.0e-5)
-          :agreed
-        rescue
-          ExUnit.AssertionError -> :diverged
-        end
-
-      IO.puts("  [info] SVD s 128x128 at rtol=1e-5: #{result}")
+      diff(
+        fn ->
+          a = Nx.tensor(vals, type: :f32) |> Nx.reshape({128, 128})
+          {_u, s, _v} = Nx.LinAlg.svd(a)
+          s
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
     end
   end
 
@@ -843,35 +867,204 @@ defmodule DifferentialFuzzTest do
       :rand.seed(:exsss, {10, 11, 12})
       vals = for _ <- 1..64, do: (:rand.uniform() - 0.5) * 0.2
 
-      diff(fn ->
-        r = Nx.tensor(vals, type: :f32) |> Nx.reshape({8, 8})
-        a = Nx.add(Nx.eye(8, type: :f32), r)
-        {q, _r} = Nx.LinAlg.qr(a)
-        q
-      end, atol: 1.0e-5, rtol: 1.0e-4)
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({8, 8})
+          a = Nx.add(Nx.eye(8, type: :f32), r)
+          {q, _r} = Nx.LinAlg.qr(a)
+          q
+        end,
+        atol: 1.0e-5,
+        rtol: 1.0e-4
+      )
     end
 
     test "determinant of 8×8 well-conditioned" do
       :rand.seed(:exsss, {13, 14, 15})
       vals = for _ <- 1..64, do: (:rand.uniform() - 0.5) * 0.2
 
-      diff(fn ->
-        r = Nx.tensor(vals, type: :f32) |> Nx.reshape({8, 8})
-        a = Nx.add(Nx.eye(8, type: :f32), r)
-        Nx.LinAlg.determinant(a)
-      end, atol: 1.0e-5, rtol: 1.0e-4)
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({8, 8})
+          a = Nx.add(Nx.eye(8, type: :f32), r)
+          Nx.LinAlg.determinant(a)
+        end,
+        atol: 1.0e-5,
+        rtol: 1.0e-4
+      )
     end
 
     test "SVD singular values of 8×8" do
       :rand.seed(:exsss, {16, 17, 18})
       vals = for _ <- 1..64, do: (:rand.uniform() - 0.5) * 0.2
 
-      diff(fn ->
-        r = Nx.tensor(vals, type: :f32) |> Nx.reshape({8, 8})
-        a = Nx.add(Nx.eye(8, type: :f32), r)
-        {_u, s, _v} = Nx.LinAlg.svd(a)
-        s
-      end, atol: 1.0e-5, rtol: 1.0e-4)
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f32) |> Nx.reshape({8, 8})
+          a = Nx.add(Nx.eye(8, type: :f32), r)
+          {_u, s, _v} = Nx.LinAlg.svd(a)
+          s
+        end,
+        atol: 1.0e-5,
+        rtol: 1.0e-4
+      )
+    end
+  end
+
+  # ── f64 differential (T3.1) ────────────────────────────────────────
+  # f64 was entirely absent from this file: BinaryBackend is exact-ish
+  # f64 while EXLA's f64 paths never had TF32-style hazards, so the
+  # tolerance can be near machine epsilon.
+
+  describe "f64 differential" do
+    property "f64 element-wise math agrees tightly" do
+      check all(
+              n <- integer(2..16),
+              vals <- list_of(float(min: -100.0, max: 100.0), length: n),
+              max_runs: 10
+            ) do
+        for op <- [:exp, :sin, :tanh, :sqrt, :log] do
+          diff(
+            fn ->
+              x = Nx.tensor(vals, type: :f64)
+              x = if op in [:sqrt, :log], do: Nx.add(Nx.abs(x), 1.0e-6), else: x
+              apply(Nx, op, [x])
+            end,
+            atol: 1.0e-13,
+            rtol: 1.0e-12
+          )
+        end
+      end
+    end
+
+    property "f64 reductions and dot agree tightly" do
+      check all(
+              n <- integer(2..12),
+              vals <- list_of(float(min: -50.0, max: 50.0), length: n * n),
+              max_runs: 10
+            ) do
+        diff(
+          fn ->
+            a = Nx.tensor(vals, type: :f64) |> Nx.reshape({n, n})
+            Nx.concatenate([Nx.reshape(Nx.sum(a), {1}), Nx.flatten(Nx.dot(a, a))])
+          end,
+          atol: 1.0e-10,
+          rtol: 1.0e-10
+        )
+      end
+    end
+
+    test "f64 linalg agrees tightly (solve/determinant/cholesky)" do
+      :rand.seed(:exsss, {90, 91, 92})
+      vals = for _ <- 1..64, do: (:rand.uniform() - 0.5) * 0.2
+
+      diff(
+        fn ->
+          r = Nx.tensor(vals, type: :f64) |> Nx.reshape({8, 8})
+          a = Nx.add(Nx.eye(8, type: :f64), r)
+          spd = Nx.add(Nx.dot(a, Nx.transpose(a)), Nx.multiply(Nx.eye(8, type: :f64), 8.0))
+          b = Nx.iota({8}, type: :f64)
+
+          Nx.concatenate([
+            Nx.LinAlg.solve(a, b),
+            Nx.reshape(Nx.LinAlg.determinant(a), {1}),
+            Nx.flatten(Nx.LinAlg.cholesky(spd))
+          ])
+        end,
+        atol: 1.0e-9,
+        rtol: 1.0e-9
+      )
+    end
+
+    property "f64 grad agrees tightly across backends" do
+      check all(
+              n <- integer(2..8),
+              vals <- list_of(float(min: -2.0, max: 2.0), length: n),
+              max_runs: 10
+            ) do
+        diff(
+          fn ->
+            x = Nx.tensor(vals, type: :f64)
+            Nx.Defn.grad(x, fn t -> Nx.sum(Nx.multiply(Nx.tanh(t), t)) end)
+          end,
+          atol: 1.0e-12,
+          rtol: 1.0e-11
+        )
+      end
+    end
+  end
+
+  # ── complex differential (T3.1) ────────────────────────────────────
+
+  describe "complex differential" do
+    property "c64 arithmetic and abs/phase agree" do
+      check all(
+              n <- integer(2..8),
+              re <- list_of(float(min: -10.0, max: 10.0), length: n),
+              im <- list_of(float(min: -10.0, max: 10.0), length: n),
+              max_runs: 10
+            ) do
+        diff(
+          fn ->
+            z = Nx.complex(Nx.tensor(re, type: :f32), Nx.tensor(im, type: :f32))
+
+            Nx.concatenate([
+              Nx.real(Nx.multiply(z, z)),
+              Nx.imag(Nx.multiply(z, z)),
+              Nx.abs(z),
+              Nx.phase(z),
+              Nx.real(Nx.conjugate(z)),
+              Nx.imag(Nx.conjugate(z))
+            ])
+          end,
+          atol: 1.0e-4,
+          rtol: 1.0e-4
+        )
+      end
+    end
+
+    property "fft/ifft agree on complex input" do
+      check all(
+              n <- member_of([4, 8]),
+              re <- list_of(float(min: -5.0, max: 5.0), length: n),
+              im <- list_of(float(min: -5.0, max: 5.0), length: n),
+              max_runs: 10
+            ) do
+        diff(
+          fn ->
+            z = Nx.complex(Nx.tensor(re, type: :f32), Nx.tensor(im, type: :f32))
+            f = Nx.fft(z)
+            i = Nx.ifft(z)
+            Nx.concatenate([Nx.real(f), Nx.imag(f), Nx.real(i), Nx.imag(i)])
+          end,
+          atol: 1.0e-3,
+          rtol: 1.0e-3
+        )
+      end
+    end
+
+    test "c128 round-trip and sum agree" do
+      diff(
+        fn ->
+          z =
+            Nx.complex(
+              Nx.tensor([1.5, -2.5, 3.25], type: :f64),
+              Nx.tensor([-0.5, 4.75, -1.125], type: :f64)
+            )
+
+          zz = Nx.multiply(z, Nx.conjugate(z))
+          total = Nx.sum(z)
+
+          Nx.concatenate([
+            Nx.reshape(Nx.real(total), {1}),
+            Nx.reshape(Nx.imag(total), {1}),
+            Nx.real(zz),
+            Nx.imag(zz)
+          ])
+        end,
+        atol: 1.0e-10,
+        rtol: 1.0e-10
+      )
     end
   end
 end

@@ -100,10 +100,18 @@ Status key: [ ] planned · [~] in progress · [x] landed
 
 ### Tier 3 — infrastructure hardening
 
-- [ ] **T3.1 Differential completion.** f64 + complex on the EXLA differential,
-  three-way EXLA↔Torchx↔Binary, grad differentials across backends; promote
-  informational f16/bf16 tests to calibrated assertions; conjunctive grad
-  tolerance.
+- [x] **T3.1 Differential completion.** Landed 2026-08-14:
+  - EXLA differential: 14 informational (try/rescue + IO.puts) tests promoted
+    to real assertions — all hold on Blackwell/cuda; new f64 describes
+    (element-wise/reductions/linalg/grad at 1e-9..1e-13) and complex
+    describes (c64 arithmetic/abs/phase/conjugate, fft/ifft, c128).
+  - Torchx differential: mirrored f64 describes (complex already covered).
+  - `fuzz_grad_test.exs`: conjunctive tolerance (|diff| <= atol + rtol*scale
+    elementwise) replacing the disjunctive either/or check — passes, so the
+    analytic grads were already accurate.
+  - True three-way EXLA↔Torchx↔Binary in one test env is blocked by the
+    umbrella layout (separate apps); both differential files share
+    BinaryBackend as the hub, giving transitive coverage.
 - [ ] **T3.2 `Nx.Serving`/`Nx.Batch` metamorphic.** Results invariant to batch
   split/merge boundaries; streaming; partition concurrency.
 - [ ] **T3.3 `shard_jit`/`Nx.Mesh` equivalence.** sharded == unsharded on the

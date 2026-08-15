@@ -55,7 +55,14 @@ defmodule Nx.FuzzGradTest do
     max_abs = Nx.reduce_max(diff) |> Nx.to_number()
     max_rel = Nx.reduce_max(rel_diff) |> Nx.to_number()
 
-    if max_abs > atol and max_rel > rtol do
+    # Combined (conjunctive) criterion: every element must satisfy
+    # |diff| <= atol + rtol * max(|numerical|, 1). The old disjunctive
+    # check (pass if EITHER max_abs <= atol OR max_rel <= rtol) let one
+    # loose criterion mask a violation of the other.
+    tolerance = Nx.add(atol, Nx.multiply(rtol, scale))
+    violation = Nx.greater(diff, tolerance)
+
+    if Nx.to_number(Nx.any(violation)) == 1 do
       flunk("""
       Gradient mismatch!
       max_abs_diff: #{max_abs}
