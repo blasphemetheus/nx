@@ -84,10 +84,12 @@ Status key: [ ] planned · [~] in progress · [x] landed
   dimension-mismatch properties. Contract is nearly clean: only violation is
   the known reshape-two-`:auto` ArithmeticError leak (pinned). Documented
   non-raising semantics excluded: slice start-clamping, uneven split.
-- [ ] **T2.2 New-API metamorphic sweep.** `pad_outer` 4 modes (involution/
-  periodicity identities), `rfft`/`irfft` round-trip + Parseval, `fft2` vs
-  composed 1-D FFTs, f8/e4m3fn saturation (no-Inf type) + `Nx.Floating`
-  round-trips, sub-byte arithmetic promotion.
+- [x] **T2.2 New-API metamorphic sweep.** Landed 2026-08-14:
+  `fuzz_newapi_test.exs` — pad_outer 4 modes vs index-mapping reference (1-D
+  and 2-D), rfft==fft-prefix, Parseval, fft2 vs composed 1-D, e4m3fn
+  saturation to ±448 (never Inf) + NaN preservation, e5m2 overflow to ±Inf,
+  f8 exact round trips, sub-byte modular arithmetic vs exact reference.
+  No live bugs found.
 - [x] **T2.3 `cond`-under-grad + multi-axis vectorization.** Landed 2026-08-14:
   `fuzz_cond_vectorized_grad_test.exs` — 7 properties with closed-form
   derivative oracles: grad through cond/nested-cond/data-dependent-pred,
