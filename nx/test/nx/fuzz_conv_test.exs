@@ -283,4 +283,164 @@ defmodule Nx.FuzzConvTest do
       end
     end
   end
+
+  # ── Value oracle (FUZZ_ROADMAP T1.4) ───────────────────────────────
+  #
+  # Everything above checks shapes only. This reference implementation
+  # computes conv values position-by-position out of trusted primitives:
+  # Nx.pad with interior padding for input dilation, strided Nx.slice for
+  # each receptive field, Nx.dot for the contraction. It supports strides,
+  # explicit padding, input/kernel dilation, and feature groups.
+  # (:same padding and batch groups are TODO — see FUZZ_ROADMAP.)
+
+  defp reference_conv(x, k, opts) do
+    strides = Keyword.get(opts, :strides, [1, 1])
+    padding = Keyword.get(opts, :padding, [{0, 0}, {0, 0}])
+    [id_h, id_w] = Keyword.get(opts, :input_dilation, [1, 1])
+    [kd_h, kd_w] = Keyword.get(opts, :kernel_dilation, [1, 1])
+    groups = Keyword.get(opts, :feature_group_size, 1)
+
+    {n, c, _h, _w} = Nx.shape(x)
+    {o, c_per_g, kh, kw} = Nx.shape(k)
+
+    # input dilation == interior padding; then edge padding
+    [{ph_lo, ph_hi}, {pw_lo, pw_hi}] = padding
+    zero = Nx.tensor(0.0, type: Nx.type(x))
+
+    x_padded =
+      Nx.pad(x, zero, [
+        {0, 0, 0},
+        {0, 0, 0},
+        {ph_lo, ph_hi, id_h - 1},
+        {pw_lo, pw_hi, id_w - 1}
+      ])
+
+    {_, _, hp, wp} = Nx.shape(x_padded)
+    eff_kh = (kh - 1) * kd_h + 1
+    eff_kw = (kw - 1) * kd_w + 1
+    [sh, sw] = strides
+    out_h = div(hp - eff_kh, sh) + 1
+    out_w = div(wp - eff_kw, sw) + 1
+
+    o_per_g = div(o, groups)
+
+    rows =
+      for oh <- 0..(out_h - 1) do
+        cols =
+          for ow <- 0..(out_w - 1) do
+            # receptive field {n, c, kh, kw} via strided slice
+            window =
+              Nx.slice(
+                x_padded,
+                [0, 0, oh * sh, ow * sw],
+                [n, c, eff_kh, eff_kw],
+                strides: [1, 1, kd_h, kd_w]
+              )
+
+            outs =
+              for oc <- 0..(o - 1) do
+                g = div(oc, o_per_g)
+
+                wslice =
+                  window
+                  |> Nx.slice([0, g * c_per_g, 0, 0], [n, c_per_g, kh, kw])
+                  |> Nx.reshape({n, c_per_g * kh * kw})
+
+                kvec = k |> Nx.slice([oc, 0, 0, 0], [1, c_per_g, kh, kw]) |> Nx.flatten()
+
+                # {n}
+                Nx.dot(wslice, kvec)
+              end
+
+            # {o, n}
+            Nx.stack(outs)
+          end
+
+        # {out_w, o, n}
+        Nx.stack(cols)
+      end
+
+    # {out_h, out_w, o, n} -> {n, o, out_h, out_w}
+    rows |> Nx.stack() |> Nx.transpose(axes: [3, 2, 0, 1])
+  end
+
+  defp f64_pair do
+    bind(nchw_input(), fn input ->
+      bind(kernel_for(input), fn kernel ->
+        constant({Nx.as_type(input, {:f, 64}), Nx.as_type(kernel, {:f, 64})})
+      end)
+    end)
+  end
+
+  describe "value oracle vs reference implementation" do
+    property "baseline conv values match the reference" do
+      check all({x, k} <- f64_pair(), max_runs: 10) do
+        assert_all_close(Nx.conv(x, k), reference_conv(x, k, []), atol: 1.0e-9)
+      end
+    end
+
+    property "strided conv values match the reference" do
+      check all({x, k} <- f64_pair(), s <- integer(1..2), max_runs: 10) do
+        opts = [strides: [s, s]]
+        assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
+      end
+    end
+
+    property "explicitly padded conv values match the reference" do
+      check all(
+              {x, k} <- f64_pair(),
+              p_lo <- integer(0..2),
+              p_hi <- integer(0..2),
+              max_runs: 10
+            ) do
+        opts = [padding: [{p_lo, p_hi}, {p_hi, p_lo}]]
+        assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
+      end
+    end
+
+    property "input-dilated conv values match the reference" do
+      check all({x, k} <- f64_pair(), d <- integer(1..2), max_runs: 10) do
+        opts = [input_dilation: [d, d], padding: [{1, 1}, {1, 1}]]
+        assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
+      end
+    end
+
+    property "kernel-dilated conv values match the reference" do
+      check all({x, k} <- f64_pair(), d <- integer(1..2), max_runs: 10) do
+        # ensure the dilated kernel still fits: pad enough
+        opts = [kernel_dilation: [d, d], padding: [{2, 2}, {2, 2}]]
+        assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
+      end
+    end
+
+    property "grouped conv values match the reference" do
+      check all(
+              b <- integer(1..2),
+              groups <- member_of([1, 2]),
+              c_per_g <- integer(1..2),
+              o_per_g <- integer(1..2),
+              hw <- integer(3..5),
+              khw <- integer(1..2),
+              max_runs: 10
+            ) do
+        c = groups * c_per_g
+        o = groups * o_per_g
+
+        x = Nx.iota({b, c, hw, hw}, type: {:f, 64}) |> Nx.remainder(7.0) |> Nx.subtract(3.0)
+
+        k =
+          Nx.iota({o, c_per_g, khw, khw}, type: {:f, 64}) |> Nx.remainder(5.0) |> Nx.subtract(2.0)
+
+        opts = [feature_group_size: groups]
+        assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
+      end
+    end
+
+    property "combined stride+padding+kernel-dilation values match the reference" do
+      check all({x, k} <- f64_pair(), s <- integer(1..2), d <- integer(1..2), max_runs: 10) do
+        opts = [strides: [s, s], kernel_dilation: [d, d], padding: [{2, 1}, {1, 2}]]
+        assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
+      end
+    end
+  end
 end

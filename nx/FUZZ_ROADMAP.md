@@ -68,9 +68,14 @@ Status key: [ ] planned · [~] in progress · [x] landed
   (deterministic per generated seed, so not flaky), shuffle permutation +
   determinism + non-identity, choice population membership + sample count,
   vectorized-key batch stream distinctness. No live bugs found.
-- [ ] **T1.4 Conv value oracle.** Reference im2col+dot implementation (or
-  cross-backend comparison) behind the existing parameter sweep — conv is
-  currently shape-checked only.
+- [x] **T1.4 Conv value oracle.** Landed 2026-08-14: `reference_conv` in
+  `fuzz_conv_test.exs` — position-by-position reference built from trusted
+  primitives (interior-padded `Nx.pad` for input dilation, strided `Nx.slice`
+  receptive fields, `Nx.dot` contraction) — 7 value properties at f64/1e-9
+  covering baseline, strides, explicit padding, input/kernel dilation,
+  feature groups, and combined configs. No live bugs found. TODO: `:same`
+  padding and `batch_group_size` in the reference; cross-backend conv values
+  belong to T3.1.
 
 ### Tier 2 — v1.0-specific
 
