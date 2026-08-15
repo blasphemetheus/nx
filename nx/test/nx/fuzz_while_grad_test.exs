@@ -78,9 +78,8 @@ defmodule Nx.FuzzWhileGradTest do
       end
     end
 
-    # NOTE: currently fails due to BUG-1747 (see describe block below for
-    # the minimal pin). power_via_loop uses `Nx.multiply(acc, x)`, which
-    # is the exact body shape that miscomputes the backward pass.
+    # power_via_loop uses `Nx.multiply(acc, x)` — the body shape that
+    # BUG-1747 used to miscompute; fixed upstream by #1785.
     property "d/dx power_via_loop(x, n) == n * x^(n-1)" do
       check all(
               x <- float(min: 0.5, max: 2.0),
@@ -132,9 +131,12 @@ defmodule Nx.FuzzWhileGradTest do
       {acc, _, _, _} =
         while {acc = Nx.multiply(x, 0.0), o = 0, x = x, inner = inner},
               Nx.less(o, outer) do
-          {inner_acc, _, _} =
-            while {ia = Nx.multiply(x, 0.0), i = 0, x = x}, Nx.less(i, inner) do
-              {Nx.add(ia, x), i + 1, x}
+          # `inner` must be threaded through the inner while's state: the
+          # old code read it from the outer while's scope, which defn's
+          # scoping rules forbid (tolerated pre-#1785, fatal after).
+          {inner_acc, _, _, _} =
+            while {ia = Nx.multiply(x, 0.0), i = 0, x = x, inner = inner}, Nx.less(i, inner) do
+              {Nx.add(ia, x), i + 1, x, inner}
             end
 
           {Nx.add(acc, inner_acc), o + 1, x, inner}
@@ -200,19 +202,13 @@ defmodule Nx.FuzzWhileGradTest do
       assert_all_close(square_via_while(x), Nx.tensor(0.25, type: :f32), atol: 1.0e-5)
     end
 
-    test "[BUG-1747] backward of x² via while pins wrong grad (1.25, should be 1.0)" do
-      # Pins CURRENT broken behavior. When #1747 is fixed, this assertion
-      # will fail and the test should be flipped to the correct value
-      # (2·x = 1.0 at x=0.5). The issue body documents the ratio as:
-      # Nx returns Σₖ x^(2k) for k=0..n-1 instead of the correct n·x^(n-1).
+    test "[FIXED-1747] backward of x² via while returns the correct grad" do
+      # #1747 fixed upstream by #1785 (while grad propagation rule).
+      # Flipped from the assert-broken pin (which returned 1.25).
       x = Nx.tensor(0.5, type: :f32)
       grad = Nx.Defn.grad(x, &square_via_while/1)
 
-      # Buggy value: 1 + x² = 1.25 at x=0.5 (Σₖ x^(2k) for k=0..1).
-      assert_all_close(grad, Nx.tensor(1.25, type: :f32), atol: 1.0e-5)
-
-      # Once fixed, replace with:
-      #   assert_all_close(grad, Nx.tensor(1.0, type: :f32), atol: 1.0e-5)
+      assert_all_close(grad, Nx.tensor(1.0, type: :f32), atol: 1.0e-5)
     end
   end
 

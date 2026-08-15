@@ -100,13 +100,14 @@ defmodule Nx.FuzzIndexedOpsTest do
     # BUG-EXPRBLOCK-take-jit — different class (Expr.expr_block, not impl!/1 dispatch).
     # Fix: Expr.expr_block should Enum.map(args, &to_expr/1) before calling parameter/2.
     # See FUZZ_FINDINGS/take_grad_with_captured_indices.md.
-    test "[BUG-EXPRBLOCK-take-jit] jit(fn idx -> take(captured_t, idx) end) crashes" do
+    test "[FIXED-EXPRBLOCK-take-jit] jit(fn idx -> take(captured_t, idx) end) works" do
+      # Fixed upstream by the Nx.block rework (Expr block callback now
+      # normalizes args via to_exprs). Flipped from an assert_raise pin.
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       jitted = Nx.Defn.jit(fn idx -> Nx.take(t, idx) end)
 
-      assert_raise FunctionClauseError, ~r/Nx\.Defn\.Expr\.parameter/, fn ->
-        jitted.(Nx.tensor([0, 2, 4], type: :s32))
-      end
+      result = jitted.(Nx.tensor([0, 2, 4], type: :s32))
+      assert_all_close(result, Nx.tensor([1.0, 3.0, 5.0]), atol: 1.0e-6)
     end
   end
 
@@ -189,17 +190,12 @@ defmodule Nx.FuzzIndexedOpsTest do
 
     defn take_sum(t, idx), do: Nx.sum(Nx.take(t, idx))
 
-    test "[BUG-EXPRBLOCK-take-grad] grad wrt t with captured concrete indices crashes" do
+    test "[FIXED-EXPRBLOCK-take-grad] grad wrt t with captured concrete indices works" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       idx = Nx.tensor([0, 2, 4], type: :s32)
 
-      assert_raise FunctionClauseError, ~r/Nx\.Defn\.Expr\.parameter/, fn ->
-        Nx.Defn.grad(t, fn x -> take_sum(x, idx) end)
-      end
-
-      # Once fixed, replace with:
-      #   grad = Nx.Defn.grad(t, fn x -> take_sum(x, idx) end)
-      #   assert_all_close(grad, Nx.tensor([1.0, 0.0, 1.0, 0.0, 1.0]), atol: 1.0e-6)
+      grad = Nx.Defn.grad(t, fn x -> take_sum(x, idx) end)
+      assert_all_close(grad, Nx.tensor([1.0, 0.0, 1.0, 0.0, 1.0]), atol: 1.0e-6)
     end
 
     test "grad wrt t with inline indices works (control)" do
@@ -218,13 +214,12 @@ defmodule Nx.FuzzIndexedOpsTest do
       Nx.sum(Nx.take_along_axis(t, idx, axis: 0))
     end
 
-    test "[BUG-EXPRBLOCK-take_along_axis] take_along_axis: grad wrt t with captured indices crashes" do
+    test "[FIXED-EXPRBLOCK-take_along_axis] take_along_axis: grad wrt t with captured indices works" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       idx = Nx.tensor([0, 2, 4], type: :s32)
 
-      assert_raise FunctionClauseError, ~r/Nx\.Defn\.Expr\.parameter/, fn ->
-        Nx.Defn.grad(t, fn x -> take_along_axis_sum(x, idx) end)
-      end
+      grad = Nx.Defn.grad(t, fn x -> take_along_axis_sum(x, idx) end)
+      assert_all_close(grad, Nx.tensor([1.0, 0.0, 1.0, 0.0, 1.0]), atol: 1.0e-6)
     end
 
     # Nx.all_close uses the same Nx.block/4 path. Since all_close
@@ -234,13 +229,14 @@ defmodule Nx.FuzzIndexedOpsTest do
       Nx.multiply(close, Nx.sum(a))
     end
 
-    test "[BUG-EXPRBLOCK-all_close] all_close: grad with captured b crashes" do
+    test "[FIXED-EXPRBLOCK-all_close] all_close: grad with captured b works" do
       a = Nx.tensor([1.0, 2.0, 3.0])
       b = Nx.tensor([1.0, 2.0, 3.0])
 
-      assert_raise FunctionClauseError, ~r/Nx\.Defn\.Expr\.parameter/, fn ->
-        Nx.Defn.grad(a, fn x -> allclose_path(x, b) end)
-      end
+      # all_close is non-differentiable (comparison); grad flows only
+      # through the Nx.sum(a) factor, with close == 1.0 here
+      grad = Nx.Defn.grad(a, fn x -> allclose_path(x, b) end)
+      assert_all_close(grad, Nx.tensor([1.0, 1.0, 1.0]), atol: 1.0e-6)
     end
   end
 

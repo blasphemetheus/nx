@@ -52,6 +52,7 @@ defmodule Nx.FuzzLinAlgTest do
     bind(integer(2..max_n), fn n ->
       bind(member_of([:f32, :f64]), fn type ->
         a = Nx.add(Nx.iota({n, n}, type: type), Nx.multiply(n, Nx.eye(n, type: type)))
+
         mask =
           Nx.greater_equal(
             Nx.iota({n, n}, axis: 0, type: :s32),
@@ -319,6 +320,7 @@ defmodule Nx.FuzzLinAlgTest do
         b = Nx.add(Nx.iota({n}, type: Nx.type(a)), 1)
         x = Nx.LinAlg.solve(a, b)
         reconstructed = Nx.dot(a, x)
+
         assert_all_close(reconstructed, Nx.as_type(b, Nx.type(reconstructed)),
           atol: 1.0e-1,
           rtol: 1.0e-1
@@ -342,6 +344,7 @@ defmodule Nx.FuzzLinAlgTest do
         inv = Nx.LinAlg.invert(a)
         n = elem(Nx.shape(a), 0)
         product = Nx.dot(a, inv)
+
         assert_all_close(product, Nx.eye(n, type: Nx.type(product)),
           atol: 1.0e-1,
           rtol: 1.0e-1
@@ -512,7 +515,9 @@ defmodule Nx.FuzzLinAlgTest do
 
     defp symmetric_batched(batch, n, type) do
       0..(batch - 1)
-      |> Enum.map(fn i -> Nx.add(symmetric_2d(n, type), Nx.multiply(i + 1, Nx.eye(n, type: type))) end)
+      |> Enum.map(fn i ->
+        Nx.add(symmetric_2d(n, type), Nx.multiply(i + 1, Nx.eye(n, type: type)))
+      end)
       |> Nx.stack()
     end
 
@@ -544,12 +549,18 @@ defmodule Nx.FuzzLinAlgTest do
     # Root cause hypothesis: the grad path reshapes a scalar intermediate
     # into {1, N, N}, assuming 3D input. A 2D input produces a scalar
     # cotangent with shape {} that can't be reshaped into {2, 2}.
-    test "[BUG-1740-A] eigh grad: 2D input raises reshape error" do
+    test "[FIXED-1740-A] eigh grad: 2D input works, d(sum eigvals)/dA = I" do
+      # #1740 fixed upstream. Sum of eigenvalues is the trace, so the
+      # grad wrt a symmetric input is the identity matrix.
       x = Nx.tensor([[4.0, 2.0], [2.0, 5.0]], type: :f32)
 
-      assert_raise ArgumentError, ~r/cannot reshape/, fn ->
-        Nx.Defn.grad(x, fn a -> {s, _} = Nx.LinAlg.eigh(a); Nx.sum(s) end)
-      end
+      grad =
+        Nx.Defn.grad(x, fn a ->
+          {s, _} = Nx.LinAlg.eigh(a)
+          Nx.sum(s)
+        end)
+
+      assert_all_close(grad, Nx.eye(2, type: :f32), atol: 1.0e-3)
     end
 
     # BUG-1740-B — f64 eigh grad has an internal type-tag mismatch in an
@@ -570,19 +581,31 @@ defmodule Nx.FuzzLinAlgTest do
     # and f64 produce the same numbers. The bug is real (type tag is
     # wrong) but the severity is "latent internal inconsistency," not
     # "silent wrong results for users."
-    test "[BUG-1740-B] eigh grad: f64 batched input raises dtype error" do
+    test "[FIXED-1740-B] eigh grad: f64 batched input works" do
+      # #1740 fixed upstream (eps constant no longer f32-typed).
       x = Nx.tensor([[[4.0, 2.0], [2.0, 5.0]]], type: :f64)
 
-      assert_raise ArgumentError, ~r/expected 32 bits got: 64 bits/, fn ->
-        Nx.Defn.grad(x, fn a -> {s, _} = Nx.LinAlg.eigh(a); Nx.sum(s) end)
-      end
+      grad =
+        Nx.Defn.grad(x, fn a ->
+          {s, _} = Nx.LinAlg.eigh(a)
+          Nx.sum(s)
+        end)
+
+      assert Nx.type(grad) == {:f, 64}
+      assert_all_close(grad, Nx.broadcast(Nx.eye(2, type: :f64), {1, 2, 2}), atol: 1.0e-3)
     end
 
     # The one case that works — kept as a positive assertion to catch
     # regressions in the opposite direction.
     test "eigh grad: 3D batch=1 f32 works" do
       x = Nx.tensor([[[4.0, 2.0], [2.0, 5.0]]], type: :f32)
-      grad = Nx.Defn.grad(x, fn a -> {s, _} = Nx.LinAlg.eigh(a); Nx.sum(s) end)
+
+      grad =
+        Nx.Defn.grad(x, fn a ->
+          {s, _} = Nx.LinAlg.eigh(a)
+          Nx.sum(s)
+        end)
+
       assert Nx.shape(grad) == {1, 2, 2}
     end
 
@@ -611,8 +634,9 @@ defmodule Nx.FuzzLinAlgTest do
     # assert_raise path or via the assert_all_close below. When #1740
     # is fixed, the grad should return values comparable to f32 within
     # reasonable precision, and this test will pass.
-    @tag :skip
-    test "[BUG-1740-B-value] f64 eigh grad on 4×4 diverges catastrophically from f32" do
+    # Un-skipped 2026-08-14: #1740 fixed upstream; probe shows max diff
+    # 4.5e-8 on this input (was ~5.5e25).
+    test "[FIXED-1740-B-value] f64 eigh grad on 4×4 agrees with f32" do
       y64 =
         Nx.tensor(
           [
@@ -627,7 +651,11 @@ defmodule Nx.FuzzLinAlgTest do
         )
 
       y32 = Nx.as_type(y64, :f32)
-      obj = fn a -> {s, _v} = Nx.LinAlg.eigh(a); Nx.sum(Nx.log(s)) end
+
+      obj = fn a ->
+        {s, _v} = Nx.LinAlg.eigh(a)
+        Nx.sum(Nx.log(s))
+      end
 
       grad64 = Nx.Defn.grad(y64, obj) |> Nx.as_type(:f32)
       grad32 = Nx.Defn.grad(y32, obj)
@@ -676,20 +704,37 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    # Class: same batched-grad class as #1741-#1746. Not separately filed.
-    property "[meta #1748] grad of norm(A) on batched input" do
+    # Resolution of the #1748 class for norm: batched input is rejected
+    # up front with a clean ArgumentError (norm is documented 1-D/2-D
+    # only) rather than gaining batch support.
+    property "[meta #1748] norm(A) on batched input raises cleanly" do
       check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
-        grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.norm(x)) end)
-        assert Nx.shape(grad) == Nx.shape(a)
+        assert_raise ArgumentError, ~r/expected 1-D or 2-D tensor/, fn ->
+          Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.norm(x)) end)
+        end
       end
     end
 
-    # Class: same batched-grad class as #1741-#1746. Not separately filed.
-    property "[meta #1748] grad of sum(pinv(A)) on batched square input" do
-      check all(a <- batched_square_matrix(4, 3), max_runs: 5) do
-        grad = Nx.Defn.grad(a, fn x -> Nx.sum(Nx.LinAlg.pinv(x)) end)
-        assert Nx.shape(grad) == Nx.shape(a)
-      end
+    # LIVE BUG: pinv is broken on batched input in the FORWARD pass —
+    # the upstream #1748 fixes covered its siblings but not pinv. Three
+    # size-dependent failure modes; the n=2 silent rank-4 output is the
+    # worst (wrong result, no error). See
+    # FUZZ_FINDINGS/pinv_batched_forward_crash.md. Flip all three to
+    # shape assertions ({batch, n, n}) when fixed.
+    test "[BUG-PINV-BATCHED] batched pinv: n=1 crashes on reshape" do
+      a = Nx.iota({2, 1, 1}, type: :f32) |> Nx.add(Nx.eye(1))
+      assert_raise ArgumentError, ~r/cannot reshape/, fn -> Nx.LinAlg.pinv(a) end
+    end
+
+    test "[BUG-PINV-BATCHED] batched pinv: n=2 silently returns rank-4 output" do
+      a = Nx.iota({2, 2, 2}, type: :f32) |> Nx.add(Nx.eye(2))
+      # WRONG: should be {2, 2, 2}
+      assert Nx.shape(Nx.LinAlg.pinv(a)) == {2, 2, 2, 2}
+    end
+
+    test "[BUG-PINV-BATCHED] batched pinv: n>=3 crashes on broadcast" do
+      a = Nx.iota({2, 3, 3}, type: :f32) |> Nx.add(Nx.eye(3))
+      assert_raise ArgumentError, ~r/cannot broadcast tensor/, fn -> Nx.LinAlg.pinv(a) end
     end
 
     # Class: same batched-grad class as #1741-#1746. Not separately filed.

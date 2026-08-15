@@ -101,19 +101,20 @@ defmodule Nx.FuzzEdgeCases5Test do
     end
   end
 
-  # ── Token edge cases ──────────────────────────────────────────────
-  # Source: defn/kernel.ex:1504-1533
-  # Token ordering: hooks execute in order they were attached
+  # ── io_call edge cases ────────────────────────────────────────────
+  # Ported from the removed tokens API (create_token/hook_token/
+  # attach_token) to named io_calls. Attachment-order semantics no
+  # longer exist: io_calls fire when their node is evaluated, so these
+  # assert firing + value passthrough, which is what the API guarantees.
 
-  describe "token edge cases" do
+  describe "io_call edge cases" do
     defn side_effect_ordered(a, b) do
-      token = create_token()
-      {token, _} = hook_token(token, a, :first)
-      {token, _} = hook_token(token, b, :second)
-      attach_token(token, Nx.add(a, b))
+      a = io_call(a, :first)
+      b = io_call(b, :second)
+      Nx.add(a, b)
     end
 
-    test "token-ordered hooks fire in attachment order" do
+    test "named io_calls fire with their observed values" do
       parent = self()
 
       fun =
@@ -127,28 +128,25 @@ defmodule Nx.FuzzEdgeCases5Test do
       result = fun.(Nx.tensor(10.0), Nx.tensor(20.0))
       assert Nx.to_number(result) == 30.0
 
-      # Both hooks should have fired
+      # Both io_calls should have fired
       assert_receive {:first, 10.0}
       assert_receive {:second, 20.0}
     end
 
-    defn single_token_hook(x) do
-      token = create_token()
-      {token, _} = hook_token(token, Nx.multiply(x, x), :squared)
-      attach_token(token, x)
+    defn observed_square(x) do
+      io_call(Nx.multiply(x, x), :squared)
     end
 
-    test "token hook doesn't affect returned value" do
+    test "io_call passes its value through unchanged while firing the side effect" do
       parent = self()
 
       fun =
-        Nx.Defn.jit(&single_token_hook/1,
+        Nx.Defn.jit(&observed_square/1,
           hooks: %{squared: fn val -> send(parent, {:sq, val}) end}
         )
 
       result = fun.(Nx.tensor(5.0))
-      # The returned value is x (5.0), not x*x
-      assert Nx.to_number(result) == 5.0
+      assert Nx.to_number(result) == 25.0
       assert_receive {:sq, tensor}
       assert Nx.to_number(tensor) == 25.0
     end
