@@ -524,7 +524,7 @@ defmodule Nx.FuzzGradTest do
 
     property "grad of sum(window_max(x, {3}, strides: [2]))" do
       check all(n <- integer(5..12), max_runs: 8 * @fuzz_scale) do
-        x = random_input(n)
+        x = separated_input(n)
 
         check_grad(fn x -> Nx.sum(Nx.window_max(x, {3}, strides: [2])) end, x,
           atol: 0.1,
