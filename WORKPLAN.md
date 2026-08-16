@@ -7,7 +7,10 @@ maintainer call; silent-wrong-output severity beats crashes.
 
 ## Phase 1 — self-contained fix PRs (one at a time, each off clean main)
 
-1. **PR A: multi-tensor `impl!` dispatch.** put_slice/clip/gather/reduce/
+1. **PR A: multi-tensor `impl!` dispatch.** -> IN FLIGHT: draft
+   https://github.com/elixir-nx/nx/pull/1815 (branch
+   `fix/multi-tensor-dispatch`; preview was fork PR 12 - same head
+   branch, pushes update both). put_slice/clip/gather/reduce/
    window_reduce dispatch on the first tensor only; mixed concrete+Expr args
    crash. ~5 one-line fixes + flip the [BUG-DISPATCH-*] pins in
    `fuzz_indexed_ops_test.exs`. Easiest review → goes first.
