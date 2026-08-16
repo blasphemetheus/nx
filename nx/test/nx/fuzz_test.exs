@@ -8,6 +8,8 @@ defmodule Nx.FuzzTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Generators ─────────────────────────────────────────────────────
 
   @integer_types [:u8, :u16, :u32, :u64, :s8, :s16, :s32, :s64]
@@ -246,7 +248,7 @@ defmodule Nx.FuzzTest do
         check all(
                 shape <- non_empty_shape(),
                 type <- numeric_type(),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           a = Nx.iota(shape, type: type)
           b = Nx.iota(shape, type: type)
@@ -261,7 +263,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape(),
               type <- float_type(),
-              max_runs: 50
+              max_runs: 50 * @fuzz_scale
             ) do
         a = Nx.iota(shape, type: type)
         b = Nx.add(Nx.iota(shape, type: type), 1)
@@ -279,7 +281,7 @@ defmodule Nx.FuzzTest do
   describe "reduction ops don't crash" do
     for op <- @reduce_ops do
       property "#{op} reduces all axes" do
-        check all(t <- tensor(non_empty_shape(), float_type()), max_runs: 50) do
+        check all(t <- tensor(non_empty_shape(), float_type()), max_runs: 50 * @fuzz_scale) do
           result = apply(Nx, unquote(op), [t])
           assert is_struct(result, Nx.Tensor)
           # Full reduction produces scalar
@@ -291,7 +293,7 @@ defmodule Nx.FuzzTest do
         check all(
                 shape <- non_empty_shape() |> filter(&(tuple_size(&1) >= 1)),
                 type <- float_type(),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           t = Nx.iota(shape, type: type)
           axis = :rand.uniform(tuple_size(shape)) - 1
@@ -310,7 +312,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape() |> filter(&(Nx.size(&1) > 0)),
               type <- numeric_type(),
-              max_runs: 50
+              max_runs: 50 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: type)
         flat = {Nx.size(shape)}
@@ -324,7 +326,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape() |> filter(&(tuple_size(&1) >= 2)),
               type <- numeric_type(),
-              max_runs: 50
+              max_runs: 50 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: type)
         result = Nx.transpose(t)
@@ -338,7 +340,7 @@ defmodule Nx.FuzzTest do
     end
 
     property "squeeze removes size-1 dims" do
-      check all(type <- numeric_type(), max_runs: 50) do
+      check all(type <- numeric_type(), max_runs: 50 * @fuzz_scale) do
         # Create a shape with at least one size-1 dim
         t = Nx.iota({3, 1, 4, 1}, type: type)
         result = Nx.squeeze(t)
@@ -350,7 +352,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape(),
               type <- numeric_type(),
-              max_runs: 50
+              max_runs: 50 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: type)
         result = Nx.new_axis(t, 0)
@@ -368,7 +370,7 @@ defmodule Nx.FuzzTest do
               shape <- non_empty_shape(),
               from_type <- numeric_type(),
               to_type <- numeric_type(),
-              max_runs: 50
+              max_runs: 50 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: from_type)
         result = Nx.as_type(t, to_type)
@@ -382,7 +384,7 @@ defmodule Nx.FuzzTest do
 
   describe "broadcasting" do
     property "broadcast to same shape is identity" do
-      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 50) do
+      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 50 * @fuzz_scale) do
         result = Nx.broadcast(t, Nx.shape(t))
         assert Nx.shape(result) == Nx.shape(t)
       end
@@ -392,7 +394,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape(),
               type <- numeric_type(),
-              max_runs: 50
+              max_runs: 50 * @fuzz_scale
             ) do
         scalar = Nx.tensor(1, type: type)
         result = Nx.broadcast(scalar, shape)
@@ -408,7 +410,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape(),
               type <- numeric_type(),
-              max_runs: 50
+              max_runs: 50 * @fuzz_scale
             ) do
         result = Nx.iota(shape, type: type)
         assert Nx.shape(result) == shape
@@ -417,14 +419,14 @@ defmodule Nx.FuzzTest do
     end
 
     property "eye creates square identity" do
-      check all(n <- integer(1..16), type <- float_type(), max_runs: 20) do
+      check all(n <- integer(1..16), type <- float_type(), max_runs: 20 * @fuzz_scale) do
         result = Nx.eye(n, type: type)
         assert Nx.shape(result) == {n, n}
       end
     end
 
     property "broadcast creates correct shape" do
-      check all(shape <- non_empty_shape(), max_runs: 50) do
+      check all(shape <- non_empty_shape(), max_runs: 50 * @fuzz_scale) do
         result = Nx.broadcast(0, shape)
         assert Nx.shape(result) == shape
       end
@@ -440,7 +442,7 @@ defmodule Nx.FuzzTest do
               rows1 <- integer(1..8),
               rows2 <- integer(1..8),
               type <- numeric_type(),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         a = Nx.iota({rows1, cols}, type: type)
         b = Nx.iota({rows2, cols}, type: type)
@@ -454,7 +456,7 @@ defmodule Nx.FuzzTest do
               shape <- non_empty_shape() |> filter(&(tuple_size(&1) >= 1)),
               n <- integer(1..4),
               type <- numeric_type(),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         tensors = for _ <- 1..n, do: Nx.iota(shape, type: type)
         result = Nx.stack(tensors)
@@ -490,7 +492,7 @@ defmodule Nx.FuzzTest do
         check all(
                 shape <- non_empty_shape(),
                 type <- numeric_type(),
-                max_runs: 30
+                max_runs: 30 * @fuzz_scale
               ) do
           a = Nx.iota(shape, type: type)
           b = Nx.iota(shape, type: type)
@@ -511,7 +513,7 @@ defmodule Nx.FuzzTest do
                 len <- integer(2..32),
                 win <- integer(1..4),
                 type <- float_type(),
-                max_runs: 30
+                max_runs: 30 * @fuzz_scale
               ) do
           win = min(win, len)
           t = Nx.iota({len}, type: type)
@@ -529,7 +531,7 @@ defmodule Nx.FuzzTest do
                 win_r <- integer(1..3),
                 win_c <- integer(1..3),
                 type <- float_type(),
-                max_runs: 20
+                max_runs: 20 * @fuzz_scale
               ) do
           win_r = min(win_r, rows)
           win_c = min(win_c, cols)
@@ -546,7 +548,7 @@ defmodule Nx.FuzzTest do
         check all(
                 len <- integer(4..32),
                 type <- float_type(),
-                max_runs: 20
+                max_runs: 20 * @fuzz_scale
               ) do
           t = Nx.iota({len}, type: type)
           result = apply(Nx, unquote(op), [t, {2}, [strides: [2]]])
@@ -565,7 +567,7 @@ defmodule Nx.FuzzTest do
               pad_lo <- integer(0..4),
               pad_hi <- integer(0..4),
               type <- float_type(),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         result = Nx.pad(t, 0, [{pad_lo, pad_hi, 0}])
@@ -578,7 +580,7 @@ defmodule Nx.FuzzTest do
               rows <- integer(1..8),
               cols <- integer(1..8),
               type <- float_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({rows, cols}, type: type)
         result = Nx.pad(t, 0, [{1, 1, 0}, {0, 2, 0}])
@@ -594,7 +596,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(2..32),
               type <- numeric_type(),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         start = :rand.uniform(len) - 1
@@ -609,7 +611,7 @@ defmodule Nx.FuzzTest do
               rows <- integer(2..16),
               cols <- integer(2..16),
               type <- numeric_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({rows, cols}, type: type)
         sr = :rand.uniform(rows) - 1
@@ -625,7 +627,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(2..16),
               type <- float_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         start = :rand.uniform(len) - 1
@@ -645,7 +647,7 @@ defmodule Nx.FuzzTest do
               len <- integer(1..32),
               n_idx <- integer(1..8),
               type <- numeric_type(),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         indices = Nx.remainder(Nx.iota({n_idx}, type: :s64), len)
@@ -659,7 +661,7 @@ defmodule Nx.FuzzTest do
               len <- integer(2..16),
               n_idx <- integer(1..8),
               type <- numeric_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         indices = Nx.remainder(Nx.iota({n_idx, 1}, type: :s64), len)
@@ -673,7 +675,7 @@ defmodule Nx.FuzzTest do
 
   describe "reverse and sort ops don't crash" do
     property "reverse 1D" do
-      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 30) do
+      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 30 * @fuzz_scale) do
         if tuple_size(Nx.shape(t)) >= 1 do
           result = Nx.reverse(t)
           assert Nx.shape(result) == Nx.shape(t)
@@ -685,7 +687,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(1..32),
               type <- numeric_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         result = Nx.sort(t)
@@ -697,7 +699,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(1..32),
               type <- numeric_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         result = Nx.argsort(t)
@@ -714,7 +716,7 @@ defmodule Nx.FuzzTest do
         check all(
                 len <- integer(1..32),
                 type <- float_type(),
-                max_runs: 20
+                max_runs: 20 * @fuzz_scale
               ) do
           t = Nx.iota({len}, type: type)
           result = apply(Nx, unquote(op), [t])
@@ -731,7 +733,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(1..32),
               type <- float_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.iota({len}, type: type)
         b = Nx.iota({len}, type: type)
@@ -746,7 +748,7 @@ defmodule Nx.FuzzTest do
               n <- integer(1..16),
               k <- integer(1..16),
               type <- float_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.iota({m, k}, type: type)
         b = Nx.iota({k, n}, type: type)
@@ -762,7 +764,7 @@ defmodule Nx.FuzzTest do
               n <- integer(1..8),
               k <- integer(1..8),
               type <- float_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         a = Nx.iota({batch, m, k}, type: type)
         b = Nx.iota({batch, k, n}, type: type)
@@ -779,7 +781,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape(),
               type <- float_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         pred = Nx.greater(Nx.iota(shape, type: :f32), Nx.size(shape) / 2)
         on_true = Nx.iota(shape, type: type)
@@ -797,7 +799,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(2..16),
               type <- float_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         idx = Nx.remainder(Nx.iota({2, 1}, type: :s64), len)
@@ -811,7 +813,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(2..16),
               type <- float_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         idx = Nx.remainder(Nx.iota({2, 1}, type: :s64), len)
@@ -829,7 +831,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape(),
               type <- float_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: type)
         result = Nx.clip(t, 2, 5)
@@ -847,7 +849,7 @@ defmodule Nx.FuzzTest do
       property "#{op} returns correct shape" do
         check all(
                 shape <- non_empty_shape(),
-                max_runs: 20
+                max_runs: 20 * @fuzz_scale
               ) do
           a = Nx.greater(Nx.iota(shape, type: :f32), 2)
           b = Nx.less(Nx.iota(shape, type: :f32), 5)
@@ -858,7 +860,7 @@ defmodule Nx.FuzzTest do
     end
 
     property "logical_not returns correct shape" do
-      check all(shape <- non_empty_shape(), max_runs: 20) do
+      check all(shape <- non_empty_shape(), max_runs: 20 * @fuzz_scale) do
         a = Nx.greater(Nx.iota(shape, type: :f32), 2)
         result = Nx.logical_not(a)
         assert Nx.shape(result) == shape
@@ -874,7 +876,7 @@ defmodule Nx.FuzzTest do
         check all(
                 shape <- non_empty_shape(),
                 type <- member_of(@integer_types),
-                max_runs: 20
+                max_runs: 20 * @fuzz_scale
               ) do
           a = Nx.iota(shape, type: type)
           b = Nx.iota(shape, type: type)
@@ -889,7 +891,7 @@ defmodule Nx.FuzzTest do
         check all(
                 shape <- non_empty_shape(),
                 type <- member_of([:u8, :u16, :s8, :s16, :s32]),
-                max_runs: 20
+                max_runs: 20 * @fuzz_scale
               ) do
           a = Nx.iota(shape, type: type)
           shift = Nx.broadcast(Nx.tensor(1, type: type), shape)
@@ -905,7 +907,7 @@ defmodule Nx.FuzzTest do
   describe "all/any aggregation" do
     for op <- [:all, :any] do
       property "#{op} reduces to scalar" do
-        check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20) do
+        check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20 * @fuzz_scale) do
           result = apply(Nx, unquote(op), [t])
           assert Nx.shape(result) == {}
         end
@@ -913,14 +915,14 @@ defmodule Nx.FuzzTest do
     end
 
     property "argmax returns scalar index" do
-      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20) do
+      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20 * @fuzz_scale) do
         result = Nx.argmax(t)
         assert Nx.shape(result) == {}
       end
     end
 
     property "argmin returns scalar index" do
-      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20) do
+      check all(t <- tensor(non_empty_shape(), numeric_type()), max_runs: 20 * @fuzz_scale) do
         result = Nx.argmin(t)
         assert Nx.shape(result) == {}
       end
@@ -935,7 +937,7 @@ defmodule Nx.FuzzTest do
         check all(
                 shape <- non_empty_shape() |> filter(&(Nx.size(&1) > 0)),
                 type <- float_type(),
-                max_runs: 20
+                max_runs: 20 * @fuzz_scale
               ) do
           t = Nx.iota(shape, type: type)
           result = apply(Nx, unquote(op), [t])
@@ -949,7 +951,7 @@ defmodule Nx.FuzzTest do
               rows <- integer(2..16),
               cols <- integer(2..8),
               type <- float_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({rows, cols}, type: type)
         result = Nx.covariance(t)
@@ -961,7 +963,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(1..16),
               type <- float_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         w = Nx.add(Nx.iota({len}, type: type), 1)
@@ -978,7 +980,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape() |> filter(&(Nx.size(&1) > 0)),
               type <- numeric_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: type)
         result = Nx.flatten(t)
@@ -991,7 +993,7 @@ defmodule Nx.FuzzTest do
               len <- integer(1..8),
               reps <- integer(1..4),
               type <- numeric_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         result = Nx.tile(t, [reps])
@@ -1006,7 +1008,7 @@ defmodule Nx.FuzzTest do
               rep_r <- integer(1..3),
               rep_c <- integer(1..3),
               type <- numeric_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({rows, cols}, type: type)
         result = Nx.tile(t, [rep_r, rep_c])
@@ -1018,7 +1020,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(3..16),
               type <- float_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         pad = min(:rand.uniform(len - 1), len - 1)
@@ -1031,7 +1033,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(2..16),
               type <- float_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         result = Nx.diff(t)
@@ -1042,7 +1044,7 @@ defmodule Nx.FuzzTest do
     property "split" do
       check all(
               type <- numeric_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({6}, type: type)
         {left, right} = Nx.split(t, 3)
@@ -1055,7 +1057,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(4..16),
               type <- numeric_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         start = :rand.uniform(div(len, 2)) - 1
@@ -1073,7 +1075,7 @@ defmodule Nx.FuzzTest do
       check all(
               n <- integer(2..8),
               type <- numeric_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({n, n}, type: type)
         result = Nx.take_diagonal(t)
@@ -1085,7 +1087,7 @@ defmodule Nx.FuzzTest do
       check all(
               n <- integer(1..8),
               type <- numeric_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({n}, type: type)
         result = Nx.make_diagonal(t)
@@ -1097,7 +1099,7 @@ defmodule Nx.FuzzTest do
       check all(
               n <- integer(2..8),
               type <- numeric_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({n, n}, type: type)
         result = Nx.triu(t)
@@ -1109,7 +1111,7 @@ defmodule Nx.FuzzTest do
       check all(
               n <- integer(2..8),
               type <- numeric_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({n, n}, type: type)
         result = Nx.tril(t)
@@ -1120,7 +1122,7 @@ defmodule Nx.FuzzTest do
     property "tri" do
       check all(
               n <- integer(2..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         result = Nx.tri(n, n)
         assert Nx.shape(result) == {n, n}
@@ -1135,7 +1137,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape(),
               type <- member_of([:f32, :f64]),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: type)
         result = Nx.conjugate(t)
@@ -1147,7 +1149,7 @@ defmodule Nx.FuzzTest do
       check all(
               shape <- non_empty_shape(),
               type <- member_of([:f32, :f64]),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: type)
         r = Nx.real(t)
@@ -1166,7 +1168,7 @@ defmodule Nx.FuzzTest do
               # FFT requires power-of-2 or the library handles padding
               exp <- integer(1..6),
               type <- member_of([:f32, :f64]),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         len = Integer.pow(2, exp)
         t = Nx.iota({len}, type: type)
@@ -1186,7 +1188,7 @@ defmodule Nx.FuzzTest do
               len <- integer(2..32),
               k <- integer(1..4),
               type <- numeric_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         k = min(k, len)
         t = Nx.iota({len}, type: type)
@@ -1202,7 +1204,7 @@ defmodule Nx.FuzzTest do
   describe "window scatter ops don't crash" do
     for op <- [:window_scatter_max, :window_scatter_min] do
       property "#{op} 1D f32" do
-        check all(_ <- constant(:ok), max_runs: 10) do
+        check all(_ <- constant(:ok), max_runs: 10 * @fuzz_scale) do
           t = Nx.iota({6}, type: :f32)
           source = Nx.iota({3}, type: :f32)
           init = Nx.tensor(0.0, type: :f32)
@@ -1215,7 +1217,7 @@ defmodule Nx.FuzzTest do
       end
 
       property "#{op} 1D f64" do
-        check all(_ <- constant(:ok), max_runs: 5) do
+        check all(_ <- constant(:ok), max_runs: 5 * @fuzz_scale) do
           t = Nx.iota({6}, type: :f64)
           source = Nx.iota({3}, type: :f64)
           init = Nx.tensor(0.0, type: :f64)
@@ -1232,7 +1234,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(2..16),
               type <- float_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         win = min(2, len)
@@ -1249,7 +1251,7 @@ defmodule Nx.FuzzTest do
       check all(
               len <- integer(2..16),
               type <- numeric_type(),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({len}, type: type)
         # Sort indices as a valid use case
@@ -1266,7 +1268,7 @@ defmodule Nx.FuzzTest do
     property "bitcast preserves byte size" do
       check all(
               shape <- non_empty_shape() |> filter(&(Nx.size(&1) > 0)),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: :f32)
         result = Nx.bitcast(t, :s32)

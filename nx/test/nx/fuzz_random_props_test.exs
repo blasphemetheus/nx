@@ -14,13 +14,15 @@ defmodule Nx.FuzzRandomPropsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   @n 2048
 
   defp seed, do: integer(0..1_000_000)
 
   describe "determinism" do
     property "same seed produces bitwise-identical uniform/normal/randint streams" do
-      check all(s <- seed(), max_runs: 25) do
+      check all(s <- seed(), max_runs: 25 * @fuzz_scale) do
         for fun <- [
               fn k -> Nx.Random.uniform(k, shape: {16}) |> elem(0) end,
               fn k -> Nx.Random.normal(k, shape: {16}) |> elem(0) end,
@@ -34,7 +36,7 @@ defmodule Nx.FuzzRandomPropsTest do
     end
 
     property "different seeds produce different streams" do
-      check all(s <- seed(), delta <- integer(1..1000), max_runs: 25) do
+      check all(s <- seed(), delta <- integer(1..1000), max_runs: 25 * @fuzz_scale) do
         {a, _} = Nx.Random.uniform(Nx.Random.key(s), shape: {64})
         {b, _} = Nx.Random.uniform(Nx.Random.key(s + delta), shape: {64})
         refute Nx.to_binary(a) == Nx.to_binary(b)
@@ -42,7 +44,7 @@ defmodule Nx.FuzzRandomPropsTest do
     end
 
     property "the returned new_key differs from the input key and advances the stream" do
-      check all(s <- seed(), max_runs: 25) do
+      check all(s <- seed(), max_runs: 25 * @fuzz_scale) do
         key = Nx.Random.key(s)
         {a, key2} = Nx.Random.uniform(key, shape: {64})
         refute Nx.to_binary(key2) == Nx.to_binary(key)
@@ -55,7 +57,7 @@ defmodule Nx.FuzzRandomPropsTest do
 
   describe "split and fold_in" do
     property "split produces pairwise-distinct subkeys with pairwise-distinct streams" do
-      check all(s <- seed(), parts <- integer(2..5), max_runs: 20) do
+      check all(s <- seed(), parts <- integer(2..5), max_runs: 20 * @fuzz_scale) do
         keys = Nx.Random.split(Nx.Random.key(s), parts: parts)
 
         streams =
@@ -68,7 +70,12 @@ defmodule Nx.FuzzRandomPropsTest do
     end
 
     property "fold_in is deterministic and distinct per folded data" do
-      check all(s <- seed(), a <- integer(0..1_000_000), b <- integer(0..1_000_000), max_runs: 20) do
+      check all(
+              s <- seed(),
+              a <- integer(0..1_000_000),
+              b <- integer(0..1_000_000),
+              max_runs: 20 * @fuzz_scale
+            ) do
         key = Nx.Random.key(s)
 
         folded_a1 = Nx.Random.fold_in(key, a)
@@ -93,7 +100,7 @@ defmodule Nx.FuzzRandomPropsTest do
               min_v <- float(min: -100.0, max: 99.0),
               width <- float(min: 0.001, max: 100.0),
               type <- member_of([{:f, 32}, {:f, 64}]),
-              max_runs: 25
+              max_runs: 25 * @fuzz_scale
             ) do
         max_v = min_v + width
 
@@ -114,7 +121,7 @@ defmodule Nx.FuzzRandomPropsTest do
               min_v <- integer(-1000..999),
               width <- integer(1..1000),
               type <- member_of([{:s, 32}, {:s, 64}, {:u, 32}]),
-              max_runs: 25
+              max_runs: 25 * @fuzz_scale
             ) do
         {min_v, max_v} =
           case type do
@@ -134,7 +141,7 @@ defmodule Nx.FuzzRandomPropsTest do
 
   describe "moments (n = #{@n}, tolerances ~7 standard errors)" do
     property "uniform(0, 1) has mean ~0.5 and variance ~1/12" do
-      check all(s <- seed(), max_runs: 15) do
+      check all(s <- seed(), max_runs: 15 * @fuzz_scale) do
         {t, _} = Nx.Random.uniform(Nx.Random.key(s), shape: {@n})
 
         mean = Nx.to_number(Nx.mean(t))
@@ -151,7 +158,7 @@ defmodule Nx.FuzzRandomPropsTest do
               s <- seed(),
               mu <- float(min: -10.0, max: 10.0),
               sigma <- float(min: 0.1, max: 5.0),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         {t, _} = Nx.Random.normal(Nx.Random.key(s), mu, sigma, shape: {@n})
 
@@ -167,7 +174,7 @@ defmodule Nx.FuzzRandomPropsTest do
 
   describe "shuffle and choice" do
     property "shuffle is a permutation, deterministic per key, not the identity" do
-      check all(s <- seed(), n <- integer(16..64), max_runs: 20) do
+      check all(s <- seed(), n <- integer(16..64), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: {:f, 32})
         key = Nx.Random.key(s)
 
@@ -186,7 +193,7 @@ defmodule Nx.FuzzRandomPropsTest do
     end
 
     property "choice samples only from the population, honors sample count" do
-      check all(s <- seed(), n <- integer(4..32), k <- integer(1..8), max_runs: 20) do
+      check all(s <- seed(), n <- integer(4..32), k <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         # distinct population values so membership is meaningful
         population = Nx.multiply(Nx.iota({n}, type: {:f, 32}), 3.0)
 
@@ -205,7 +212,7 @@ defmodule Nx.FuzzRandomPropsTest do
 
   describe "vectorized keys" do
     property "a vectorized batch of split keys yields pairwise-distinct batch streams" do
-      check all(s <- seed(), parts <- integer(2..4), max_runs: 15) do
+      check all(s <- seed(), parts <- integer(2..4), max_runs: 15 * @fuzz_scale) do
         keys = Nx.Random.split(Nx.Random.key(s), parts: parts)
         vkeys = Nx.vectorize(keys, :batch)
 

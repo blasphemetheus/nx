@@ -20,6 +20,8 @@ defmodule Nx.FuzzSerializationTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Testing
 
   # ── FUZZ FINDING: to_binary/from_binary asymmetry for sub-byte ─────
@@ -77,9 +79,18 @@ defmodule Nx.FuzzSerializationTest do
 
   describe "to_binary / from_binary round-trips for byte-aligned types" do
     @standard_types [
-      {:u, 8}, {:u, 16}, {:u, 32}, {:u, 64},
-      {:s, 8}, {:s, 16}, {:s, 32}, {:s, 64},
-      {:f, 16}, {:bf, 16}, {:f, 32}, {:f, 64}
+      {:u, 8},
+      {:u, 16},
+      {:u, 32},
+      {:u, 64},
+      {:s, 8},
+      {:s, 16},
+      {:s, 32},
+      {:s, 64},
+      {:f, 16},
+      {:bf, 16},
+      {:f, 32},
+      {:f, 64}
     ]
 
     for type <- @standard_types do
@@ -106,7 +117,7 @@ defmodule Nx.FuzzSerializationTest do
       check all(
               n <- integer(1..10),
               vals <- list_of(float(min: -100.0, max: 100.0), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.tensor(vals, type: :f32)
         rt = Nx.deserialize(Nx.serialize(t))
@@ -118,7 +129,7 @@ defmodule Nx.FuzzSerializationTest do
       check all(
               n <- integer(1..10),
               vals <- list_of(integer(-1000..1000), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.tensor(vals, type: :s32)
         rt = Nx.deserialize(Nx.serialize(t))
@@ -149,6 +160,7 @@ defmodule Nx.FuzzSerializationTest do
         %{w: Nx.tensor([1.0]), b: Nx.tensor([2.0])},
         %{w: Nx.tensor([3.0]), b: Nx.tensor([4.0])}
       }
+
       rt = Nx.deserialize(Nx.serialize(nested))
 
       {{map1_rt, map2_rt}, {map1, map2}} = {rt, nested}

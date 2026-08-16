@@ -13,6 +13,8 @@ defmodule Nx.FuzzCondVectorizedGradTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Defn
   import Nx.Testing
 
@@ -62,7 +64,7 @@ defmodule Nx.FuzzCondVectorizedGradTest do
 
   describe "cond under grad" do
     property "grad through cond equals the taken branch's closed-form derivative" do
-      check all(x <- float_tensor({4}), flag <- member_of([-1, 1]), max_runs: 20) do
+      check all(x <- float_tensor({4}), flag <- member_of([-1, 1]), max_runs: 20 * @fuzz_scale) do
         result = grad_cond_fun(x, Nx.tensor(flag))
 
         expected = if flag > 0, do: Nx.cos(x), else: Nx.negate(Nx.sin(x))
@@ -75,7 +77,7 @@ defmodule Nx.FuzzCondVectorizedGradTest do
               x <- float_tensor({4}),
               f1 <- member_of([-1, 1]),
               f2 <- member_of([-1, 1]),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         result = grad_nested_cond(x, Nx.tensor(f1), Nx.tensor(f2))
 
@@ -91,7 +93,7 @@ defmodule Nx.FuzzCondVectorizedGradTest do
     end
 
     property "grad with a data-dependent predicate follows the taken branch" do
-      check all(x <- float_tensor({4}), max_runs: 20) do
+      check all(x <- float_tensor({4}), max_runs: 20 * @fuzz_scale) do
         result = grad_data_dependent_pred(x)
 
         expected =
@@ -108,7 +110,12 @@ defmodule Nx.FuzzCondVectorizedGradTest do
 
   describe "multi-axis vectorization (forward)" do
     property "reduction over a doubly-vectorized tensor equals a plain axis reduction" do
-      check all(a <- integer(2..3), b <- integer(2..3), n <- integer(2..4), max_runs: 15) do
+      check all(
+              a <- integer(2..3),
+              b <- integer(2..3),
+              n <- integer(2..4),
+              max_runs: 15 * @fuzz_scale
+            ) do
         check all(t <- float_tensor({a, b, n}), max_runs: 1) do
           vec = Nx.vectorize(t, [:a, :b])
 
@@ -125,7 +132,12 @@ defmodule Nx.FuzzCondVectorizedGradTest do
     end
 
     property "binary op between two doubly-vectorized tensors matches the plain op" do
-      check all(a <- integer(2..3), b <- integer(2..3), n <- integer(2..4), max_runs: 15) do
+      check all(
+              a <- integer(2..3),
+              b <- integer(2..3),
+              n <- integer(2..4),
+              max_runs: 15 * @fuzz_scale
+            ) do
         check all(t <- float_tensor({a, b, n}), u <- float_tensor({a, b, n}), max_runs: 1) do
           vt = Nx.vectorize(t, [:a, :b])
           vu = Nx.vectorize(u, [:a, :b])
@@ -139,7 +151,12 @@ defmodule Nx.FuzzCondVectorizedGradTest do
 
   describe "multi-axis vectorized grad" do
     property "grad over a doubly-vectorized input matches the closed form per slice" do
-      check all(a <- integer(2..3), b <- integer(2..3), n <- integer(2..4), max_runs: 15) do
+      check all(
+              a <- integer(2..3),
+              b <- integer(2..3),
+              n <- integer(2..4),
+              max_runs: 15 * @fuzz_scale
+            ) do
         check all(t <- float_tensor({a, b, n}), max_runs: 1) do
           vec = Nx.vectorize(t, [:a, :b])
 
@@ -157,7 +174,7 @@ defmodule Nx.FuzzCondVectorizedGradTest do
               b <- integer(2..3),
               n <- integer(2..4),
               flag <- member_of([-1, 1]),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         check all(t <- float_tensor({a, b, n}), max_runs: 1) do
           vec = Nx.vectorize(t, [:a, :b])

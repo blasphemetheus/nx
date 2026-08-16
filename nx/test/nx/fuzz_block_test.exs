@@ -18,6 +18,8 @@ defmodule Nx.FuzzBlockTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Testing
 
   # Well-conditioned n×n matrix: I + 0.1R keeps linalg numerically tame.
@@ -70,7 +72,7 @@ defmodule Nx.FuzzBlockTest do
               n <- integer(2..5),
               a <- matrix(n),
               mode <- member_of([:reduced, :complete]),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         {q, r} = assert_routes_agree(fn x -> Nx.LinAlg.qr(x, mode: mode) end, [a])
 
@@ -83,21 +85,21 @@ defmodule Nx.FuzzBlockTest do
     end
 
     property "Cholesky: routes agree and L·Lᵀ reconstructs A" do
-      check all(n <- integer(2..5), a <- spd_matrix(n), max_runs: 10) do
+      check all(n <- integer(2..5), a <- spd_matrix(n), max_runs: 10 * @fuzz_scale) do
         l = assert_routes_agree(&Nx.LinAlg.cholesky/1, [a])
         assert_all_close(Nx.dot(l, Nx.transpose(l)), a, atol: 1.0e-8)
       end
     end
 
     property "Solve: routes agree and A·x reconstructs b" do
-      check all(n <- integer(2..5), a <- matrix(n), b <- vector(n), max_runs: 10) do
+      check all(n <- integer(2..5), a <- matrix(n), b <- vector(n), max_runs: 10 * @fuzz_scale) do
         x = assert_routes_agree(&Nx.LinAlg.solve/2, [a, b])
         assert_all_close(Nx.dot(a, x), b, atol: 1.0e-6)
       end
     end
 
     property "LU: routes agree and P·L·U reconstructs A" do
-      check all(n <- integer(2..5), a <- matrix(n), max_runs: 10) do
+      check all(n <- integer(2..5), a <- matrix(n), max_runs: 10 * @fuzz_scale) do
         {p, l, u} = assert_routes_agree(&Nx.LinAlg.lu/1, [a])
         assert_all_close(p |> Nx.dot(l) |> Nx.dot(u), a, atol: 1.0e-8)
       end
@@ -108,7 +110,7 @@ defmodule Nx.FuzzBlockTest do
               n <- integer(2..4),
               a <- matrix(n),
               full? <- boolean(),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         {u, s, vt} =
           assert_routes_agree(fn x -> Nx.LinAlg.svd(x, full_matrices?: full?) end, [a],
@@ -126,7 +128,7 @@ defmodule Nx.FuzzBlockTest do
     end
 
     property "Eigh: routes agree and A·V = V·diag(λ) for symmetric A" do
-      check all(n <- integer(2..4), a <- spd_matrix(n), max_runs: 8) do
+      check all(n <- integer(2..4), a <- spd_matrix(n), max_runs: 8 * @fuzz_scale) do
         {evals, evecs} = assert_routes_agree(&Nx.LinAlg.eigh/1, [a], atol: 1.0e-4)
 
         av = Nx.dot(a, evecs)
@@ -136,7 +138,7 @@ defmodule Nx.FuzzBlockTest do
     end
 
     property "Determinant: routes agree and multiplicativity holds" do
-      check all(n <- integer(2..4), a <- matrix(n), b <- matrix(n), max_runs: 10) do
+      check all(n <- integer(2..4), a <- matrix(n), b <- matrix(n), max_runs: 10 * @fuzz_scale) do
         det_a = assert_routes_agree(&Nx.LinAlg.determinant/1, [a])
         det_b = Nx.LinAlg.determinant(b)
         det_ab = Nx.LinAlg.determinant(Nx.dot(a, b))
@@ -152,7 +154,7 @@ defmodule Nx.FuzzBlockTest do
               cols <- integer(2..5),
               axis <- member_of([0, 1]),
               idx_len <- integer(1..4),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({rows, cols}, type: {:f, 32})
         axis_size = if axis == 0, do: rows, else: cols
@@ -177,7 +179,12 @@ defmodule Nx.FuzzBlockTest do
     end
 
     property "top_k: routes agree, values sorted desc and traceable to input" do
-      check all(n <- integer(3..10), t <- vector(n), k <- integer(1..3), max_runs: 15) do
+      check all(
+              n <- integer(3..10),
+              t <- vector(n),
+              k <- integer(1..3),
+              max_runs: 15 * @fuzz_scale
+            ) do
         {values, indices} = assert_routes_agree(fn x -> Nx.top_k(x, k: k) end, [t])
 
         vals = Nx.to_flat_list(values)
@@ -199,7 +206,7 @@ defmodule Nx.FuzzBlockTest do
               n <- integer(2..8),
               t <- vector(n),
               reverse? <- boolean(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         result =
           assert_routes_agree(fn x -> Nx.cumulative_sum(x, axis: 0, reverse: reverse?) end, [t])
@@ -214,7 +221,7 @@ defmodule Nx.FuzzBlockTest do
     end
 
     property "cumulative_min/max: routes agree and match Enum.scan" do
-      check all(n <- integer(2..8), t <- vector(n), max_runs: 20) do
+      check all(n <- integer(2..8), t <- vector(n), max_runs: 20 * @fuzz_scale) do
         for {op, fun} <- [{:cumulative_min, &min/2}, {:cumulative_max, &max/2}] do
           result = assert_routes_agree(fn x -> apply(Nx, op, [x]) end, [t])
           expected = t |> Nx.to_flat_list() |> Enum.scan(fun)
@@ -232,7 +239,7 @@ defmodule Nx.FuzzBlockTest do
               b <- vector(n),
               atol <- member_of([1.0e-8, 0.1, 10.0]),
               rtol <- member_of([1.0e-5, 0.1]),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         result =
           assert_routes_agree(
@@ -252,7 +259,7 @@ defmodule Nx.FuzzBlockTest do
     end
 
     property "phase: routes agree and match atan2(imag, real)" do
-      check all(n <- integer(1..6), re <- vector(n), im <- vector(n), max_runs: 20) do
+      check all(n <- integer(1..6), re <- vector(n), im <- vector(n), max_runs: 20 * @fuzz_scale) do
         z = Nx.complex(Nx.as_type(re, {:f, 32}), Nx.as_type(im, {:f, 32}))
 
         result = assert_routes_agree(&Nx.phase/1, [z])
@@ -264,7 +271,7 @@ defmodule Nx.FuzzBlockTest do
 
   describe "FFT blocks" do
     property "fft2/ifft2: routes agree and round-trip is identity" do
-      check all(rows <- member_of([2, 4]), cols <- member_of([2, 4]), max_runs: 8) do
+      check all(rows <- member_of([2, 4]), cols <- member_of([2, 4]), max_runs: 8 * @fuzz_scale) do
         check all(
                 vals <- list_of(float(min: -10.0, max: 10.0), length: rows * cols),
                 max_runs: 1
@@ -280,7 +287,7 @@ defmodule Nx.FuzzBlockTest do
     end
 
     property "rfft/irfft: routes agree and round-trip recovers real input" do
-      check all(n <- member_of([4, 8]), max_runs: 8) do
+      check all(n <- member_of([4, 8]), max_runs: 8 * @fuzz_scale) do
         check all(vals <- list_of(float(min: -10.0, max: 10.0), length: n), max_runs: 1) do
           t = Nx.tensor(vals, type: {:f, 32})
 

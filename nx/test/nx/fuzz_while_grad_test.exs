@@ -13,6 +13,8 @@ defmodule Nx.FuzzWhileGradTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Defn
   import Nx.Testing
 
@@ -70,7 +72,7 @@ defmodule Nx.FuzzWhileGradTest do
       check all(
               x <- float(min: -5.0, max: 5.0),
               n <- integer(1..5),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         t = Nx.tensor(x, type: :f32)
         grad = Nx.Defn.grad(t, fn a -> sum_n_copies(a, n) end)
@@ -84,7 +86,7 @@ defmodule Nx.FuzzWhileGradTest do
       check all(
               x <- float(min: 0.5, max: 2.0),
               n <- integer(1..4),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         t = Nx.tensor(x, type: :f32)
         grad = Nx.Defn.grad(t, fn a -> power_via_loop(a, n) end)
@@ -97,7 +99,7 @@ defmodule Nx.FuzzWhileGradTest do
       check all(
               x <- float(min: -3.0, max: 3.0),
               n <- integer(1..6),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         t = Nx.tensor(x, type: :f32)
         grad = Nx.Defn.grad(t, fn a -> weighted_sum(a, n) end)
@@ -109,7 +111,7 @@ defmodule Nx.FuzzWhileGradTest do
 
   describe "grad through while with tensor state" do
     property "d/dt sum_of_elements(t) is all ones" do
-      check all(n <- integer(2..5), max_runs: 6) do
+      check all(n <- integer(2..5), max_runs: 6 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         grad = Nx.Defn.grad(t, fn a -> sum_of_elements(a) end)
         expected = Nx.broadcast(Nx.tensor(1.0, type: :f32), {n})
@@ -162,7 +164,7 @@ defmodule Nx.FuzzWhileGradTest do
       check all(
               x <- float(min: -1.0, max: 1.0),
               n <- integer(1..4),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         t = Nx.tensor(x, type: :f32)
         grad = Nx.Defn.grad(t, fn a -> sin_of_loop_sum(a, n) end)
@@ -227,7 +229,7 @@ defmodule Nx.FuzzWhileGradTest do
               rows <- integer(2..4),
               cols <- integer(2..4),
               n <- integer(1..3),
-              max_runs: 6
+              max_runs: 6 * @fuzz_scale
             ) do
         t = Nx.iota({rows, cols}, type: :f32)
         grad = Nx.Defn.grad(t, fn a -> batched_loop(a, n) end)

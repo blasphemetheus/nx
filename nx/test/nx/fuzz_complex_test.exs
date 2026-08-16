@@ -9,6 +9,8 @@ defmodule Nx.FuzzComplexTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Generators ─────────────────────────────────────────────────────
 
   defp complex_type do
@@ -42,7 +44,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               a <- complex_tensor(shape),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         b = Nx.complex(Nx.broadcast(1.0, shape), Nx.broadcast(2.0, shape))
         result = Nx.add(a, b)
@@ -55,7 +57,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               a <- complex_tensor(shape),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         result = Nx.subtract(a, a)
         assert Nx.shape(result) == shape
@@ -66,7 +68,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               a <- complex_tensor(shape),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         one = Nx.complex(Nx.broadcast(1.0, shape), Nx.broadcast(0.0, shape))
         result = Nx.multiply(a, one)
@@ -78,7 +80,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               a <- complex_tensor(shape),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         # Divide by non-zero complex
         b = Nx.complex(Nx.broadcast(2.0, shape), Nx.broadcast(1.0, shape))
@@ -95,7 +97,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               z <- complex_tensor(shape),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         result = Nx.conjugate(Nx.conjugate(z))
 
@@ -113,7 +115,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               z <- complex_tensor(shape),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         r = Nx.real(z)
         i = Nx.imag(z)
@@ -133,7 +135,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               z <- complex_tensor(shape),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         r = Nx.real(z)
         i = Nx.imag(z)
@@ -148,7 +150,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               z <- complex_tensor(shape),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         result = Nx.abs(z)
         assert elem(Nx.type(result), 0) == :f
@@ -161,7 +163,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               z <- complex_tensor(shape),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         abs_sq = Nx.pow(Nx.abs(z), 2)
         re_sq = Nx.pow(Nx.real(z), 2)
@@ -186,7 +188,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {} and Nx.size(&1) > 0)),
               z <- complex_tensor(shape),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         result = Nx.sum(z)
         assert Nx.shape(result) == {}
@@ -198,7 +200,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {} and Nx.size(&1) > 0)),
               z <- complex_tensor(shape),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         result = Nx.mean(z)
         assert Nx.shape(result) == {}
@@ -208,7 +210,7 @@ defmodule Nx.FuzzComplexTest do
     property "sum of ones equals element count" do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {} and Nx.size(&1) > 0)),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         ones = Nx.complex(Nx.broadcast(1.0, shape), Nx.broadcast(0.0, shape))
         result = Nx.sum(ones)
@@ -226,7 +228,7 @@ defmodule Nx.FuzzComplexTest do
     property "float to complex preserves real part" do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         f = Nx.iota(shape, type: :f32)
         c = Nx.as_type(f, :c64)
@@ -244,7 +246,7 @@ defmodule Nx.FuzzComplexTest do
     property "float to complex has zero imaginary" do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         f = Nx.iota(shape, type: :f32)
         c = Nx.as_type(f, :c64)
@@ -258,7 +260,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               shape <- complex_shape() |> filter(&(&1 != {})),
               z <- complex_tensor(shape),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         # Only test c64 inputs
         z64 = Nx.as_type(z, :c64)
@@ -282,7 +284,7 @@ defmodule Nx.FuzzComplexTest do
       property "#{op} on complex" do
         check all(
                 shape <- complex_shape() |> filter(&(&1 != {})),
-                max_runs: 10
+                max_runs: 10 * @fuzz_scale
               ) do
           # Small values to avoid overflow
           z =
@@ -305,7 +307,7 @@ defmodule Nx.FuzzComplexTest do
     property "dot of complex vectors" do
       check all(
               n <- integer(1..8),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = Nx.complex(Nx.iota({n}, type: :f32), Nx.broadcast(1.0, {n}))
         b = Nx.complex(Nx.broadcast(1.0, {n}), Nx.iota({n}, type: :f32))
@@ -320,7 +322,7 @@ defmodule Nx.FuzzComplexTest do
               m <- integer(1..6),
               n <- integer(1..6),
               k <- integer(1..6),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = Nx.complex(Nx.iota({m, k}, type: :f32), Nx.broadcast(1.0, {m, k}))
         b = Nx.complex(Nx.iota({k, n}, type: :f32), Nx.broadcast(1.0, {k, n}))
@@ -337,7 +339,7 @@ defmodule Nx.FuzzComplexTest do
     property "reshape preserves values" do
       check all(
               n <- integer(1..16),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         z = Nx.complex(Nx.iota({n}, type: :f32), Nx.broadcast(1.0, {n}))
         flat = Nx.reshape(z, {n})
@@ -354,7 +356,7 @@ defmodule Nx.FuzzComplexTest do
       check all(
               m <- integer(1..6),
               n <- integer(1..6),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         z = Nx.complex(Nx.iota({m, n}, type: :f32), Nx.broadcast(1.0, {m, n}))
         result = Nx.transpose(z)
@@ -365,7 +367,7 @@ defmodule Nx.FuzzComplexTest do
     property "concatenate complex" do
       check all(
               n <- integer(1..8),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = Nx.complex(Nx.iota({n}, type: :f32), Nx.broadcast(1.0, {n}))
         b = Nx.complex(Nx.broadcast(0.0, {n}), Nx.iota({n}, type: :f32))

@@ -8,6 +8,8 @@ defmodule Nx.FuzzTypesTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── f16 specific tests ────────────────────────────────────────────
 
   describe "f16 edge cases" do
@@ -34,7 +36,7 @@ defmodule Nx.FuzzTypesTest do
     end
 
     property "f16 iota doesn't crash" do
-      check all(shape <- member_of([{3}, {2, 3}, {4, 2}]), max_runs: 10) do
+      check all(shape <- member_of([{3}, {2, 3}, {4, 2}]), max_runs: 10 * @fuzz_scale) do
         t = Nx.iota(shape, type: :f16)
         assert Nx.shape(t) == shape
         assert Nx.type(t) == {:f, 16}
@@ -44,7 +46,7 @@ defmodule Nx.FuzzTypesTest do
     property "f16 arithmetic doesn't crash" do
       check all(
               n <- integer(1..8),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = Nx.iota({n}, type: :f16)
         b = Nx.iota({n}, type: :f16)
@@ -54,7 +56,7 @@ defmodule Nx.FuzzTypesTest do
     end
 
     property "f16 reductions don't crash" do
-      check all(n <- integer(1..16), max_runs: 10) do
+      check all(n <- integer(1..16), max_runs: 10 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f16)
         assert is_struct(Nx.sum(t), Nx.Tensor)
         assert is_struct(Nx.reduce_max(t), Nx.Tensor)
@@ -79,7 +81,7 @@ defmodule Nx.FuzzTypesTest do
     end
 
     property "bf16 arithmetic doesn't crash" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         a = Nx.iota({n}, type: :bf16)
         b = Nx.iota({n}, type: :bf16)
         assert is_struct(Nx.add(a, b), Nx.Tensor)
@@ -92,7 +94,7 @@ defmodule Nx.FuzzTypesTest do
               m <- integer(1..8),
               n <- integer(1..8),
               k <- integer(1..8),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = Nx.iota({m, k}, type: :bf16)
         b = Nx.iota({k, n}, type: :bf16)
@@ -119,7 +121,7 @@ defmodule Nx.FuzzTypesTest do
 
     for {t1, t2} <- @type_pairs do
       property "add #{t1} + #{t2} promotes correctly" do
-        check all(n <- integer(1..8), max_runs: 10) do
+        check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
           a = Nx.iota({n}, type: unquote(t1))
           b = Nx.iota({n}, type: unquote(t2))
           result = Nx.add(a, b)
@@ -133,7 +135,7 @@ defmodule Nx.FuzzTypesTest do
     end
 
     property "multiply integer * float promotes to float" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         a = Nx.iota({n}, type: :s32)
         b = Nx.iota({n}, type: :f32)
         result = Nx.multiply(a, b)
@@ -142,7 +144,7 @@ defmodule Nx.FuzzTypesTest do
     end
 
     property "comparison of different types doesn't crash" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         a = Nx.iota({n}, type: :s32)
         b = Nx.iota({n}, type: :f32)
         result = Nx.equal(a, b)
@@ -155,7 +157,7 @@ defmodule Nx.FuzzTypesTest do
 
   describe "high-rank tensors" do
     property "rank 4 operations don't crash" do
-      check all(type <- member_of([:f32, :s32]), max_runs: 10) do
+      check all(type <- member_of([:f32, :s32]), max_runs: 10 * @fuzz_scale) do
         t = Nx.iota({2, 3, 2, 2}, type: type)
         assert Nx.shape(Nx.sum(t)) == {}
         assert Nx.shape(Nx.sum(t, axes: [0])) == {3, 2, 2}
@@ -165,7 +167,7 @@ defmodule Nx.FuzzTypesTest do
     end
 
     property "rank 5 operations don't crash" do
-      check all(type <- member_of([:f32]), max_runs: 5) do
+      check all(type <- member_of([:f32]), max_runs: 5 * @fuzz_scale) do
         t = Nx.iota({2, 2, 2, 2, 2}, type: type)
         assert Nx.shape(Nx.sum(t)) == {}
         assert Nx.shape(Nx.abs(t)) == {2, 2, 2, 2, 2}

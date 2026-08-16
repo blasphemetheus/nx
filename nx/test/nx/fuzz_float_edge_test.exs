@@ -14,6 +14,8 @@ defmodule Nx.FuzzFloatEdgeTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Testing
 
   @types [{:f, 32}, {:f, 64}]
@@ -41,7 +43,7 @@ defmodule Nx.FuzzFloatEdgeTest do
       property "is_nan agrees with independent bit-level classification" do
         check all(
                 t <- FuzzGen.bit_tensor(FuzzGen.shape(), unquote(Macro.escape(type))),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           expected = for c <- FuzzGen.classify(t), do: if(c == :nan, do: 1, else: 0)
           assert Nx.to_flat_list(Nx.is_nan(t)) == expected
@@ -51,7 +53,7 @@ defmodule Nx.FuzzFloatEdgeTest do
       property "is_infinity agrees with independent bit-level classification" do
         check all(
                 t <- FuzzGen.bit_tensor(FuzzGen.shape(), unquote(Macro.escape(type))),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           expected = for c <- FuzzGen.classify(t), do: if(c == :infinity, do: 1, else: 0)
           assert Nx.to_flat_list(Nx.is_infinity(t)) == expected
@@ -63,7 +65,7 @@ defmodule Nx.FuzzFloatEdgeTest do
       property "reshape/transpose/reverse round-trips preserve every bit" do
         check all(
                 t <- FuzzGen.bit_tensor(FuzzGen.shape(), unquote(Macro.escape(type))),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           flat = Nx.reshape(t, {Nx.size(t)})
           assert Nx.to_binary(flat) == Nx.to_binary(t)
@@ -76,7 +78,7 @@ defmodule Nx.FuzzFloatEdgeTest do
       property "serialization round-trips preserve NaN payloads and -0.0" do
         check all(
                 t <- FuzzGen.bit_tensor(FuzzGen.shape(), unquote(Macro.escape(type))),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           bin_rt = t |> Nx.to_binary() |> Nx.from_binary(Nx.type(t))
           assert Nx.to_binary(bin_rt) == Nx.to_binary(t)
@@ -91,7 +93,7 @@ defmodule Nx.FuzzFloatEdgeTest do
       property "negate flips exactly the sign bit (including -0.0 and denormals)" do
         check all(
                 t <- FuzzGen.finite_bit_tensor(FuzzGen.shape(), unquote(Macro.escape(type))),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           mask = sign_bit_mask(unquote(Macro.escape(type)))
           expected = for w <- words(t), do: Bitwise.bxor(w, mask)
@@ -102,7 +104,7 @@ defmodule Nx.FuzzFloatEdgeTest do
       property "abs clears exactly the sign bit (including -0.0 and denormals)" do
         check all(
                 t <- FuzzGen.finite_bit_tensor(FuzzGen.shape(), unquote(Macro.escape(type))),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           mask = sign_bit_mask(unquote(Macro.escape(type)))
           expected = for w <- words(t), do: Bitwise.band(w, Bitwise.bnot(mask))
@@ -116,7 +118,7 @@ defmodule Nx.FuzzFloatEdgeTest do
         check all(
                 t <- FuzzGen.bit_tensor(FuzzGen.shape(), unquote(Macro.escape(type))),
                 u <- FuzzGen.bit_tensor(constant({}), unquote(Macro.escape(type))),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           # Cap finite magnitudes into [1e-3, 1e3] (NaN passes through both
           # selects untouched) so this property doesn't trip
@@ -138,7 +140,7 @@ defmodule Nx.FuzzFloatEdgeTest do
       property "equal(t, t) is false exactly on NaN elements" do
         check all(
                 t <- FuzzGen.bit_tensor(FuzzGen.shape(), unquote(Macro.escape(type))),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           assert Nx.to_flat_list(Nx.equal(t, t)) ==
                    Nx.to_flat_list(Nx.logical_not(Nx.is_nan(t)))
@@ -152,7 +154,7 @@ defmodule Nx.FuzzFloatEdgeTest do
 
         check all(
                 t <- FuzzGen.bit_tensor(shapes, unquote(Macro.escape(type))),
-                max_runs: 50
+                max_runs: 50 * @fuzz_scale
               ) do
           sorted = Nx.sort(t, axis: 0)
           assert Enum.sort(words(sorted)) == Enum.sort(words(t))
@@ -165,7 +167,7 @@ defmodule Nx.FuzzFloatEdgeTest do
     property "sum of finite values plus a single +Inf is +Inf" do
       shapes = StreamData.filter(FuzzGen.shape(), &(tuple_size(&1) >= 1))
 
-      check all(t <- FuzzGen.finite_bit_tensor(shapes, {:f, 64}), max_runs: 50) do
+      check all(t <- FuzzGen.finite_bit_tensor(shapes, {:f, 64}), max_runs: 50 * @fuzz_scale) do
         flat = Nx.reshape(t, {Nx.size(t)})
         inf = Nx.tensor([:infinity], type: {:f, 64})
         with_inf = Nx.concatenate([inf, flat])
@@ -274,7 +276,7 @@ defmodule Nx.FuzzFloatEdgeTest do
 
   describe "cancellation" do
     property "summing (x, -x(1+eps)) pairs matches the analytic residual" do
-      check all(t <- FuzzGen.cancellation_tensor(), max_runs: 50) do
+      check all(t <- FuzzGen.cancellation_tensor(), max_runs: 50 * @fuzz_scale) do
         # Reference: a sequential f64 fold in Elixir — same precision, same
         # rounding regime. The analytic value -1e-14*Σx is NOT a valid oracle
         # here: the residual of each pair is quantized to ulp(x), which can

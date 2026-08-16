@@ -6,6 +6,8 @@ defmodule Nx.FuzzSequence2Test do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Defn
 
   # ── Task #25: Defn while/cond inside op sequences ──────────────────
@@ -323,7 +325,7 @@ defmodule Nx.FuzzSequence2Test do
 
       for {op, val} <- results do
         assert is_number(val) or val == :infinity or val == :neg_infinity,
-          "#{op} returned non-number: #{inspect(val)}"
+               "#{op} returned non-number: #{inspect(val)}"
       end
     end
 
@@ -442,7 +444,7 @@ defmodule Nx.FuzzSequence2Test do
       check all(
               n <- integer(2..6),
               chain <- list_of(member_of(types), length: 5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({n}, type: :f32)
         result = Enum.reduce(chain, t, &Nx.as_type(&2, &1))
@@ -603,11 +605,13 @@ defmodule Nx.FuzzSequence2Test do
     end
 
     test "double vectorized binary ops" do
-      a = Nx.iota({2, 3, 4}, type: :f32)
+      a =
+        Nx.iota({2, 3, 4}, type: :f32)
         |> Nx.vectorize(:outer)
         |> Nx.vectorize(:inner)
 
-      b = Nx.broadcast(Nx.tensor(1.0), {2, 3, 4})
+      b =
+        Nx.broadcast(Nx.tensor(1.0), {2, 3, 4})
         |> Nx.vectorize(:outer)
         |> Nx.vectorize(:inner)
 

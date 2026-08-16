@@ -11,6 +11,8 @@ defmodule Nx.FuzzNewApiTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Testing
 
   describe "pad_outer modes vs index-mapping reference" do
@@ -30,7 +32,7 @@ defmodule Nx.FuzzNewApiTest do
               pl <- integer(0..3),
               pr <- integer(0..3),
               mode <- member_of([:cyclic, :replicate, :reflect, :mirror]),
-              max_runs: 40
+              max_runs: 40 * @fuzz_scale
             ) do
         # reflect/mirror can only reach back as far as the source allows
         pl = if mode == :reflect, do: min(pl, n - 1), else: min(pl, n)
@@ -57,7 +59,7 @@ defmodule Nx.FuzzNewApiTest do
               cols <- integer(2..4),
               p <- integer(1..2),
               mode <- member_of([:cyclic, :replicate, :mirror]),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({rows, cols}, type: {:s, 32})
         nested = Nx.to_list(t)
@@ -86,7 +88,7 @@ defmodule Nx.FuzzNewApiTest do
     end
 
     property "rfft is the first n/2+1 bins of fft for real input" do
-      check all(n <- member_of([4, 8, 16]), x <- real_signal(n), max_runs: 15) do
+      check all(n <- member_of([4, 8, 16]), x <- real_signal(n), max_runs: 15 * @fuzz_scale) do
         full = Nx.fft(x)
         half = Nx.rfft(x)
 
@@ -95,7 +97,7 @@ defmodule Nx.FuzzNewApiTest do
     end
 
     property "Parseval: sum(x^2) == mean(|fft(x)|^2)" do
-      check all(n <- member_of([4, 8, 16]), x <- real_signal(n), max_runs: 15) do
+      check all(n <- member_of([4, 8, 16]), x <- real_signal(n), max_runs: 15 * @fuzz_scale) do
         time_energy = Nx.sum(Nx.multiply(x, x))
 
         spectrum = Nx.fft(x)
@@ -111,7 +113,7 @@ defmodule Nx.FuzzNewApiTest do
       check all(
               rows <- member_of([2, 4]),
               cols <- member_of([2, 4]),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         check all(
                 vals <- list_of(float(min: -10.0, max: 10.0), length: rows * cols),
@@ -139,7 +141,7 @@ defmodule Nx.FuzzNewApiTest do
       check all(
               mag <- float(min: 449.0, max: 1.0e30),
               sign <- member_of([1.0, -1.0]),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         t = Nx.tensor(sign * mag, type: {:f, 32})
         converted = Nx.as_type(t, :f8_e4m3fn)
@@ -153,7 +155,7 @@ defmodule Nx.FuzzNewApiTest do
       check all(
               mag <- float(min: 1.0e5, max: 1.0e30),
               sign <- member_of([1.0, -1.0]),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         t = Nx.tensor(sign * mag, type: {:f, 32})
         converted = Nx.as_type(t, {:f, 8})
@@ -167,7 +169,11 @@ defmodule Nx.FuzzNewApiTest do
       # small integers and powers of two within both f8 ranges
       exact = [0.0, 1.0, -1.0, 2.0, -2.0, 4.0, 8.0, 16.0, 0.5, -0.5, 0.25, 3.0, -3.0]
 
-      check all(v <- member_of(exact), type <- member_of([:f8_e4m3fn, {:f, 8}]), max_runs: 30) do
+      check all(
+              v <- member_of(exact),
+              type <- member_of([:f8_e4m3fn, {:f, 8}]),
+              max_runs: 30 * @fuzz_scale
+            ) do
         t = Nx.tensor(v, type: {:f, 32})
         round_tripped = t |> Nx.as_type(type) |> Nx.as_type({:f, 32})
         assert Nx.to_number(round_tripped) == v
@@ -185,7 +191,7 @@ defmodule Nx.FuzzNewApiTest do
       check all(
               type <- member_of([{:u, 2}, {:u, 4}]),
               op <- member_of([:add, :multiply, :subtract]),
-              max_runs: 40
+              max_runs: 40 * @fuzz_scale
             ) do
         {:u, bits} = type
         modulus = Bitwise.bsl(1, bits)
@@ -193,7 +199,7 @@ defmodule Nx.FuzzNewApiTest do
         check all(
                 a <- integer(0..(modulus - 1)),
                 b <- integer(0..(modulus - 1)),
-                max_runs: 4
+                max_runs: 4 * @fuzz_scale
               ) do
           ta = Nx.tensor(a, type: type)
           tb = Nx.tensor(b, type: type)
@@ -215,7 +221,10 @@ defmodule Nx.FuzzNewApiTest do
     end
 
     property "in-range sub-byte values survive the round trip through s32" do
-      check all(type <- member_of([{:u, 2}, {:s, 2}, {:u, 4}, {:s, 4}]), max_runs: 20) do
+      check all(
+              type <- member_of([{:u, 2}, {:s, 2}, {:u, 4}, {:s, 4}]),
+              max_runs: 20 * @fuzz_scale
+            ) do
         {sign, bits} = type
 
         {lo, hi} =
@@ -224,7 +233,7 @@ defmodule Nx.FuzzNewApiTest do
             :s -> {-Bitwise.bsl(1, bits - 1), Bitwise.bsl(1, bits - 1) - 1}
           end
 
-        check all(v <- integer(lo..hi), max_runs: 4) do
+        check all(v <- integer(lo..hi), max_runs: 4 * @fuzz_scale) do
           t = Nx.tensor(v, type: type)
           round_tripped = t |> Nx.as_type({:s, 32}) |> Nx.as_type(type)
           assert Nx.to_number(round_tripped) == v

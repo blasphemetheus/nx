@@ -13,6 +13,8 @@ defmodule Nx.FuzzSequenceTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Op definitions ─────────────────────────────────────────────────
   # Each op is an atom name. apply_op/2 dispatches to the implementation.
 
@@ -334,7 +336,7 @@ defmodule Nx.FuzzSequenceTest do
               # exp() in the chain vocabulary finite (exp(20) ~ 4.8e8)
               tensor <-
                 FuzzGen.value_mixed_tensor(shape, Nx.Type.normalize!(type), max_mag: 20.0),
-              max_runs: 50
+              max_runs: 50 * @fuzz_scale
             ) do
         check_invariants(tensor, "initial")
         {final, _steps} = run_sequence(tensor, ops)
@@ -349,7 +351,7 @@ defmodule Nx.FuzzSequenceTest do
               ops <- op_sequence(8, 15),
               tensor <-
                 FuzzGen.value_mixed_tensor(shape, Nx.Type.normalize!(type), max_mag: 20.0),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         {final, _steps} = run_sequence(tensor, ops)
         assert is_struct(final, Nx.Tensor)
@@ -362,7 +364,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               shape <- initial_shape(),
               type <- initial_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota(shape, type: type)
 
@@ -386,7 +388,7 @@ defmodule Nx.FuzzSequenceTest do
     property "type conversion chain preserves element count" do
       check all(
               shape <- initial_shape(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota(shape, type: :s32)
 
@@ -407,7 +409,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               m <- integer(2..5),
               n <- integer(2..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota({m, n}, type: :f32)
 
@@ -425,7 +427,7 @@ defmodule Nx.FuzzSequenceTest do
     property "math ops chain doesn't produce NaN from safe inputs" do
       check all(
               n <- integer(1..8),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         # Start with values in [1, 9] to avoid domain issues
         tensor = Nx.add(Nx.iota({n}, type: :f32), 1.0)
@@ -450,7 +452,7 @@ defmodule Nx.FuzzSequenceTest do
     property "slice -> pad -> slice roundtrip preserves size" do
       check all(
               n <- integer(4..10),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota({n}, type: :f32)
 
@@ -473,7 +475,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               a_len <- integer(1..5),
               b_len <- integer(1..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.iota({a_len}, type: :f32)
         b = Nx.add(Nx.iota({b_len}, type: :f32), 100.0)
@@ -498,7 +500,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               batch <- integer(2..4),
               n <- integer(2..6),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota({batch, n}, type: :f32)
         vec = Nx.vectorize(tensor, :batch)
@@ -524,7 +526,7 @@ defmodule Nx.FuzzSequenceTest do
               batch <- integer(2..3),
               m <- integer(2..4),
               n <- integer(2..4),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota({batch, m * n}, type: :f32)
         vec = Nx.vectorize(tensor, :batch)
@@ -543,7 +545,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               batch <- integer(2..4),
               n <- integer(2..6),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota({batch, n}, type: :f32)
         vec = Nx.vectorize(tensor, :batch)
@@ -569,7 +571,7 @@ defmodule Nx.FuzzSequenceTest do
               b1 <- integer(2..3),
               b2 <- integer(2..3),
               n <- integer(2..4),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         tensor = Nx.iota({b1, b2, n}, type: :f32)
         vec = tensor |> Nx.vectorize(:outer) |> Nx.vectorize(:inner)
@@ -593,7 +595,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               shape <- initial_shape(),
               type <- initial_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota(shape, type: type)
 
@@ -610,7 +612,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               shape <- initial_shape(),
               type <- initial_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota(shape, type: type)
 
@@ -622,7 +624,7 @@ defmodule Nx.FuzzSequenceTest do
     property "ops after backend_transfer produce same results" do
       check all(
               n <- integer(2..8),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota({n}, type: :f32)
 
@@ -640,7 +642,7 @@ defmodule Nx.FuzzSequenceTest do
 
   describe "idempotency and involution sequences" do
     property "sort is idempotent: sort(sort(x)) == sort(x)" do
-      check all(n <- integer(1..10), max_runs: 20) do
+      check all(n <- integer(1..10), max_runs: 20 * @fuzz_scale) do
         t = Nx.subtract(Nx.tensor(n), Nx.iota({n}))
         once = Nx.sort(t)
         twice = Nx.sort(once)
@@ -649,7 +651,7 @@ defmodule Nx.FuzzSequenceTest do
     end
 
     property "abs is idempotent: abs(abs(x)) == abs(x)" do
-      check all(n <- integer(1..10), max_runs: 20) do
+      check all(n <- integer(1..10), max_runs: 20 * @fuzz_scale) do
         t = Nx.subtract(Nx.iota({n}, type: :f32), Nx.tensor(n / 2.0))
         once = Nx.abs(t)
         twice = Nx.abs(once)
@@ -658,7 +660,7 @@ defmodule Nx.FuzzSequenceTest do
     end
 
     property "negate is involution: negate(negate(x)) == x" do
-      check all(n <- integer(1..10), max_runs: 20) do
+      check all(n <- integer(1..10), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         assert Nx.to_flat_list(t |> Nx.negate() |> Nx.negate()) == Nx.to_flat_list(t)
       end
@@ -668,7 +670,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               m <- integer(1..5),
               n <- integer(1..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({m, n}, type: :f32)
         assert Nx.to_flat_list(t |> Nx.transpose() |> Nx.transpose()) == Nx.to_flat_list(t)
@@ -676,7 +678,7 @@ defmodule Nx.FuzzSequenceTest do
     end
 
     property "reverse is involution: reverse(reverse(x)) == x" do
-      check all(n <- integer(1..10), max_runs: 20) do
+      check all(n <- integer(1..10), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         assert Nx.to_flat_list(t |> Nx.reverse() |> Nx.reverse()) == Nx.to_flat_list(t)
       end
@@ -686,7 +688,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               m <- integer(1..5),
               n <- integer(1..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({m, n})
         assert Nx.to_flat_list(t |> Nx.flatten() |> Nx.reshape({m, n})) == Nx.to_flat_list(t)
@@ -694,7 +696,7 @@ defmodule Nx.FuzzSequenceTest do
     end
 
     property "new_axis then squeeze is identity" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         result = t |> Nx.new_axis(0) |> Nx.squeeze(axes: [0])
         assert Nx.to_flat_list(result) == Nx.to_flat_list(t)
@@ -711,7 +713,7 @@ defmodule Nx.FuzzSequenceTest do
               shape <- initial_shape(),
               type <- member_of([:f32, :f64]),
               ops <- op_sequence(15, 20),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         tensor = Nx.iota(shape, type: type)
         {final, steps} = run_sequence(tensor, ops)
@@ -729,7 +731,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               n <- integer(2..8),
               ops <- list_of(member_of([:add, :subtract, :multiply, :min, :max]), length: 5),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         a = Nx.iota({n}, type: :f32)
         b = Nx.add(Nx.iota({n}, type: :f32), 1.0)
@@ -749,7 +751,7 @@ defmodule Nx.FuzzSequenceTest do
               n <- integer(2..5),
               m <- integer(2..5),
               ops <- list_of(member_of([:add, :subtract, :multiply]), length: 4),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.iota({n, m}, type: :f32)
 
@@ -769,7 +771,7 @@ defmodule Nx.FuzzSequenceTest do
               shape <- initial_shape(),
               scalars <- list_of(float(min: -10.0, max: 10.0), length: 4),
               ops <- list_of(member_of([:add, :subtract, :multiply]), length: 4),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         tensor = Nx.iota(shape, type: :f32)
 
@@ -787,7 +789,7 @@ defmodule Nx.FuzzSequenceTest do
     property "dot sequence: matmul chain" do
       check all(
               dims <- list_of(integer(2..5), length: 4),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         # Create a chain of matrices that can be multiplied
         [d0, d1, d2, d3] = dims
@@ -809,7 +811,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               m <- integer(1..5),
               n <- integer(1..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.iota({m}, type: :f32)
         b = Nx.iota({n}, type: :f32)
@@ -863,7 +865,7 @@ defmodule Nx.FuzzSequenceTest do
     end
 
     property "jit_chain_1 matches eager" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         eager = jit_chain_1(t)
         jitted = Nx.Defn.jit(&jit_chain_1/1).(t)
@@ -872,7 +874,7 @@ defmodule Nx.FuzzSequenceTest do
     end
 
     property "jit_chain_2 matches eager" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         eager = jit_chain_2(t)
         jitted = Nx.Defn.jit(&jit_chain_2/1).(t)
@@ -884,7 +886,7 @@ defmodule Nx.FuzzSequenceTest do
     end
 
     property "jit_chain_3 matches eager for positive inputs" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.add(Nx.iota({n}, type: :f32), 1.0)
         eager = jit_chain_3(t)
         jitted = Nx.Defn.jit(&jit_chain_3/1).(t)
@@ -899,7 +901,7 @@ defmodule Nx.FuzzSequenceTest do
       check all(
               m <- integer(1..5),
               n <- integer(1..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({m, n}, type: :f32)
         eager = Nx.to_number(jit_reduce_chain(t))

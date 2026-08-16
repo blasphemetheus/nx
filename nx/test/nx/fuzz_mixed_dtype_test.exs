@@ -11,6 +11,8 @@ defmodule Nx.FuzzMixedDtypeTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Testing
 
   # ── Generators ─────────────────────────────────────────────────────
@@ -43,7 +45,7 @@ defmodule Nx.FuzzMixedDtypeTest do
               tb <- any_type(),
               a <- scalar_of(ta),
               b <- scalar_of(tb),
-              max_runs: 40
+              max_runs: 40 * @fuzz_scale
             ) do
         _ = Nx.add(a, b)
       end
@@ -55,7 +57,7 @@ defmodule Nx.FuzzMixedDtypeTest do
               tb <- any_type(),
               a <- scalar_of(ta),
               b <- scalar_of(tb),
-              max_runs: 40
+              max_runs: 40 * @fuzz_scale
             ) do
         _ = Nx.multiply(a, b)
       end
@@ -69,7 +71,7 @@ defmodule Nx.FuzzMixedDtypeTest do
               tb <- any_type(),
               a <- scalar_of(ta),
               b <- scalar_of(tb),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         _ = Nx.subtract(a, b)
       end
@@ -79,7 +81,7 @@ defmodule Nx.FuzzMixedDtypeTest do
       check all(
               ta <- float_type(),
               tb <- float_type(),
-              max_runs: 25
+              max_runs: 25 * @fuzz_scale
             ) do
         a = Nx.tensor(1.0, type: ta)
         b = Nx.tensor(2.0, type: tb)
@@ -95,7 +97,7 @@ defmodule Nx.FuzzMixedDtypeTest do
       check all(
               ti <- int_type(),
               tf <- float_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.tensor(1, type: ti)
         b = Nx.tensor(1.0, type: tf)
@@ -109,7 +111,7 @@ defmodule Nx.FuzzMixedDtypeTest do
       check all(
               {ka, ba} <- member_of(@integer_types),
               {kb, bb} <- member_of(@integer_types),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         a = Nx.tensor(1, type: {ka, ba})
         b = Nx.tensor(1, type: {kb, bb})
@@ -126,7 +128,7 @@ defmodule Nx.FuzzMixedDtypeTest do
       check all(
               {_, ba} <- member_of(@float_types),
               {_, bb} <- member_of(@float_types),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.tensor(1.0, type: {:f, ba})
         b = Nx.tensor(1.0, type: {:f, bb})
@@ -146,7 +148,7 @@ defmodule Nx.FuzzMixedDtypeTest do
               ct <- member_of(@complex_types),
               a <- scalar_of(rt),
               c <- scalar_of(ct),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         result = Nx.add(a, c)
         {kind, _} = Nx.type(result)
@@ -159,7 +161,7 @@ defmodule Nx.FuzzMixedDtypeTest do
 
   describe "as_type value round-trip" do
     property "f32 -> f64 -> f32 preserves representable values" do
-      check all(x <- integer(-1000..1000), max_runs: 30) do
+      check all(x <- integer(-1000..1000), max_runs: 30 * @fuzz_scale) do
         t = Nx.tensor(x * 0.5, type: :f32)
         round_trip = t |> Nx.as_type(:f64) |> Nx.as_type(:f32)
         assert_all_close(round_trip, t, atol: 0.0, rtol: 0.0)
@@ -167,7 +169,7 @@ defmodule Nx.FuzzMixedDtypeTest do
     end
 
     property "s32 -> f64 -> s32 preserves (small) integer values" do
-      check all(x <- integer(-1000..1000), max_runs: 30) do
+      check all(x <- integer(-1000..1000), max_runs: 30 * @fuzz_scale) do
         t = Nx.tensor(x, type: :s32)
         round_trip = t |> Nx.as_type(:f64) |> Nx.as_type(:s32)
         assert_equal(round_trip, t)
@@ -175,7 +177,7 @@ defmodule Nx.FuzzMixedDtypeTest do
     end
 
     property "u8 -> f32 -> u8 preserves 0..255 values" do
-      check all(x <- integer(0..255), max_runs: 30) do
+      check all(x <- integer(0..255), max_runs: 30 * @fuzz_scale) do
         t = Nx.tensor(x, type: :u8)
         round_trip = t |> Nx.as_type(:f32) |> Nx.as_type(:u8)
         assert_equal(round_trip, t)
@@ -190,7 +192,7 @@ defmodule Nx.FuzzMixedDtypeTest do
       check all(
               ts <- any_type(),
               tt <- any_type(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         s = Nx.tensor(1, type: ts)
         t = Nx.broadcast(Nx.tensor(2, type: tt), {3, 3})

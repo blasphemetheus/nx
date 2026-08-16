@@ -12,6 +12,8 @@ defmodule Nx.FuzzSecondOrderGradTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Testing
 
   # ── Generators ─────────────────────────────────────────────────────
@@ -30,8 +32,9 @@ defmodule Nx.FuzzSecondOrderGradTest do
 
   describe "scalar second derivatives match closed form" do
     property "d²/dx² (x²) == 2" do
-      check all(x <- float_in(-5.0, 5.0), max_runs: 20) do
+      check all(x <- float_in(-5.0, 5.0), max_runs: 20 * @fuzz_scale) do
         t = Nx.tensor(x, type: :f32)
+
         d2 =
           Nx.Defn.grad(t, fn a ->
             Nx.Defn.grad(a, fn b -> Nx.multiply(b, b) end)
@@ -42,8 +45,9 @@ defmodule Nx.FuzzSecondOrderGradTest do
     end
 
     property "d²/dx² (x³) == 6x" do
-      check all(x <- float_in(-5.0, 5.0), max_runs: 20) do
+      check all(x <- float_in(-5.0, 5.0), max_runs: 20 * @fuzz_scale) do
         t = Nx.tensor(x, type: :f32)
+
         d2 =
           Nx.Defn.grad(t, fn a ->
             Nx.Defn.grad(a, fn b -> Nx.multiply(Nx.multiply(b, b), b) end)
@@ -55,8 +59,9 @@ defmodule Nx.FuzzSecondOrderGradTest do
     end
 
     property "d²/dx² sin(x) == -sin(x)" do
-      check all(x <- float_in(-3.0, 3.0), max_runs: 20) do
+      check all(x <- float_in(-3.0, 3.0), max_runs: 20 * @fuzz_scale) do
         t = Nx.tensor(x, type: :f32)
+
         d2 =
           Nx.Defn.grad(t, fn a ->
             Nx.Defn.grad(a, fn b -> Nx.sin(b) end)
@@ -67,8 +72,9 @@ defmodule Nx.FuzzSecondOrderGradTest do
     end
 
     property "d²/dx² exp(x) == exp(x)" do
-      check all(x <- float_in(-3.0, 3.0), max_runs: 20) do
+      check all(x <- float_in(-3.0, 3.0), max_runs: 20 * @fuzz_scale) do
         t = Nx.tensor(x, type: :f32)
+
         d2 =
           Nx.Defn.grad(t, fn a ->
             Nx.Defn.grad(a, fn b -> Nx.exp(b) end)
@@ -79,8 +85,9 @@ defmodule Nx.FuzzSecondOrderGradTest do
     end
 
     property "d²/dx² log(x) == -1/x² (for x > 0)" do
-      check all(x <- nonzero_float(0.1, 5.0), max_runs: 20) do
+      check all(x <- nonzero_float(0.1, 5.0), max_runs: 20 * @fuzz_scale) do
         t = Nx.tensor(x, type: :f32)
+
         d2 =
           Nx.Defn.grad(t, fn a ->
             Nx.Defn.grad(a, fn b -> Nx.log(b) end)
@@ -92,8 +99,9 @@ defmodule Nx.FuzzSecondOrderGradTest do
     end
 
     property "d²/dx² tanh(x) == -2 tanh(x) sech²(x)" do
-      check all(x <- float_in(-2.0, 2.0), max_runs: 20) do
+      check all(x <- float_in(-2.0, 2.0), max_runs: 20 * @fuzz_scale) do
         t = Nx.tensor(x, type: :f32)
+
         d2 =
           Nx.Defn.grad(t, fn a ->
             Nx.Defn.grad(a, fn b -> Nx.tanh(b) end)
@@ -111,7 +119,7 @@ defmodule Nx.FuzzSecondOrderGradTest do
 
   describe "vector second-order (Hessian diagonal)" do
     property "∂²/∂x² sum(x²) vector is [2, 2, ...]" do
-      check all(n <- integer(2..5), max_runs: 10) do
+      check all(n <- integer(2..5), max_runs: 10 * @fuzz_scale) do
         t = Nx.tensor(for(i <- 1..n, do: i / 1.0), type: :f32)
 
         # grad of sum(x²) is 2x. Its grad wrt x is Jacobian [2, 0; 0, 2; ...].
@@ -126,7 +134,7 @@ defmodule Nx.FuzzSecondOrderGradTest do
     end
 
     property "∂²/∂x² sum(sin(x)) == -sin(x) (elementwise diagonal)" do
-      check all(n <- integer(2..5), max_runs: 10) do
+      check all(n <- integer(2..5), max_runs: 10 * @fuzz_scale) do
         xs = for(i <- 1..n, do: i * 0.5)
         t = Nx.tensor(xs, type: :f32)
 
@@ -145,8 +153,9 @@ defmodule Nx.FuzzSecondOrderGradTest do
 
   describe "composed second derivatives" do
     property "d²/dx² (sin(x) * x) == 2cos(x) - x sin(x)" do
-      check all(x <- float_in(-3.0, 3.0), max_runs: 20) do
+      check all(x <- float_in(-3.0, 3.0), max_runs: 20 * @fuzz_scale) do
         t = Nx.tensor(x, type: :f32)
+
         d2 =
           Nx.Defn.grad(t, fn a ->
             Nx.Defn.grad(a, fn b -> Nx.multiply(Nx.sin(b), b) end)
@@ -166,7 +175,7 @@ defmodule Nx.FuzzSecondOrderGradTest do
 
   describe "second-order on batched inputs" do
     property "d²/dx² sum(x²) over 2-D batched input is all 2s" do
-      check all(b <- integer(2..3), n <- integer(2..4), max_runs: 6) do
+      check all(b <- integer(2..3), n <- integer(2..4), max_runs: 6 * @fuzz_scale) do
         t = Nx.iota({b, n}, type: :f32)
 
         d2 =
@@ -174,14 +183,12 @@ defmodule Nx.FuzzSecondOrderGradTest do
             Nx.sum(Nx.Defn.grad(a, fn c -> Nx.sum(Nx.multiply(c, c)) end))
           end)
 
-        assert_all_close(d2, Nx.broadcast(Nx.tensor(2.0, type: :f32), {b, n}),
-          atol: 1.0e-3
-        )
+        assert_all_close(d2, Nx.broadcast(Nx.tensor(2.0, type: :f32), {b, n}), atol: 1.0e-3)
       end
     end
 
     property "d²/dx² sum(exp(x)) over batched input == exp(x) (elementwise)" do
-      check all(b <- integer(2..3), n <- integer(2..4), max_runs: 6) do
+      check all(b <- integer(2..3), n <- integer(2..4), max_runs: 6 * @fuzz_scale) do
         xs = Nx.divide(Nx.iota({b, n}, type: :f32), Nx.tensor(10.0, type: :f32))
 
         d2 =
@@ -200,7 +207,7 @@ defmodule Nx.FuzzSecondOrderGradTest do
     # typically returns 0 for this, but the behavior at x = 0 is an
     # implementation choice worth pinning.
     property "d²/dx² abs(x) == 0 for x != 0" do
-      check all(x <- float_in(0.5, 5.0), max_runs: 10) do
+      check all(x <- float_in(0.5, 5.0), max_runs: 10 * @fuzz_scale) do
         t = Nx.tensor(x, type: :f32)
 
         d2 =
@@ -230,7 +237,7 @@ defmodule Nx.FuzzSecondOrderGradTest do
     # d²/dxdy (x * y) = 1 — a basic sanity check for multi-variable
     # second derivatives.
     property "d/dx d/dy (x * y) == 1" do
-      check all(x <- float_in(-3.0, 3.0), y <- float_in(-3.0, 3.0), max_runs: 10) do
+      check all(x <- float_in(-3.0, 3.0), y <- float_in(-3.0, 3.0), max_runs: 10 * @fuzz_scale) do
         tx = Nx.tensor(x, type: :f32)
         ty = Nx.tensor(y, type: :f32)
 
@@ -321,7 +328,7 @@ defmodule Nx.FuzzSecondOrderGradTest do
     # First-order sqrt grad is well-tested. Second-order might surface
     # any subtle issue with how grad composes through sqrt.
     property "d²/dx² sqrt(x) == -0.25 * x^(-3/2) for x > 0" do
-      check all(x <- nonzero_float(0.5, 5.0), max_runs: 10) do
+      check all(x <- nonzero_float(0.5, 5.0), max_runs: 10 * @fuzz_scale) do
         t = Nx.tensor(x, type: :f32)
 
         d2 =

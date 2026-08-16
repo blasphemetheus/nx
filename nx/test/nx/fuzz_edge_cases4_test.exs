@@ -5,6 +5,8 @@ defmodule Nx.FuzzEdgeCases4Test do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Complex type: operations that should work ──────────────────────
 
   describe "complex type: supported operations" do
@@ -189,6 +191,7 @@ defmodule Nx.FuzzEdgeCases4Test do
 
     test "bitcast rejects complex" do
       z = Nx.tensor(Complex.new(1, 2), type: :c64)
+
       assert_raise ArgumentError, ~r/does not support complex/, fn ->
         Nx.bitcast(z, :s64)
       end
@@ -196,6 +199,7 @@ defmodule Nx.FuzzEdgeCases4Test do
 
     test "erf rejects complex" do
       z = Nx.tensor(Complex.new(1, 0), type: :c64)
+
       assert_raise ArgumentError, ~r/complex/, fn ->
         Nx.erf(z)
       end
@@ -203,6 +207,7 @@ defmodule Nx.FuzzEdgeCases4Test do
 
     test "complex/2 rejects complex inputs" do
       z = Nx.tensor(Complex.new(1, 2), type: :c64)
+
       assert_raise ArgumentError, ~r/complex/, fn ->
         Nx.complex(z, z)
       end
@@ -215,6 +220,7 @@ defmodule Nx.FuzzEdgeCases4Test do
     test "conjugate(conjugate(z)) == z (involution)" do
       z = Nx.tensor([Complex.new(1, 2), Complex.new(3, -4)], type: :c64)
       result = z |> Nx.conjugate() |> Nx.conjugate()
+
       for {orig, rt} <- Enum.zip(Nx.to_flat_list(z), Nx.to_flat_list(result)) do
         assert_in_delta Complex.abs(Complex.subtract(orig, rt)), 0.0, 1.0e-5
       end
@@ -399,8 +405,10 @@ defmodule Nx.FuzzEdgeCases4Test do
       t = Nx.tensor([[3, 1, 5, 2], [1, 4, 2, 8]]) |> Nx.vectorize(:batch)
       result = Nx.argmax(t, axis: 0)
       devec = Nx.devectorize(result)
-      assert Nx.to_number(devec[0]) == 2  # index of 5
-      assert Nx.to_number(devec[1]) == 3  # index of 8
+      # index of 5
+      assert Nx.to_number(devec[0]) == 2
+      # index of 8
+      assert Nx.to_number(devec[1]) == 3
     end
 
     test "reduce_max of vectorized" do

@@ -12,6 +12,8 @@ defmodule Nx.FuzzServingBatchTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Testing
 
   defp double_serving do
@@ -24,7 +26,7 @@ defmodule Nx.FuzzServingBatchTest do
 
   describe "Nx.Batch structure" do
     property "stack size accounting and split sizes" do
-      check all(count <- integer(1..8), width <- integer(1..4), max_runs: 15) do
+      check all(count <- integer(1..8), width <- integer(1..4), max_runs: 15 * @fuzz_scale) do
         check all(vals <- rows(count, width), split_at <- integer(1..count), max_runs: 1) do
           tensors = Enum.map(vals, &Nx.tensor(&1, type: {:f, 32}))
           batch = Nx.Batch.stack(tensors)
@@ -41,7 +43,7 @@ defmodule Nx.FuzzServingBatchTest do
     end
 
     property "pad increases the padding, not the size" do
-      check all(count <- integer(1..6), pad <- integer(1..4), max_runs: 15) do
+      check all(count <- integer(1..6), pad <- integer(1..4), max_runs: 15 * @fuzz_scale) do
         tensors = for i <- 1..count, do: Nx.tensor([i * 1.0])
         batch = Nx.Batch.stack(tensors) |> Nx.Batch.pad(pad)
 
@@ -53,7 +55,7 @@ defmodule Nx.FuzzServingBatchTest do
 
   describe "inline serving: batching topology invariance" do
     property "run(serving, batch) equals the direct computation" do
-      check all(count <- integer(1..8), width <- integer(1..4), max_runs: 15) do
+      check all(count <- integer(1..8), width <- integer(1..4), max_runs: 15 * @fuzz_scale) do
         check all(vals <- rows(count, width), max_runs: 1) do
           tensors = Enum.map(vals, &Nx.tensor(&1, type: {:f, 32}))
           batch = Nx.Batch.stack(tensors)
@@ -67,7 +69,7 @@ defmodule Nx.FuzzServingBatchTest do
     end
 
     property "batch_size forcing splits does not change results" do
-      check all(count <- integer(2..8), batch_size <- integer(1..4), max_runs: 15) do
+      check all(count <- integer(2..8), batch_size <- integer(1..4), max_runs: 15 * @fuzz_scale) do
         check all(vals <- rows(count, 3), max_runs: 1) do
           tensors = Enum.map(vals, &Nx.tensor(&1, type: {:f, 32}))
           batch = Nx.Batch.stack(tensors)
@@ -83,7 +85,7 @@ defmodule Nx.FuzzServingBatchTest do
     end
 
     property "running split halves separately equals running the whole" do
-      check all(count <- integer(2..8), max_runs: 15) do
+      check all(count <- integer(2..8), max_runs: 15 * @fuzz_scale) do
         check all(vals <- rows(count, 3), split_at <- integer(1..(count - 1)), max_runs: 1) do
           tensors = Enum.map(vals, &Nx.tensor(&1, type: {:f, 32}))
           batch = Nx.Batch.stack(tensors)
@@ -102,7 +104,7 @@ defmodule Nx.FuzzServingBatchTest do
     end
 
     property "padded batch yields the same visible rows" do
-      check all(count <- integer(1..6), pad <- integer(1..4), max_runs: 15) do
+      check all(count <- integer(1..6), pad <- integer(1..4), max_runs: 15 * @fuzz_scale) do
         check all(vals <- rows(count, 3), max_runs: 1) do
           tensors = Enum.map(vals, &Nx.tensor(&1, type: {:f, 32}))
 

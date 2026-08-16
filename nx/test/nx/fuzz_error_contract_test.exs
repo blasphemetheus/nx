@@ -16,6 +16,8 @@ defmodule Nx.FuzzErrorContractTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # {label, fun} — every entry must raise ArgumentError
   defp contract_cases do
     [
@@ -68,13 +70,13 @@ defmodule Nx.FuzzErrorContractTest do
 
   describe "randomized dimension mismatches" do
     property "reshape to any wrong total size raises ArgumentError" do
-      check all(n <- integer(2..30), m <- integer(2..30), n != m, max_runs: 30) do
+      check all(n <- integer(2..30), m <- integer(2..30), n != m, max_runs: 30 * @fuzz_scale) do
         assert_raise ArgumentError, fn -> Nx.reshape(Nx.iota({n}), {m}) end
       end
     end
 
     property "binary ops on any incompatible 1-D shapes raise ArgumentError" do
-      check all(n <- integer(2..20), delta <- integer(1..10), max_runs: 30) do
+      check all(n <- integer(2..20), delta <- integer(1..10), max_runs: 30 * @fuzz_scale) do
         a = Nx.iota({n})
         b = Nx.iota({n + delta})
 
@@ -85,7 +87,7 @@ defmodule Nx.FuzzErrorContractTest do
     end
 
     property "reductions along any out-of-range axis raise ArgumentError" do
-      check all(rank <- integer(1..3), extra <- integer(0..5), max_runs: 30) do
+      check all(rank <- integer(1..3), extra <- integer(0..5), max_runs: 30 * @fuzz_scale) do
         shape = List.to_tuple(List.duplicate(2, rank))
         t = Nx.iota(shape)
         bad_axis = rank + extra

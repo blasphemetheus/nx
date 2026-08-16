@@ -6,6 +6,8 @@ defmodule Nx.FuzzEdgeCases2Test do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Defn
 
   # ── Diagonal boundary conditions ───────────────────────────────────
@@ -67,6 +69,7 @@ defmodule Nx.FuzzEdgeCases2Test do
 
     test "take_diagonal raises on rank 1" do
       t = Nx.tensor([1, 2, 3])
+
       assert_raise ArgumentError, ~r/rank 2 or higher/, fn ->
         Nx.take_diagonal(t)
       end
@@ -74,6 +77,7 @@ defmodule Nx.FuzzEdgeCases2Test do
 
     test "take_diagonal raises on scalar" do
       t = Nx.tensor(42)
+
       assert_raise ArgumentError, ~r/rank 2 or higher/, fn ->
         Nx.take_diagonal(t)
       end
@@ -109,6 +113,7 @@ defmodule Nx.FuzzEdgeCases2Test do
 
     test "make_diagonal raises on rank 2" do
       t = Nx.tensor([[1, 2], [3, 4]])
+
       assert_raise ArgumentError, ~r/rank 1/, fn ->
         Nx.make_diagonal(t)
       end
@@ -200,14 +205,18 @@ defmodule Nx.FuzzEdgeCases2Test do
 
     test "reduce with keep_axes" do
       t = Nx.iota({3, 4}, type: :f32)
-      result = Nx.reduce(t, Nx.tensor(0.0), [axes: [1], keep_axes: true], fn x, acc ->
-        Nx.add(x, acc)
-      end)
+
+      result =
+        Nx.reduce(t, Nx.tensor(0.0), [axes: [1], keep_axes: true], fn x, acc ->
+          Nx.add(x, acc)
+        end)
+
       assert Nx.shape(result) == {3, 1}
     end
 
     test "reduce raises on non-scalar accumulator" do
       t = Nx.tensor([1, 2, 3])
+
       assert_raise ArgumentError, ~r/accumulator must be a non-vectorized scalar/, fn ->
         Nx.reduce(t, Nx.tensor([0, 0]), fn x, acc -> Nx.add(x, acc) end)
       end
@@ -229,25 +238,34 @@ defmodule Nx.FuzzEdgeCases2Test do
   describe "window_reduce boundary conditions" do
     test "window_reduce custom max" do
       t = Nx.tensor([3.0, 1.0, 4.0, 1.0, 5.0, 9.0])
-      result = Nx.window_reduce(t, Nx.Constants.neg_infinity(), {2}, fn x, acc ->
-        Nx.max(x, acc)
-      end)
+
+      result =
+        Nx.window_reduce(t, Nx.Constants.neg_infinity(), {2}, fn x, acc ->
+          Nx.max(x, acc)
+        end)
+
       assert Nx.shape(result) == {5}
     end
 
     test "window_reduce with strides" do
       t = Nx.iota({6}, type: :f32)
-      result = Nx.window_reduce(t, Nx.tensor(0.0), {3}, [strides: [2]], fn x, acc ->
-        Nx.add(x, acc)
-      end)
+
+      result =
+        Nx.window_reduce(t, Nx.tensor(0.0), {3}, [strides: [2]], fn x, acc ->
+          Nx.add(x, acc)
+        end)
+
       assert Nx.shape(result) == {2}
     end
 
     test "window_reduce 2D" do
       t = Nx.iota({4, 4}, type: :f32)
-      result = Nx.window_reduce(t, Nx.tensor(0.0), {2, 2}, fn x, acc ->
-        Nx.add(x, acc)
-      end)
+
+      result =
+        Nx.window_reduce(t, Nx.tensor(0.0), {2, 2}, fn x, acc ->
+          Nx.add(x, acc)
+        end)
+
       assert Nx.shape(result) == {3, 3}
     end
 
@@ -292,6 +310,7 @@ defmodule Nx.FuzzEdgeCases2Test do
 
     test "vectorize raises on scalar" do
       t = Nx.tensor(42)
+
       assert_raise ArgumentError, ~r/cannot vectorize tensor of rank 0/, fn ->
         Nx.vectorize(t, :batch)
       end
@@ -299,10 +318,12 @@ defmodule Nx.FuzzEdgeCases2Test do
 
     test "vectorize raises on name conflict with existing vectorized axis" do
       t = Nx.iota({2, 3, 4})
-      v1 = Nx.vectorize(t, :batch)  # vectorized_axes: [batch: 2], shape: {3, 4}
+      # vectorized_axes: [batch: 2], shape: {3, 4}
+      v1 = Nx.vectorize(t, :batch)
 
       assert_raise ArgumentError, ~r/already a vectorized axis/, fn ->
-        Nx.vectorize(v1, :batch)  # tries to add :batch again
+        # tries to add :batch again
+        Nx.vectorize(v1, :batch)
       end
     end
 
@@ -367,6 +388,7 @@ defmodule Nx.FuzzEdgeCases2Test do
 
     test "to_batched raises on scalar" do
       t = Nx.tensor(42)
+
       assert_raise ArgumentError, ~r/cannot batch .* scalar/, fn ->
         Nx.to_batched(t, 1) |> Enum.to_list()
       end
@@ -457,6 +479,7 @@ defmodule Nx.FuzzEdgeCases2Test do
 
     test "bitcast rejects complex types" do
       t = Nx.tensor(Complex.new(1.0, 2.0), type: :c64)
+
       assert_raise ArgumentError, ~r/does not support complex/, fn ->
         Nx.bitcast(t, :s64)
       end
@@ -464,6 +487,7 @@ defmodule Nx.FuzzEdgeCases2Test do
 
     test "to_heatmap rejects scalar" do
       t = Nx.tensor(42)
+
       assert_raise ArgumentError, ~r/cannot show heatmap for scalar/, fn ->
         Nx.to_heatmap(t)
       end
@@ -477,9 +501,10 @@ defmodule Nx.FuzzEdgeCases2Test do
     defn while_countdown(n) do
       count = Nx.tensor(0)
 
-      {count, _} = while {count, n}, Nx.greater(n, 0) do
-        {count + 1, n - 1}
-      end
+      {count, _} =
+        while {count, n}, Nx.greater(n, 0) do
+          {count + 1, n - 1}
+        end
 
       count
     end
@@ -618,7 +643,7 @@ defmodule Nx.FuzzEdgeCases2Test do
 
   describe "matrix algebraic equivalences" do
     property "make_diagonal then take_diagonal recovers original" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         v = Nx.iota({n})
         result = v |> Nx.make_diagonal() |> Nx.take_diagonal()
         assert Nx.to_flat_list(result) == Nx.to_flat_list(v)
@@ -626,7 +651,7 @@ defmodule Nx.FuzzEdgeCases2Test do
     end
 
     property "sum of diagonal equals trace" do
-      check all(n <- integer(1..6), max_runs: 20) do
+      check all(n <- integer(1..6), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n, n}, type: :f32)
         trace = Nx.take_diagonal(t) |> Nx.sum() |> Nx.to_number()
         # Manual trace: sum of t[i][i] = sum of i*(n+1) for i in 0..n-1
@@ -640,7 +665,7 @@ defmodule Nx.FuzzEdgeCases2Test do
               m <- integer(2..6),
               n <- integer(2..6),
               axis <- member_of([0, 1]),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({m, n})
         result = t |> Nx.reverse(axes: [axis]) |> Nx.reverse(axes: [axis])
@@ -649,7 +674,7 @@ defmodule Nx.FuzzEdgeCases2Test do
     end
 
     property "sort(sort(t)) == sort(t) (idempotent)" do
-      check all(n <- integer(1..10), max_runs: 20) do
+      check all(n <- integer(1..10), max_runs: 20 * @fuzz_scale) do
         # Use iota in reverse for interesting values
         t = Nx.subtract(Nx.tensor(n), Nx.iota({n}))
         sorted_once = Nx.sort(t)
@@ -659,7 +684,7 @@ defmodule Nx.FuzzEdgeCases2Test do
     end
 
     property "argsort then take recovers sorted tensor" do
-      check all(n <- integer(1..10), max_runs: 20) do
+      check all(n <- integer(1..10), max_runs: 20 * @fuzz_scale) do
         t = Nx.subtract(Nx.tensor(n), Nx.iota({n}))
         indices = Nx.argsort(t)
         recovered = Nx.take(t, indices)
@@ -671,7 +696,7 @@ defmodule Nx.FuzzEdgeCases2Test do
     property "top_k values are first k of sorted descending" do
       check all(
               n <- integer(2..10),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         k = div(n, 2) + 1
         t = Nx.iota({n}, type: :f32)
@@ -686,7 +711,7 @@ defmodule Nx.FuzzEdgeCases2Test do
       check all(
               size <- integer(1..6),
               reps <- integer(2..4),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({size}, type: :f32)
         tiled = Nx.tile(t, [reps])
@@ -699,7 +724,7 @@ defmodule Nx.FuzzEdgeCases2Test do
       check all(
               m <- integer(1..5),
               n <- integer(1..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({m, n})
         result = t |> Nx.flatten() |> Nx.reshape({m, n})
@@ -711,7 +736,7 @@ defmodule Nx.FuzzEdgeCases2Test do
       check all(
               m <- integer(2..5),
               n <- integer(1..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         row = Nx.iota({1, n}, type: :f32)
         result = Nx.broadcast(row, {m, n})

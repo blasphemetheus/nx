@@ -6,6 +6,8 @@ defmodule Nx.FuzzEdgeCases3Test do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Nx.diff boundary conditions ────────────────────────────────────
   # Source: nx.ex:11583
   # Boundaries:
@@ -68,6 +70,7 @@ defmodule Nx.FuzzEdgeCases3Test do
 
     test "diff raises on scalar" do
       t = Nx.tensor(42)
+
       assert_raise ArgumentError, fn ->
         Nx.diff(t)
       end
@@ -298,6 +301,7 @@ defmodule Nx.FuzzEdgeCases3Test do
     test "ifft inverts fft" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0])
       roundtrip = t |> Nx.fft() |> Nx.ifft()
+
       for {orig, rt} <- Enum.zip(Nx.to_flat_list(Nx.as_type(t, :c64)), Nx.to_flat_list(roundtrip)) do
         assert_in_delta Complex.abs(Complex.subtract(orig, rt)), 0.0, 1.0e-5
       end
@@ -322,6 +326,7 @@ defmodule Nx.FuzzEdgeCases3Test do
   describe "LinAlg boundary conditions" do
     test "norm raises on rank > 2" do
       t = Nx.iota({2, 3, 4}, type: :f32)
+
       assert_raise ArgumentError, ~r/expected 1-D or 2-D tensor/, fn ->
         Nx.LinAlg.norm(t)
       end
@@ -365,6 +370,7 @@ defmodule Nx.FuzzEdgeCases3Test do
 
     test "determinant raises on non-square" do
       t = Nx.iota({2, 3}, type: :f32)
+
       assert_raise ArgumentError, ~r/square/, fn ->
         Nx.LinAlg.determinant(t)
       end
@@ -381,6 +387,7 @@ defmodule Nx.FuzzEdgeCases3Test do
 
     test "invert raises on non-square" do
       t = Nx.iota({2, 3}, type: :f32)
+
       assert_raise ArgumentError, ~r/square/, fn ->
         Nx.LinAlg.invert(t)
       end
@@ -396,6 +403,7 @@ defmodule Nx.FuzzEdgeCases3Test do
     test "solve raises on non-square A" do
       a = Nx.iota({2, 3}, type: :f32)
       b = Nx.tensor([1.0, 2.0])
+
       assert_raise ArgumentError, ~r/square/, fn ->
         Nx.LinAlg.solve(a, b)
       end
@@ -419,6 +427,7 @@ defmodule Nx.FuzzEdgeCases3Test do
 
     test "qr raises on invalid mode" do
       t = Nx.iota({3, 3}, type: :f32)
+
       assert_raise ArgumentError, ~r/invalid :mode/, fn ->
         Nx.LinAlg.qr(t, mode: :invalid)
       end
@@ -459,7 +468,7 @@ defmodule Nx.FuzzEdgeCases3Test do
 
   describe "numerical equivalences" do
     property "diff(cumulative_sum(x)) ≈ x[1:]" do
-      check all(n <- integer(2..10), max_runs: 20) do
+      check all(n <- integer(2..10), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         cumsum = Nx.cumulative_sum(t)
         diff = Nx.diff(cumsum)
@@ -472,7 +481,7 @@ defmodule Nx.FuzzEdgeCases3Test do
     end
 
     property "clip(x, min, max) == max(min(x, max), min)" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         lo = 2.0
         hi = 6.0
@@ -483,7 +492,7 @@ defmodule Nx.FuzzEdgeCases3Test do
     end
 
     property "select(1, a, b) == a and select(0, a, b) == b" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         a = Nx.iota({n}, type: :f32)
         b = Nx.add(a, 100.0)
 
@@ -498,7 +507,7 @@ defmodule Nx.FuzzEdgeCases3Test do
     property "det(A) * det(inv(A)) ≈ 1 for invertible A" do
       check all(
               _ <- constant(:ok),
-              max_runs: 5
+              max_runs: 5 * @fuzz_scale
             ) do
         # Use a well-conditioned matrix
         a = Nx.tensor([[4.0, 1.0], [2.0, 3.0]])
@@ -509,7 +518,7 @@ defmodule Nx.FuzzEdgeCases3Test do
     end
 
     property "norm(x) >= 0 for any x" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         # Mix of positive and negative values
         t = Nx.subtract(Nx.iota({n}, type: :f32), Nx.tensor(n / 2.0))
         norm = Nx.LinAlg.norm(t) |> Nx.to_number()
@@ -518,7 +527,7 @@ defmodule Nx.FuzzEdgeCases3Test do
     end
 
     property "norm(scalar * x) == |scalar| * norm(x)" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.add(Nx.iota({n}, type: :f32), 1.0)
         scalar = 3.0
         norm_t = Nx.LinAlg.norm(t) |> Nx.to_number()
@@ -531,7 +540,7 @@ defmodule Nx.FuzzEdgeCases3Test do
       check all(
               m <- integer(1..5),
               n <- integer(1..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         x = Nx.iota({m, n}, type: :f32)
         eye = Nx.eye(m, type: :f32)

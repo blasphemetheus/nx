@@ -10,6 +10,8 @@ defmodule Nx.FuzzEdgeCases6Test do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── NaN propagation through chains ─────────────────────────────────
   # IEEE 754: any op with NaN input should produce NaN output
   # (with a few exceptions: 0*NaN is NaN, NaN^0 is 1, etc.)
@@ -270,6 +272,7 @@ defmodule Nx.FuzzEdgeCases6Test do
     test "softmax with finite inputs doesn't produce NaN" do
       t = Nx.tensor([1.0, 2.0, 3.0])
       result = softmax(t)
+
       for val <- Nx.to_flat_list(result) do
         refute val == :nan
         refute val == :infinity
@@ -279,10 +282,12 @@ defmodule Nx.FuzzEdgeCases6Test do
     test "softmax with large values doesn't overflow (numerically stable)" do
       t = Nx.tensor([1000.0, 1001.0, 1002.0])
       result = softmax(t)
+
       for val <- Nx.to_flat_list(result) do
         refute val == :nan
         refute val == :infinity
       end
+
       # Should sum to ~1
       assert_in_delta Nx.to_number(Nx.sum(result)), 1.0, 1.0e-5
     end
@@ -294,6 +299,7 @@ defmodule Nx.FuzzEdgeCases6Test do
     test "safe_log avoids -Inf for zero" do
       t = Nx.tensor([0.0, 1.0, 2.0])
       result = safe_log(t)
+
       for val <- Nx.to_flat_list(result) do
         refute val == :neg_infinity
       end
@@ -309,6 +315,7 @@ defmodule Nx.FuzzEdgeCases6Test do
       # Constant tensor has std=0, division by near-zero
       t = Nx.tensor([5.0, 5.0, 5.0, 5.0])
       result = normalize(t)
+
       for val <- Nx.to_flat_list(result) do
         refute val == :nan
         refute val == :infinity
@@ -327,8 +334,10 @@ defmodule Nx.FuzzEdgeCases6Test do
     end
 
     test "broadcast {1,n} + {m,1} then reduce" do
-      a = Nx.tensor([[1.0, 2.0, 3.0]])  # {1, 3}
-      b = Nx.tensor([[10.0], [20.0]])    # {2, 1}
+      # {1, 3}
+      a = Nx.tensor([[1.0, 2.0, 3.0]])
+      # {2, 1}
+      b = Nx.tensor([[10.0], [20.0]])
       sum = Nx.add(a, b)
       assert Nx.shape(sum) == {2, 3}
       result = Nx.sum(sum, axes: [1])
@@ -389,7 +398,7 @@ defmodule Nx.FuzzEdgeCases6Test do
       check all(
               n <- integer(2..5),
               m <- integer(2..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.iota({n, 1}, type: :f32)
         b = Nx.iota({1, m}, type: :f32)
@@ -408,7 +417,7 @@ defmodule Nx.FuzzEdgeCases6Test do
       check all(
               n <- integer(2..5),
               m <- integer(2..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.iota({n, 1}, type: :f32)
         b = Nx.iota({1, m}, type: :f32)
@@ -424,7 +433,7 @@ defmodule Nx.FuzzEdgeCases6Test do
       check all(
               n <- integer(2..5),
               m <- integer(2..5),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.iota({n, 1}, type: :f32)
         b = Nx.iota({1, m}, type: :f32)
@@ -443,7 +452,7 @@ defmodule Nx.FuzzEdgeCases6Test do
       check all(
               n <- integer(2..5),
               m <- integer(2..5),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.broadcast(Nx.tensor(1.0), {n, m})
         wn = min(n, 2)
@@ -459,7 +468,7 @@ defmodule Nx.FuzzEdgeCases6Test do
     end
 
     property "broadcast {1} to {n} then pad then slice recovers" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.broadcast(Nx.tensor(42.0), {n})
         padded = Nx.pad(t, Nx.tensor(0.0), [{3, 3, 0}])
         recovered = Nx.slice(padded, [3], [n])
@@ -503,6 +512,7 @@ defmodule Nx.FuzzEdgeCases6Test do
     test "broadcast Inf across bf16 tensor" do
       t = Nx.tensor([1.0, 2.0, 3.0], type: :bf16)
       result = Nx.add(t, Nx.tensor(:infinity))
+
       for val <- Nx.to_flat_list(result) do
         assert val == :infinity
       end

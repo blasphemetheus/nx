@@ -12,6 +12,8 @@ defmodule Nx.FuzzIndexedOpsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Defn
   import Nx.Testing
 
@@ -247,7 +249,7 @@ defmodule Nx.FuzzIndexedOpsTest do
       check all(
               n <- integer(3..8),
               k <- integer(1..5),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         k = min(k, n)
         t = Nx.iota({n}, type: :f32)
@@ -260,7 +262,7 @@ defmodule Nx.FuzzIndexedOpsTest do
     property "indexed_add with overlapping indices sums contributions" do
       check all(
               n <- integer(3..6),
-              max_runs: 6
+              max_runs: 6 * @fuzz_scale
             ) do
         t = Nx.broadcast(Nx.tensor(0.0, type: :f32), {n})
         idx = Nx.tensor([[0], [0], [1]])
@@ -277,7 +279,7 @@ defmodule Nx.FuzzIndexedOpsTest do
               n <- integer(3..6),
               start <- integer(0..2),
               len <- integer(1..3),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         n = max(n, start + len)
         t = Nx.iota({n}, type: :f32)

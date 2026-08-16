@@ -8,6 +8,8 @@ defmodule Nx.FuzzErrorsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Shape mismatch errors ─────────────────────────────────────────
 
   describe "binary ops reject non-broadcastable shapes" do
@@ -15,7 +17,7 @@ defmodule Nx.FuzzErrorsTest do
       check all(
               n <- integer(2..8),
               m <- integer(2..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         if n != m do
           a = Nx.iota({n})
@@ -31,7 +33,7 @@ defmodule Nx.FuzzErrorsTest do
               c1 <- integer(2..6),
               r2 <- integer(2..6),
               c2 <- integer(2..6),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         if c1 != c2 and c1 != 1 and c2 != 1 and r1 != r2 and r1 != 1 and r2 != 1 do
           a = Nx.iota({r1, c1})
@@ -48,7 +50,7 @@ defmodule Nx.FuzzErrorsTest do
     property "sum rejects out-of-bounds axis" do
       check all(
               rank <- integer(1..4),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         shape = List.to_tuple(List.duplicate(3, rank))
         t = Nx.iota(shape)
@@ -59,7 +61,7 @@ defmodule Nx.FuzzErrorsTest do
     property "sum rejects negative out-of-bounds axis" do
       check all(
               rank <- integer(1..4),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         shape = List.to_tuple(List.duplicate(3, rank))
         t = Nx.iota(shape)
@@ -80,7 +82,7 @@ defmodule Nx.FuzzErrorsTest do
       check all(
               n <- integer(2..16),
               m <- integer(2..16),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         if n != m do
           t = Nx.iota({n})
@@ -101,7 +103,7 @@ defmodule Nx.FuzzErrorsTest do
     property "slice clamps out-of-bounds start (doesn't crash)" do
       check all(
               len <- integer(2..16),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({len})
         # Nx clamps out-of-bounds indices to last valid position (XLA behavior)
@@ -113,7 +115,7 @@ defmodule Nx.FuzzErrorsTest do
     property "slice rejects length exceeding size" do
       check all(
               len <- integer(2..16),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = Nx.iota({len})
         assert_raise ArgumentError, fn -> Nx.slice(t, [0], [len + 1]) end
@@ -135,7 +137,7 @@ defmodule Nx.FuzzErrorsTest do
               k1 <- integer(2..8),
               k2 <- integer(2..8),
               n <- integer(2..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         if k1 != k2 do
           a = Nx.iota({m, k1})
@@ -153,7 +155,7 @@ defmodule Nx.FuzzErrorsTest do
       check all(
               shape <- member_of([{3}, {2, 3}]),
               type <- member_of([:f32, :f64]),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: type)
         assert_raise ArgumentError, fn -> Nx.bitwise_and(t, t) end
@@ -164,7 +166,7 @@ defmodule Nx.FuzzErrorsTest do
       check all(
               shape <- member_of([{3}, {2, 3}]),
               type <- member_of([:f32, :f64]),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.iota(shape, type: type)
         assert_raise ArgumentError, fn -> Nx.bitwise_not(t) end
@@ -178,7 +180,7 @@ defmodule Nx.FuzzErrorsTest do
     property "take rejects out-of-bounds indices" do
       check all(
               len <- integer(2..8),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.iota({len})
         # This may or may not raise depending on backend behavior
@@ -201,7 +203,7 @@ defmodule Nx.FuzzErrorsTest do
               r2 <- integer(1..6),
               c1 <- integer(2..6),
               c2 <- integer(2..6),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         if c1 != c2 do
           a = Nx.iota({r1, c1})
@@ -223,7 +225,7 @@ defmodule Nx.FuzzErrorsTest do
       check all(
               m <- integer(2..6),
               n <- integer(2..6),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         if m != n do
           t = Nx.iota({m, n}, type: :f32)
@@ -233,7 +235,7 @@ defmodule Nx.FuzzErrorsTest do
     end
 
     property "qr rejects 1D tensor" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         assert_raise ArgumentError, fn -> Nx.LinAlg.qr(t) end
       end
@@ -243,7 +245,7 @@ defmodule Nx.FuzzErrorsTest do
       check all(
               m <- integer(2..6),
               n <- integer(2..6),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         if m != n do
           t = Nx.iota({m, n}, type: :f32)

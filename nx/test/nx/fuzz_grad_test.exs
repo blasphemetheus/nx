@@ -10,6 +10,8 @@ defmodule Nx.FuzzGradTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Defn
 
   @step 1.0e-4
@@ -86,56 +88,56 @@ defmodule Nx.FuzzGradTest do
 
   describe "unary element-wise gradients" do
     property "grad of sum(sin(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.sin(x)) end, x)
       end
     end
 
     property "grad of sum(cos(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.cos(x)) end, x)
       end
     end
 
     property "grad of sum(tanh(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.tanh(x)) end, x)
       end
     end
 
     property "grad of sum(sigmoid(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n, min: -3.0, max: 3.0)
         check_grad(fn x -> Nx.sum(Nx.sigmoid(x)) end, x)
       end
     end
 
     property "grad of sum(exp(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n, min: -2.0, max: 2.0)
         check_grad(fn x -> Nx.sum(Nx.exp(x)) end, x)
       end
     end
 
     property "grad of sum(log(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n, min: 0.5, max: 5.0)
         check_grad(fn x -> Nx.sum(Nx.log(x)) end, x)
       end
     end
 
     property "grad of sum(sqrt(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n, min: 0.5, max: 5.0)
         check_grad(fn x -> Nx.sum(Nx.sqrt(x)) end, x)
       end
     end
 
     property "grad of sum(abs(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         # Avoid x=0 where abs is not differentiable
         x = random_input(n, min: 0.5, max: 5.0)
         check_grad(fn x -> Nx.sum(Nx.abs(x)) end, x)
@@ -143,28 +145,28 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(negate(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.negate(x)) end, x)
       end
     end
 
     property "grad of sum(cbrt(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n, min: 0.5, max: 5.0)
         check_grad(fn x -> Nx.sum(Nx.cbrt(x)) end, x)
       end
     end
 
     property "grad of sum(rsqrt(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n, min: 0.5, max: 5.0)
         check_grad(fn x -> Nx.sum(Nx.rsqrt(x)) end, x)
       end
     end
 
     property "grad of sum(erf(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n, min: -2.0, max: 2.0)
         check_grad(fn x -> Nx.sum(Nx.erf(x)) end, x)
       end
@@ -175,7 +177,7 @@ defmodule Nx.FuzzGradTest do
 
   describe "binary element-wise gradients" do
     property "grad of sum(x + y) wrt x" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         y = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.add(x, y)) end, x)
@@ -183,7 +185,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(x * y) wrt x" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         y = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.multiply(x, y)) end, x)
@@ -191,7 +193,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(x / y) wrt x" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         y = random_input(n, min: 0.5, max: 5.0)
         check_grad(fn x -> Nx.sum(Nx.divide(x, y)) end, x)
@@ -199,7 +201,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(x - y) wrt x" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         y = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.subtract(x, y)) end, x)
@@ -207,14 +209,14 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(x^2)" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.pow(x, 2)) end, x)
       end
     end
 
     property "grad of sum(x^3)" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.pow(x, 3)) end, x)
       end
@@ -225,21 +227,21 @@ defmodule Nx.FuzzGradTest do
 
   describe "reduction gradients" do
     property "grad of sum(x)" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(&Nx.sum/1, x)
       end
     end
 
     property "grad of mean(x)" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(&Nx.mean/1, x)
       end
     end
 
     property "grad of sum(x^2) (variance-like)" do
-      check all(n <- integer(2..8), max_runs: 10) do
+      check all(n <- integer(2..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.pow(x, 2)) end, x)
       end
@@ -250,28 +252,28 @@ defmodule Nx.FuzzGradTest do
 
   describe "composition gradients" do
     property "grad of sum(sin(x) * cos(x))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.multiply(Nx.sin(x), Nx.cos(x))) end, x)
       end
     end
 
     property "grad of sum(exp(sin(x)))" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n, min: -1.0, max: 1.0)
         check_grad(fn x -> Nx.sum(Nx.exp(Nx.sin(x))) end, x)
       end
     end
 
     property "grad of sum(log(1 + exp(x))) (softplus)" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n, min: -3.0, max: 3.0)
         check_grad(fn x -> Nx.sum(Nx.log(Nx.add(1, Nx.exp(x)))) end, x)
       end
     end
 
     property "grad of sum(tanh(x)^2)" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.pow(Nx.tanh(x), 2)) end, x)
       end
@@ -282,7 +284,7 @@ defmodule Nx.FuzzGradTest do
 
   describe "dot product gradients" do
     property "grad of dot(x, y) wrt x" do
-      check all(n <- integer(1..6), max_runs: 10) do
+      check all(n <- integer(1..6), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         y = random_input(n)
         check_grad(fn x -> Nx.dot(x, y) end, x)
@@ -293,7 +295,7 @@ defmodule Nx.FuzzGradTest do
       check all(
               m <- integer(1..4),
               k <- integer(1..4),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         x = random_input(m * k) |> Nx.reshape({m, k})
         w = random_input(k * 2) |> Nx.reshape({k, 2})
@@ -307,14 +309,14 @@ defmodule Nx.FuzzGradTest do
 
   describe "shape op gradients" do
     property "grad through reshape" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.reshape(x, {1, n})) end, x)
       end
     end
 
     property "grad through squeeze" do
-      check all(n <- integer(1..8), max_runs: 10) do
+      check all(n <- integer(1..8), max_runs: 10 * @fuzz_scale) do
         x = random_input(n) |> Nx.reshape({1, n})
         check_grad(fn x -> Nx.sum(Nx.squeeze(x, axes: [0])) end, x)
       end
@@ -324,7 +326,7 @@ defmodule Nx.FuzzGradTest do
       check all(
               m <- integer(1..4),
               n <- integer(1..4),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         x = random_input(m * n) |> Nx.reshape({m, n})
         check_grad(fn x -> Nx.sum(Nx.transpose(x)) end, x)
@@ -332,28 +334,28 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad through concatenate" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.concatenate([x, x])) end, x)
       end
     end
 
     property "grad through slice" do
-      check all(n <- integer(3..8), max_runs: 8) do
+      check all(n <- integer(3..8), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.slice(x, [1], [n - 2])) end, x)
       end
     end
 
     property "grad through pad" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.pad(x, 0, [{1, 1, 0}])) end, x)
       end
     end
 
     property "grad through reverse" do
-      check all(n <- integer(1..8), max_runs: 8) do
+      check all(n <- integer(1..8), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.reverse(x)) end, x)
       end
@@ -364,7 +366,7 @@ defmodule Nx.FuzzGradTest do
 
   describe "higher-order gradients" do
     property "second derivative of sum(x^3)" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
 
         # d/dx sum(x^3) = 3x^2, d²/dx² sum(x^3) = 6x
@@ -386,7 +388,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "second derivative of sum(sin(x))" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
 
         # d/dx sum(sin(x)) = cos(x), d²/dx² sum(sin(x)) = -sin(x)
@@ -412,28 +414,28 @@ defmodule Nx.FuzzGradTest do
 
   describe "trig inverse gradients" do
     property "grad of sum(asin(x))" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n, min: -0.9, max: 0.9)
         check_grad(fn x -> Nx.sum(Nx.asin(x)) end, x)
       end
     end
 
     property "grad of sum(acos(x))" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n, min: -0.9, max: 0.9)
         check_grad(fn x -> Nx.sum(Nx.acos(x)) end, x)
       end
     end
 
     property "grad of sum(atan(x))" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.atan(x)) end, x)
       end
     end
 
     property "grad of sum(atan2(x, y)) wrt x" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n, min: 0.5, max: 3.0)
         y = random_input(n, min: 0.5, max: 3.0)
         check_grad(fn x -> Nx.sum(Nx.atan2(x, y)) end, x)
@@ -441,21 +443,21 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(asinh(x))" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n, min: -2.0, max: 2.0)
         check_grad(fn x -> Nx.sum(Nx.asinh(x)) end, x)
       end
     end
 
     property "grad of sum(acosh(x))" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n, min: 1.1, max: 5.0)
         check_grad(fn x -> Nx.sum(Nx.acosh(x)) end, x)
       end
     end
 
     property "grad of sum(atanh(x))" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n, min: -0.9, max: 0.9)
         check_grad(fn x -> Nx.sum(Nx.atanh(x)) end, x)
       end
@@ -466,14 +468,14 @@ defmodule Nx.FuzzGradTest do
 
   describe "window op gradients" do
     property "grad of sum(window_sum(x, {2}))" do
-      check all(n <- integer(3..8), max_runs: 8) do
+      check all(n <- integer(3..8), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.window_sum(x, {2})) end, x)
       end
     end
 
     property "grad of sum(window_max(x, {2}))" do
-      check all(n <- integer(3..8), max_runs: 8) do
+      check all(n <- integer(3..8), max_runs: 8 * @fuzz_scale) do
         # Use distinct values so max has clear winner
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.window_max(x, {2})) end, x, atol: 0.1, rtol: 0.1)
@@ -481,28 +483,28 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(window_min(x, {2}))" do
-      check all(n <- integer(3..8), max_runs: 8) do
+      check all(n <- integer(3..8), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.window_min(x, {2})) end, x, atol: 0.1, rtol: 0.1)
       end
     end
 
     property "grad of sum(window_sum(x, {3}, strides: [2]))" do
-      check all(n <- integer(5..12), max_runs: 8) do
+      check all(n <- integer(5..12), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.window_sum(x, {3}, strides: [2])) end, x)
       end
     end
 
     property "grad of sum(window_sum(x, {2}, padding: :same))" do
-      check all(n <- integer(3..8), max_runs: 8) do
+      check all(n <- integer(3..8), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.window_sum(x, {2}, padding: :same)) end, x)
       end
     end
 
     property "grad of sum(window_max(x, {3}, strides: [2]))" do
-      check all(n <- integer(5..12), max_runs: 8) do
+      check all(n <- integer(5..12), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
 
         check_grad(fn x -> Nx.sum(Nx.window_max(x, {3}, strides: [2])) end, x,
@@ -516,7 +518,7 @@ defmodule Nx.FuzzGradTest do
       check all(
               rows <- integer(3..6),
               cols <- integer(3..6),
-              max_runs: 5
+              max_runs: 5 * @fuzz_scale
             ) do
         x = random_input(rows * cols) |> Nx.reshape({rows, cols})
         check_grad(fn x -> Nx.sum(Nx.window_sum(x, {2, 2})) end, x)
@@ -527,7 +529,7 @@ defmodule Nx.FuzzGradTest do
       check all(
               rows <- integer(4..8),
               cols <- integer(4..8),
-              max_runs: 5
+              max_runs: 5 * @fuzz_scale
             ) do
         x = random_input(rows * cols) |> Nx.reshape({rows, cols})
         check_grad(fn x -> Nx.sum(Nx.window_sum(x, {2, 2}, strides: [2, 2])) end, x)
@@ -553,7 +555,7 @@ defmodule Nx.FuzzGradTest do
 
   describe "clip and select gradients" do
     property "grad of sum(clip(x, 0, 1)) in passthrough region" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         # All values in passthrough region [0.1, 0.9]
         x = random_input(n, min: 0.1, max: 0.9)
         check_grad(fn x -> Nx.sum(Nx.clip(x, 0, 1)) end, x)
@@ -561,7 +563,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(select(pred, x, 0))" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n, min: 0.5, max: 3.0)
         pred = Nx.tensor(List.duplicate(1, n), type: :u8)
         check_grad(fn x -> Nx.sum(Nx.select(pred, x, 0)) end, x)
@@ -573,7 +575,7 @@ defmodule Nx.FuzzGradTest do
 
   describe "gradient wrt second input" do
     property "grad of sum(x + y) wrt y" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         y = random_input(n)
         check_grad(fn y -> Nx.sum(Nx.add(x, y)) end, y)
@@ -581,7 +583,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(x * y) wrt y" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         y = random_input(n)
         check_grad(fn y -> Nx.sum(Nx.multiply(x, y)) end, y)
@@ -589,7 +591,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(x / y) wrt y" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         y = random_input(n, min: 0.5, max: 5.0)
         check_grad(fn y -> Nx.sum(Nx.divide(x, y)) end, y)
@@ -597,7 +599,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(x^y) wrt y" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n, min: 0.5, max: 3.0)
         y = random_input(n, min: 0.5, max: 2.0)
         check_grad(fn y -> Nx.sum(Nx.pow(x, y)) end, y)
@@ -605,7 +607,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of dot(x, y) wrt y" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         y = random_input(n)
         check_grad(fn y -> Nx.dot(x, y) end, y)
@@ -613,7 +615,7 @@ defmodule Nx.FuzzGradTest do
     end
 
     property "grad of sum(atan2(x, y)) wrt y" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n, min: 0.5, max: 3.0)
         y = random_input(n, min: 0.5, max: 3.0)
         check_grad(fn y -> Nx.sum(Nx.atan2(x, y)) end, y)
@@ -625,7 +627,7 @@ defmodule Nx.FuzzGradTest do
 
   describe "gradient through as_type" do
     property "grad flows through as_type f64->f32" do
-      check all(n <- integer(1..6), max_runs: 8) do
+      check all(n <- integer(1..6), max_runs: 8 * @fuzz_scale) do
         x = random_input(n)
         check_grad(fn x -> Nx.sum(Nx.as_type(Nx.sin(x), :f32)) end, x)
       end
@@ -639,7 +641,7 @@ defmodule Nx.FuzzGradTest do
       check all(
               batch <- integer(2..4),
               n <- integer(2..6),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         # Build per-row reference gradients
         row_data =

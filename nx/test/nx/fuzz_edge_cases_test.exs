@@ -9,6 +9,8 @@ defmodule Nx.FuzzEdgeCasesTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Slice boundary conditions ──────────────────────────────────────
   # Source: Nx.Shape.slice/4 (shape.ex:1242)
   # Boundaries:
@@ -28,6 +30,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "slice with length == 1 (minimum valid length)" do
       t = Nx.iota({5})
+
       for i <- 0..4 do
         result = Nx.slice(t, [i], [1])
         assert Nx.to_flat_list(result) == [i]
@@ -80,6 +83,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "slice raises on length 0" do
       t = Nx.iota({5})
+
       assert_raise ArgumentError, ~r/length at axis 0 must be greater/, fn ->
         Nx.slice(t, [0], [0])
       end
@@ -87,6 +91,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "slice raises on length > dim" do
       t = Nx.iota({3})
+
       assert_raise ArgumentError, ~r/length at axis 0 must be less than/, fn ->
         Nx.slice(t, [0], [4])
       end
@@ -94,6 +99,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "slice raises on stride 0" do
       t = Nx.iota({5})
+
       assert_raise ArgumentError, ~r/stride at axis 0 must be greater/, fn ->
         Nx.slice(t, [0], [5], strides: [0])
       end
@@ -101,6 +107,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "slice raises on rank mismatch in start_indices" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/invalid start indices rank/, fn ->
         Nx.slice(t, [0], [3, 4])
       end
@@ -108,6 +115,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "slice raises on rank mismatch in lengths" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/invalid limit indices rank/, fn ->
         Nx.slice(t, [0, 0], [3])
       end
@@ -248,6 +256,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "take raises on float indices" do
       t = Nx.iota({5})
+
       assert_raise ArgumentError, ~r/indices must be an integer tensor/, fn ->
         Nx.take(t, Nx.tensor([0.0, 1.0]))
       end
@@ -255,6 +264,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "take raises on out-of-range axis" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/given axis \(5\) invalid/, fn ->
         Nx.take(t, Nx.tensor([0]), axis: 5)
       end
@@ -299,7 +309,8 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "take_along_axis raises on rank mismatch" do
       t = Nx.tensor([[1, 2], [3, 4]])
-      idx = Nx.tensor([0, 1])  # rank 1, should be rank 2
+      # rank 1, should be rank 2
+      idx = Nx.tensor([0, 1])
 
       assert_raise ArgumentError, ~r/shapes must have the same number of dimensions/, fn ->
         Nx.take_along_axis(t, idx, axis: 0)
@@ -307,8 +318,10 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     test "take_along_axis raises on non-indexed dim mismatch" do
-      t = Nx.tensor([[1, 2, 3], [4, 5, 6]])  # {2, 3}
-      idx = Nx.tensor([[0, 1], [1, 0], [0, 0]])  # {3, 2} — rows don't match
+      # {2, 3}
+      t = Nx.tensor([[1, 2, 3], [4, 5, 6]])
+      # {3, 2} — rows don't match
+      idx = Nx.tensor([[0, 1], [1, 0], [0, 0]])
 
       assert_raise ArgumentError, ~r/non-indexing dimensions must match/, fn ->
         Nx.take_along_axis(t, idx, axis: 1)
@@ -317,8 +330,11 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "take_along_axis identity: iota indices return original" do
       t = Nx.iota({3, 4})
-      idx = Nx.stack([Nx.iota({3, 4}, axis: 1)])
-      |> Nx.reshape({3, 4})
+
+      idx =
+        Nx.stack([Nx.iota({3, 4}, axis: 1)])
+        |> Nx.reshape({3, 4})
+
       result = Nx.take_along_axis(t, idx, axis: 1)
       assert Nx.to_flat_list(result) == Nx.to_flat_list(t)
     end
@@ -337,7 +353,8 @@ defmodule Nx.FuzzEdgeCasesTest do
       t = Nx.iota({3, 4})
       result = Nx.gather(t, Nx.tensor([[2, 3]]))
       assert Nx.shape(result) == {1}
-      assert Nx.to_flat_list(result) == [11]  # 2*4 + 3
+      # 2*4 + 3
+      assert Nx.to_flat_list(result) == [11]
     end
 
     test "gather rows (partial indexing)" do
@@ -361,16 +378,26 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "gather all elements individually from high-rank tensor" do
       t = Nx.iota({2, 2, 2})
-      indices = Nx.tensor([
-        [0, 0, 0], [0, 0, 1], [0, 1, 0], [0, 1, 1],
-        [1, 0, 0], [1, 0, 1], [1, 1, 0], [1, 1, 1]
-      ])
+
+      indices =
+        Nx.tensor([
+          [0, 0, 0],
+          [0, 0, 1],
+          [0, 1, 0],
+          [0, 1, 1],
+          [1, 0, 0],
+          [1, 0, 1],
+          [1, 1, 0],
+          [1, 1, 1]
+        ])
+
       result = Nx.gather(t, indices)
       assert Nx.to_flat_list(result) == Enum.to_list(0..7)
     end
 
     test "gather with scalar indices raises correct error" do
       t = Nx.iota({3})
+
       assert_raise ArgumentError, ~r/expected indices rank to be at least 1/, fn ->
         Nx.gather(t, Nx.tensor(0))
       end
@@ -378,6 +405,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "gather raises when last dim > tensor rank" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/expected the last indices dimension size/, fn ->
         Nx.gather(t, Nx.tensor([[0, 0, 0]]))
       end
@@ -385,6 +413,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "gather with unsorted axes raises" do
       t = Nx.iota({3, 4, 5})
+
       assert_raise ArgumentError, ~r/:axes must be an ordered list/, fn ->
         Nx.gather(t, Nx.tensor([[0, 0]]), axes: [2, 0])
       end
@@ -392,6 +421,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "gather with axes length mismatch raises" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/:axes must have the same number/, fn ->
         Nx.gather(t, Nx.tensor([[0]]), axes: [0, 1])
       end
@@ -459,6 +489,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "indexed_add raises on float indices" do
       t = Nx.tensor([1, 2, 3])
+
       assert_raise ArgumentError, ~r/indices must be an integer tensor/, fn ->
         Nx.indexed_add(t, Nx.tensor([[0.0]]), Nx.tensor([1]))
       end
@@ -466,8 +497,10 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "indexed_add raises on indices/updates leading axis mismatch" do
       t = Nx.tensor([0, 0, 0])
-      indices = Nx.tensor([[0], [1]])  # 2 entries
-      updates = Nx.tensor([1, 2, 3])   # 3 entries
+      # 2 entries
+      indices = Nx.tensor([[0], [1]])
+      # 3 entries
+      updates = Nx.tensor([1, 2, 3])
 
       assert_raise ArgumentError, ~r/leading axis .* to match/, fn ->
         Nx.indexed_add(t, indices, updates)
@@ -538,6 +571,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "window raises on rank mismatch" do
       t = Nx.iota({3, 4}, type: :f32)
+
       assert_raise ArgumentError, ~r/rank of shape .* does not match rank of window/, fn ->
         Nx.window_sum(t, {2})
       end
@@ -545,6 +579,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "window raises on stride rank mismatch" do
       t = Nx.iota({3, 4}, type: :f32)
+
       assert_raise ArgumentError, ~r/rank of shape .* does not match rank of stride/, fn ->
         Nx.window_sum(t, {2, 2}, strides: [1])
       end
@@ -562,7 +597,8 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "window_scatter_max raises when source shape doesn't match" do
       t = Nx.iota({6}, type: :f32)
-      source = Nx.tensor([1.0, 2.0])  # wrong shape
+      # wrong shape
+      source = Nx.tensor([1.0, 2.0])
       init = Nx.tensor(0.0)
 
       assert_raise ArgumentError, ~r/source shape must match valid windows/, fn ->
@@ -625,13 +661,16 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "reshape raises on incompatible shapes" do
       t = Nx.iota({12})
+
       assert_raise ArgumentError, ~r/cannot reshape/, fn ->
         Nx.reshape(t, {5, 5})
       end
     end
 
     test "reshape raises on incompatible :auto" do
-      t = Nx.iota({7})  # prime number
+      # prime number
+      t = Nx.iota({7})
+
       assert_raise ArgumentError, ~r/cannot reshape/, fn ->
         Nx.reshape(t, {3, :auto})
       end
@@ -689,6 +728,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "pad raises on interior < 0" do
       t = Nx.iota({3})
+
       assert_raise ArgumentError, ~r/interior padding must be non-negative/, fn ->
         Nx.pad(t, Nx.tensor(0), [{0, 0, -1}])
       end
@@ -696,6 +736,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "pad raises on rank mismatch" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/rank of padding configuration/, fn ->
         Nx.pad(t, Nx.tensor(0), [{0, 0, 0}])
       end
@@ -734,6 +775,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "squeeze raises on non-1 dimension" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/cannot squeeze dimensions whose sizes are not 1/, fn ->
         Nx.squeeze(t, axes: [0])
       end
@@ -748,7 +790,7 @@ defmodule Nx.FuzzEdgeCasesTest do
       check all(
               m <- integer(1..6),
               n <- integer(1..6),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({m, n}, type: :f32)
         direct = Nx.sum(t) |> Nx.to_number()
@@ -761,7 +803,7 @@ defmodule Nx.FuzzEdgeCasesTest do
       check all(
               m <- integer(1..6),
               n <- integer(1..6),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({m, n}, type: :f32)
         result = t |> Nx.transpose() |> Nx.transpose()
@@ -770,7 +812,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "exp(log(x)) ≈ x for positive x" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         # Avoid values too close to 0 (log instability) or too large (exp overflow)
         t = Nx.add(Nx.iota({n}, type: :f32), 1.0)
         result = t |> Nx.log() |> Nx.exp()
@@ -782,7 +824,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "negate(negate(x)) == x" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         result = t |> Nx.negate() |> Nx.negate()
         assert Nx.to_flat_list(result) == Nx.to_flat_list(t)
@@ -790,14 +832,14 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "abs(negate(x)) == abs(x)" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         assert Nx.to_flat_list(Nx.abs(Nx.negate(t))) == Nx.to_flat_list(Nx.abs(t))
       end
     end
 
     property "add(x, 0) == x" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         result = Nx.add(t, 0.0)
         assert Nx.to_flat_list(result) == Nx.to_flat_list(t)
@@ -805,7 +847,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "multiply(x, 1) == x" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         result = Nx.multiply(t, 1.0)
         assert Nx.to_flat_list(result) == Nx.to_flat_list(t)
@@ -813,7 +855,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "multiply(x, 0) == 0" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.add(Nx.iota({n}, type: :f32), 1.0)
         result = Nx.multiply(t, 0.0)
         assert Nx.to_flat_list(result) == List.duplicate(0.0, n)
@@ -821,7 +863,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "sum of iota(n) == n*(n-1)/2" do
-      check all(n <- integer(1..50), max_runs: 30) do
+      check all(n <- integer(1..50), max_runs: 30 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f64)
         result = Nx.sum(t) |> Nx.to_number()
         expected = n * (n - 1) / 2
@@ -833,7 +875,7 @@ defmodule Nx.FuzzEdgeCasesTest do
       check all(
               m <- integer(1..6),
               n <- integer(1..6),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         x = Nx.iota({m, n}, type: :f32)
         ones = Nx.broadcast(Nx.tensor(1.0), {n})
@@ -848,7 +890,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "slice then concatenate recovers original" do
-      check all(n <- integer(2..10), max_runs: 20) do
+      check all(n <- integer(2..10), max_runs: 20 * @fuzz_scale) do
         split = div(n, 2)
         t = Nx.iota({n}, type: :f32)
         left = Nx.slice(t, [0], [split])
@@ -859,7 +901,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "take with iota indices is identity" do
-      check all(n <- integer(1..10), max_runs: 20) do
+      check all(n <- integer(1..10), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         idx = Nx.iota({n}, type: :s32)
         result = Nx.take(t, idx)
@@ -871,7 +913,7 @@ defmodule Nx.FuzzEdgeCasesTest do
       check all(
               m <- integer(1..4),
               n <- integer(1..4),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         t = Nx.iota({m, n}, type: :f32)
 
@@ -885,7 +927,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "indexed_put then gather recovers update" do
-      check all(n <- integer(3..10), max_runs: 20) do
+      check all(n <- integer(3..10), max_runs: 20 * @fuzz_scale) do
         t = Nx.broadcast(Nx.tensor(0), {n})
         idx = Nx.tensor([[div(n, 2)]])
         update = Nx.tensor([42])
@@ -897,7 +939,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     end
 
     property "pad then slice recovers original" do
-      check all(n <- integer(1..8), max_runs: 20) do
+      check all(n <- integer(1..8), max_runs: 20 * @fuzz_scale) do
         t = Nx.iota({n}, type: :f32)
         padded = Nx.pad(t, Nx.tensor(0.0), [{2, 3, 0}])
         recovered = Nx.slice(padded, [2], [n])
@@ -989,6 +1031,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "axis raises on -rank-1" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/given axis .* invalid/, fn ->
         Nx.sum(t, axes: [-3])
       end
@@ -996,6 +1039,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "axis raises on rank" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/given axis .* invalid/, fn ->
         Nx.sum(t, axes: [2])
       end
@@ -1009,6 +1053,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "named axis raises on unknown name" do
       t = Nx.iota({3, 4}, names: [:rows, :cols])
+
       assert_raise ArgumentError, ~r/name :foo not found/, fn ->
         Nx.sum(t, axes: [:foo])
       end
@@ -1072,6 +1117,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "bitcast raises on size mismatch" do
       t = Nx.tensor(1.0, type: :f32)
+
       assert_raise ArgumentError, fn ->
         Nx.bitcast(t, :f64)
       end
@@ -1137,6 +1183,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "new_axis raises on out-of-range position" do
       t = Nx.iota({3, 4})
+
       assert_raise ArgumentError, ~r/new axis position/, fn ->
         Nx.new_axis(t, 3)
       end
@@ -1188,6 +1235,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "sort raises on invalid direction" do
       t = Nx.tensor([1, 2, 3])
+
       assert_raise ArgumentError, ~r/unknown value for :direction/, fn ->
         Nx.sort(t, direction: :up)
       end
@@ -1213,6 +1261,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "argsort raises on invalid direction" do
       t = Nx.tensor([1, 2, 3])
+
       assert_raise ArgumentError, ~r/unknown value for :direction/, fn ->
         Nx.argsort(t, direction: :up)
       end
@@ -1248,6 +1297,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "top_k raises on k == 0" do
       t = Nx.tensor([1, 2, 3])
+
       assert_raise ArgumentError, ~r/k must be .* greater than or equal to 1/, fn ->
         Nx.top_k(t, k: 0)
       end
@@ -1255,6 +1305,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "top_k raises on k > last dim" do
       t = Nx.tensor([1, 2, 3])
+
       assert_raise ArgumentError, ~r/last axis size must be greater than or equal to k/, fn ->
         Nx.top_k(t, k: 4)
       end
@@ -1262,6 +1313,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "top_k raises on scalar" do
       t = Nx.tensor(42)
+
       assert_raise ArgumentError, ~r/must have at least rank 1/, fn ->
         Nx.top_k(t, k: 1)
       end
@@ -1350,6 +1402,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "tile raises on rep < 1" do
       t = Nx.tensor([1, 2, 3])
+
       assert_raise ArgumentError, ~r/repetitions must be a list of integers/, fn ->
         Nx.tile(t, [0])
       end
@@ -1532,6 +1585,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "flatten raises on non-consecutive axes" do
       t = Nx.iota({2, 3, 4})
+
       assert_raise ArgumentError, ~r/flatten axes must be consecutive/, fn ->
         Nx.flatten(t, axes: [0, 2])
       end
@@ -1574,6 +1628,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "broadcast raises on incompatible shapes" do
       t = Nx.tensor([1, 2, 3])
+
       assert_raise ArgumentError, ~r/cannot broadcast/, fn ->
         Nx.broadcast(t, {4})
       end
@@ -1581,6 +1636,7 @@ defmodule Nx.FuzzEdgeCasesTest do
 
     test "broadcast raises on unordered axes" do
       t = Nx.iota({2, 3})
+
       assert_raise ArgumentError, ~r/broadcast axes must be ordered/, fn ->
         Nx.broadcast(t, {4, 3, 2}, axes: [2, 0])
       end

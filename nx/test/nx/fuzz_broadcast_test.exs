@@ -8,6 +8,8 @@ defmodule Nx.FuzzBroadcastTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Generators ─────────────────────────────────────────────────────
 
   # Generate a pair of shapes that are broadcastable with each other
@@ -99,7 +101,7 @@ defmodule Nx.FuzzBroadcastTest do
         check all(
                 {s1, s2} <- broadcastable_pair(),
                 type <- member_of([:f32, :f64]),
-                max_runs: 30
+                max_runs: 30 * @fuzz_scale
               ) do
           a = make_tensor(s1, type)
           b = make_tensor(s2, type)
@@ -114,7 +116,7 @@ defmodule Nx.FuzzBroadcastTest do
       check all(
               {s1, s2} <- broadcastable_pair(),
               type <- member_of([:f32, :f64]),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         a = make_tensor(s1, type)
         b = Nx.add(make_tensor(s2, type), 1)
@@ -127,7 +129,7 @@ defmodule Nx.FuzzBroadcastTest do
     property "pow broadcasts correctly" do
       check all(
               {s1, s2} <- broadcastable_pair(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = Nx.add(make_tensor(s1, :f32), 1)
         b = make_tensor(s2, :f32)
@@ -140,7 +142,7 @@ defmodule Nx.FuzzBroadcastTest do
     property "atan2 broadcasts correctly" do
       check all(
               {s1, s2} <- broadcastable_pair(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = make_tensor(s1, :f32)
         b = Nx.add(make_tensor(s2, :f32), 1)
@@ -153,7 +155,7 @@ defmodule Nx.FuzzBroadcastTest do
     property "remainder broadcasts correctly" do
       check all(
               {s1, s2} <- broadcastable_pair(),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         a = make_tensor(s1, :f32)
         b = Nx.add(make_tensor(s2, :f32), 1)
@@ -174,7 +176,7 @@ defmodule Nx.FuzzBroadcastTest do
         check all(
                 {s1, s2} <- broadcastable_pair(),
                 type <- member_of([:f32, :s32]),
-                max_runs: 20
+                max_runs: 20 * @fuzz_scale
               ) do
           a = make_tensor(s1, type)
           b = make_tensor(s2, type)
@@ -194,7 +196,7 @@ defmodule Nx.FuzzBroadcastTest do
       check all(
               shape <- member_of([{3}, {2, 3}, {4, 1, 3}]),
               type <- member_of([:f32, :f64]),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         x = Nx.iota(shape, type: type)
         zero = Nx.broadcast(0, shape) |> Nx.as_type(type)
@@ -210,7 +212,7 @@ defmodule Nx.FuzzBroadcastTest do
     property "scalar broadcast then op == op with scalar" do
       check all(
               shape <- member_of([{3}, {2, 3}, {2, 3, 4}]),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         x = Nx.iota(shape, type: :f32)
         # x + 5.0 via scalar
@@ -232,7 +234,7 @@ defmodule Nx.FuzzBroadcastTest do
       check all(
               n <- integer(1..8),
               m <- integer(1..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         # Column vector {n, 1} broadcast to {n, m}
         col = Nx.iota({n, 1}, type: :f32)
@@ -259,7 +261,7 @@ defmodule Nx.FuzzBroadcastTest do
       check all(
               n <- integer(1..8),
               m <- integer(1..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         pred = Nx.greater(Nx.iota({n, m}, type: :f32), n * m / 2)
         on_true = Nx.iota({n, m}, type: :f32)
@@ -273,7 +275,7 @@ defmodule Nx.FuzzBroadcastTest do
     property "select with scalar pred" do
       check all(
               n <- integer(1..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         pred = Nx.tensor(1, type: :u8)
         on_true = Nx.iota({n}, type: :f32)
@@ -292,7 +294,7 @@ defmodule Nx.FuzzBroadcastTest do
       property "#{op} broadcasts correctly" do
         check all(
                 {s1, s2} <- broadcastable_pair(),
-                max_runs: 15
+                max_runs: 15 * @fuzz_scale
               ) do
           a = Nx.greater(make_tensor(s1, :f32), 0)
           b = Nx.greater(make_tensor(s2, :f32), 0)

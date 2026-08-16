@@ -26,6 +26,8 @@ defmodule Nx.FuzzInvariantsTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Testing
 
   # ── Generators ─────────────────────────────────────────────────────
@@ -52,7 +54,6 @@ defmodule Nx.FuzzInvariantsTest do
     end)
   end
 
-
   # ── LinAlg identities ──────────────────────────────────────────────
 
   describe "linalg: matmul algebraic identities" do
@@ -63,7 +64,7 @@ defmodule Nx.FuzzInvariantsTest do
               m <- integer(2..4),
               a <- small_matrix(n, k),
               b <- small_matrix(k, m),
-              max_runs: 12
+              max_runs: 12 * @fuzz_scale
             ) do
         lhs = Nx.transpose(Nx.dot(a, b))
         rhs = Nx.dot(Nx.transpose(b), Nx.transpose(a))
@@ -80,7 +81,7 @@ defmodule Nx.FuzzInvariantsTest do
               a <- small_matrix(n, k),
               b <- small_matrix(k, m),
               c <- small_matrix(m, p),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         lhs = Nx.dot(Nx.dot(a, b), c)
         rhs = Nx.dot(a, Nx.dot(b, c))
@@ -95,7 +96,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..4),
               a <- well_conditioned_matrix(n),
               b <- well_conditioned_matrix(n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         lhs = Nx.LinAlg.determinant(Nx.dot(a, b))
         rhs = Nx.multiply(Nx.LinAlg.determinant(a), Nx.LinAlg.determinant(b))
@@ -108,7 +109,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..4),
               a <- well_conditioned_matrix(n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         lhs = Nx.LinAlg.determinant(Nx.transpose(a))
         rhs = Nx.LinAlg.determinant(a)
@@ -124,7 +125,7 @@ defmodule Nx.FuzzInvariantsTest do
               m <- integer(2..4),
               a <- small_matrix(n, m),
               b <- small_matrix(m, n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         lhs = Nx.sum(Nx.take_diagonal(Nx.dot(a, b)))
         rhs = Nx.sum(Nx.take_diagonal(Nx.dot(b, a)))
@@ -139,7 +140,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..4),
               a <- well_conditioned_matrix(n),
               b <- small_vector(n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         lhs = Nx.LinAlg.solve(a, b)
         rhs = Nx.dot(Nx.LinAlg.invert(a), b)
@@ -155,7 +156,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..8),
               t <- small_vector(n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         lhs = Nx.sum(Nx.reverse(t))
         rhs = Nx.sum(t)
@@ -168,7 +169,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..5),
               m <- integer(2..5),
               a <- small_matrix(n, m),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         lhs = Nx.sum(Nx.transpose(a))
         rhs = Nx.sum(a)
@@ -180,7 +181,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..8),
               t <- small_vector(n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         cumsum = Nx.cumulative_sum(t)
         lhs = cumsum[n - 1]
@@ -194,7 +195,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..4),
               m <- integer(2..4),
               a <- small_matrix(n, m),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         lhs = Nx.sum(a, axes: [0, 1])
         rhs = Nx.sum(a)
@@ -213,7 +214,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..8),
               c <- float(min: -5.0, max: 5.0),
               vals <- list_of(float(min: -3.0, max: 3.0), length: n),
-              max_runs: 12
+              max_runs: 12 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         shifted = Nx.add(x, Nx.tensor(c, type: :f32))
@@ -228,7 +229,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..8),
               vals <- list_of(float(min: -3.0, max: 3.0), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         total = Nx.sum(softmax(x))
@@ -249,7 +250,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..8),
               vals <- list_of(float(min: -10.0, max: 10.0), length: n),
-              max_runs: 12
+              max_runs: 12 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         total = Nx.add(Nx.sigmoid(x), Nx.sigmoid(Nx.negate(x)))
@@ -269,7 +270,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..8),
               c <- float(min: -3.0, max: 3.0),
               vals <- list_of(float(min: -2.0, max: 2.0), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         shifted = Nx.add(x, Nx.tensor(c, type: :f32))
@@ -291,7 +292,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..8),
               t <- small_vector(n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         round_trip = t |> Nx.reverse() |> Nx.reverse()
         assert_all_close(round_trip, t, atol: 0.0, rtol: 0.0)
@@ -303,7 +304,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..5),
               m <- integer(2..5),
               a <- small_matrix(n, m),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         round_trip = a |> Nx.transpose() |> Nx.transpose()
         assert_all_close(round_trip, a, atol: 0.0, rtol: 0.0)
@@ -315,7 +316,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..5),
               m <- integer(2..5),
               a <- small_matrix(n, m),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         round_trip = a |> Nx.reshape({n * m}) |> Nx.reshape({n, m})
         assert_all_close(round_trip, a, atol: 0.0, rtol: 0.0)
@@ -329,7 +330,7 @@ defmodule Nx.FuzzInvariantsTest do
     property "grad(f + g) == grad(f) + grad(g)" do
       check all(
               x <- float(min: -2.0, max: 2.0),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.tensor(x, type: :f32)
 
@@ -345,7 +346,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               x <- float(min: -2.0, max: 2.0),
               c <- float(min: -3.0, max: 3.0),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.tensor(x, type: :f32)
         c_t = Nx.tensor(c, type: :f32)
@@ -361,7 +362,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               x <- float(min: -2.0, max: 2.0),
               c <- float(min: -5.0, max: 5.0),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         t = Nx.tensor(x, type: :f32)
         c_t = Nx.tensor(c, type: :f32)
@@ -384,7 +385,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..5),
               c <- float(min: -100.0, max: 100.0),
               vals <- list_of(float(min: -50.0, max: 50.0), length: n),
-              max_runs: 12
+              max_runs: 12 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         shifted = Nx.add(x, Nx.tensor(c, type: :f32))
@@ -404,7 +405,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..5),
               vals <- list_of(float(min: -50.0, max: 50.0), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         total = Nx.add(Nx.sigmoid(x), Nx.sigmoid(Nx.negate(x)))
@@ -416,7 +417,7 @@ defmodule Nx.FuzzInvariantsTest do
     property "exp(x) * exp(-x) == 1 within precision" do
       check all(
               vals <- list_of(float(min: -10.0, max: 10.0), length: 4),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         product = Nx.multiply(Nx.exp(x), Nx.exp(Nx.negate(x)))
@@ -428,7 +429,7 @@ defmodule Nx.FuzzInvariantsTest do
     property "log(exp(x)) == x within precision" do
       check all(
               vals <- list_of(float(min: -5.0, max: 5.0), length: 4),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         round_trip = Nx.log(Nx.exp(x))
@@ -439,7 +440,7 @@ defmodule Nx.FuzzInvariantsTest do
     property "sqrt(x*x) == |x|" do
       check all(
               vals <- list_of(float(min: -100.0, max: 100.0), length: 4),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         lhs = Nx.sqrt(Nx.multiply(x, x))
@@ -457,7 +458,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..4),
               a <- well_conditioned_matrix(n),
               b <- small_vector(n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.LinAlg.solve(a, b)
         recovered = Nx.dot(a, x)
@@ -469,7 +470,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..4),
               a <- well_conditioned_matrix(n),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         lhs = Nx.LinAlg.determinant(Nx.multiply(a, 2.0))
         rhs = Nx.multiply(:math.pow(2, n), Nx.LinAlg.determinant(a))
@@ -482,7 +483,7 @@ defmodule Nx.FuzzInvariantsTest do
     property "grad of f(g(x)) via chain rule" do
       check all(
               x <- float(min: 0.5, max: 2.0),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.tensor(x, type: :f32)
 
@@ -496,15 +497,18 @@ defmodule Nx.FuzzInvariantsTest do
     property "grad of product: d/dx [f(x) * g(x)] == f'*g + f*g'" do
       check all(
               x <- float(min: 0.5, max: 2.0),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.tensor(x, type: :f32)
 
         grad_prod =
           Nx.Defn.grad(t, fn a -> Nx.multiply(Nx.sin(a), Nx.cos(a)) end)
 
-        expected = Nx.tensor(:math.cos(x) * :math.cos(x) - :math.sin(x) * :math.sin(x),
-                             type: :f32)
+        expected =
+          Nx.tensor(:math.cos(x) * :math.cos(x) - :math.sin(x) * :math.sin(x),
+            type: :f32
+          )
+
         assert_all_close(grad_prod, expected, atol: 1.0e-3)
       end
     end
@@ -513,7 +517,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..4),
               vals <- list_of(float(min: -2.0, max: 2.0), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.tensor(vals, type: :f32)
 
@@ -534,7 +538,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..5),
               scale <- float(min: 50.0, max: 200.0),
               vals <- list_of(float(min: -1.0, max: 1.0), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.tensor(Enum.map(vals, &(&1 * scale)), type: :f32)
         result = softmax(x)
@@ -563,7 +567,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..5),
               big_idx <- integer(0..1),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         idx = rem(big_idx, n)
         vals = List.duplicate(0.0, n) |> List.replace_at(idx, 500.0)
@@ -577,7 +581,7 @@ defmodule Nx.FuzzInvariantsTest do
     property "reverse on 1-element tensor is identity" do
       check all(
               v <- float(min: -100.0, max: 100.0),
-              max_runs: 5
+              max_runs: 5 * @fuzz_scale
             ) do
         t = Nx.tensor([v], type: :f32)
         assert_all_close(Nx.reverse(t), t, atol: 0.0, rtol: 0.0)
@@ -588,7 +592,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(1..5),
               vals <- list_of(float(min: -5.0, max: 5.0), length: n),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         row = Nx.tensor([vals], type: :f32)
         col = Nx.transpose(row)
@@ -600,7 +604,7 @@ defmodule Nx.FuzzInvariantsTest do
     property "sum of single-element tensor equals that element" do
       check all(
               v <- float(min: -1000.0, max: 1000.0),
-              max_runs: 6
+              max_runs: 6 * @fuzz_scale
             ) do
         t = Nx.tensor([v], type: :f32)
         assert_all_close(Nx.sum(t), Nx.tensor(v, type: :f32), atol: 1.0e-3)
@@ -613,7 +617,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..8),
               vals <- list_of(integer(0..1_000_000), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = Nx.tensor(vals, type: :s32)
         total = Nx.sum(t)
@@ -626,7 +630,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..5),
               va <- list_of(integer(0..1000), length: n),
               vb <- list_of(integer(0..1000), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = Nx.tensor(va, type: :s32)
         b = Nx.tensor(vb, type: :s32)
@@ -639,7 +643,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..5),
               vals <- list_of(integer(0..1000), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = Nx.tensor(vals, type: :s32)
         assert_equal(Nx.bitwise_and(a, a), a)
@@ -650,7 +654,7 @@ defmodule Nx.FuzzInvariantsTest do
       check all(
               n <- integer(2..5),
               vals <- list_of(integer(0..1000), length: n),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         a = Nx.tensor(vals, type: :s32)
         zeros = Nx.broadcast(Nx.tensor(0, type: :s32), {n})
@@ -663,7 +667,7 @@ defmodule Nx.FuzzInvariantsTest do
     property "a - a == 0" do
       check all(
               vals <- list_of(float(min: -100.0, max: 100.0), length: 4),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         diff = Nx.subtract(x, x)
@@ -675,7 +679,7 @@ defmodule Nx.FuzzInvariantsTest do
     property "a / a == 1 (for non-zero a)" do
       check all(
               vals <- list_of(float(min: 0.1, max: 10.0), length: 4),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         x = Nx.tensor(vals, type: :f32)
         ratio = Nx.divide(x, x)
@@ -689,7 +693,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..5),
               va <- list_of(float(min: -5.0, max: 5.0), length: n),
               vb <- list_of(float(min: -5.0, max: 5.0), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = Nx.tensor(va, type: :f32)
         b = Nx.tensor(vb, type: :f32)
@@ -705,7 +709,7 @@ defmodule Nx.FuzzInvariantsTest do
               n <- integer(2..5),
               va <- list_of(float(min: -5.0, max: 5.0), length: n),
               vb <- list_of(float(min: -5.0, max: 5.0), length: n),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = Nx.tensor(va, type: :f32)
         b = Nx.tensor(vb, type: :f32)

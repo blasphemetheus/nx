@@ -16,6 +16,8 @@ defmodule Nx.FuzzConvTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   import Nx.Testing
 
   # ── Generators ─────────────────────────────────────────────────────
@@ -54,7 +56,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 12
+              max_runs: 12 * @fuzz_scale
             ) do
         result = Nx.conv(input, kernel)
         {b, _, _, _} = Nx.shape(input)
@@ -70,7 +72,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         grad = Nx.Defn.grad(input, fn x -> Nx.sum(Nx.conv(x, kernel)) end)
         assert Nx.shape(grad) == Nx.shape(input)
@@ -81,7 +83,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         grad = Nx.Defn.grad(kernel, fn k -> Nx.sum(Nx.conv(input, k)) end)
         assert Nx.shape(grad) == Nx.shape(kernel)
@@ -97,7 +99,7 @@ defmodule Nx.FuzzConvTest do
               input <- nchw_input(),
               kernel <- kernel_for(input),
               s <- integer(1..2),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         result = Nx.conv(input, kernel, strides: [s, s])
         assert is_struct(result, Nx.Tensor)
@@ -109,7 +111,7 @@ defmodule Nx.FuzzConvTest do
               input <- nchw_input(),
               kernel <- kernel_for(input),
               s <- integer(1..2),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         grad =
           Nx.Defn.grad(input, fn x ->
@@ -126,7 +128,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         result = Nx.conv(input, kernel, padding: :same)
         {_, _, h_in, w_in} = Nx.shape(input)
@@ -141,7 +143,7 @@ defmodule Nx.FuzzConvTest do
               input <- nchw_input(),
               kernel <- kernel_for(input),
               p <- integer(0..2),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         result = Nx.conv(input, kernel, padding: [{p, p}, {p, p}])
         assert is_struct(result, Nx.Tensor)
@@ -155,7 +157,7 @@ defmodule Nx.FuzzConvTest do
               input <- nchw_input(),
               kernel <- kernel_for(input),
               d <- integer(1..2),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         result = Nx.conv(input, kernel, input_dilation: [d, d])
         assert is_struct(result, Nx.Tensor)
@@ -165,7 +167,7 @@ defmodule Nx.FuzzConvTest do
     property "conv with kernel_dilation doesn't crash for small values" do
       check all(
               input <- nchw_input(),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         # Pick a small kernel so kernel_dilation 2 doesn't blow past input.
         {_, c_in, _, _} = Nx.shape(input)
@@ -183,7 +185,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         # Transpose input to NHWC then pass input_permutation to
         # restore NCHW-style processing.
@@ -198,7 +200,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         result = Nx.conv(input, kernel, output_permutation: [0, 2, 3, 1])
         assert is_struct(result, Nx.Tensor)
@@ -212,7 +214,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         baseline = Nx.conv(input, kernel)
         grouped = Nx.conv(input, kernel, feature_group_size: 1)
@@ -240,7 +242,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         grad =
           Nx.Defn.grad(input, fn x ->
@@ -255,7 +257,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         grad =
           Nx.Defn.grad(input, fn x ->
@@ -270,7 +272,7 @@ defmodule Nx.FuzzConvTest do
       check all(
               input <- nchw_input(),
               kernel <- kernel_for(input),
-              max_runs: 8
+              max_runs: 8 * @fuzz_scale
             ) do
         input_nhwc = Nx.transpose(input, axes: [0, 2, 3, 1])
 
@@ -374,13 +376,13 @@ defmodule Nx.FuzzConvTest do
 
   describe "value oracle vs reference implementation" do
     property "baseline conv values match the reference" do
-      check all({x, k} <- f64_pair(), max_runs: 10) do
+      check all({x, k} <- f64_pair(), max_runs: 10 * @fuzz_scale) do
         assert_all_close(Nx.conv(x, k), reference_conv(x, k, []), atol: 1.0e-9)
       end
     end
 
     property "strided conv values match the reference" do
-      check all({x, k} <- f64_pair(), s <- integer(1..2), max_runs: 10) do
+      check all({x, k} <- f64_pair(), s <- integer(1..2), max_runs: 10 * @fuzz_scale) do
         opts = [strides: [s, s]]
         assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
       end
@@ -391,7 +393,7 @@ defmodule Nx.FuzzConvTest do
               {x, k} <- f64_pair(),
               p_lo <- integer(0..2),
               p_hi <- integer(0..2),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         opts = [padding: [{p_lo, p_hi}, {p_hi, p_lo}]]
         assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
@@ -399,14 +401,14 @@ defmodule Nx.FuzzConvTest do
     end
 
     property "input-dilated conv values match the reference" do
-      check all({x, k} <- f64_pair(), d <- integer(1..2), max_runs: 10) do
+      check all({x, k} <- f64_pair(), d <- integer(1..2), max_runs: 10 * @fuzz_scale) do
         opts = [input_dilation: [d, d], padding: [{1, 1}, {1, 1}]]
         assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
       end
     end
 
     property "kernel-dilated conv values match the reference" do
-      check all({x, k} <- f64_pair(), d <- integer(1..2), max_runs: 10) do
+      check all({x, k} <- f64_pair(), d <- integer(1..2), max_runs: 10 * @fuzz_scale) do
         # ensure the dilated kernel still fits: pad enough
         opts = [kernel_dilation: [d, d], padding: [{2, 2}, {2, 2}]]
         assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
@@ -421,7 +423,7 @@ defmodule Nx.FuzzConvTest do
               o_per_g <- integer(1..2),
               hw <- integer(3..5),
               khw <- integer(1..2),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         c = groups * c_per_g
         o = groups * o_per_g
@@ -437,7 +439,12 @@ defmodule Nx.FuzzConvTest do
     end
 
     property "combined stride+padding+kernel-dilation values match the reference" do
-      check all({x, k} <- f64_pair(), s <- integer(1..2), d <- integer(1..2), max_runs: 10) do
+      check all(
+              {x, k} <- f64_pair(),
+              s <- integer(1..2),
+              d <- integer(1..2),
+              max_runs: 10 * @fuzz_scale
+            ) do
         opts = [strides: [s, s], kernel_dilation: [d, d], padding: [{2, 1}, {1, 2}]]
         assert_all_close(Nx.conv(x, k, opts), reference_conv(x, k, opts), atol: 1.0e-9)
       end

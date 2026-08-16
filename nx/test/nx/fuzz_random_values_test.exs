@@ -8,6 +8,8 @@ defmodule Nx.FuzzRandomValuesTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Value generators ──────────────────────────────────────────────
 
   defp normal_float do
@@ -96,7 +98,7 @@ defmodule Nx.FuzzRandomValuesTest do
         check all(
                 shape <- random_shape(),
                 t <- random_tensor(shape, :f32),
-                max_runs: 30
+                max_runs: 30 * @fuzz_scale
               ) do
           result = apply(Nx, unquote(op), [t])
           assert Nx.shape(result) == shape
@@ -108,7 +110,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape(),
               t <- random_tensor(shape, :f32),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         result = Nx.sigmoid(t)
         assert Nx.shape(result) == shape
@@ -126,7 +128,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape(),
               t <- random_tensor(shape, :f32),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         t = Nx.clip(t, -100, 100)
         result = Nx.sigmoid(t)
@@ -145,7 +147,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape(),
               t <- random_tensor(shape, :f32),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         result = Nx.abs(t)
 
@@ -160,7 +162,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape(),
               t <- random_tensor(shape, :f32),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         result = Nx.negate(Nx.negate(t))
         assert Nx.shape(result) == shape
@@ -181,7 +183,7 @@ defmodule Nx.FuzzRandomValuesTest do
               shape <- random_shape(),
               a <- random_tensor(shape, :f32),
               b <- random_tensor(shape, :f32),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         ab = Nx.add(a, b)
         ba = Nx.add(b, a)
@@ -199,7 +201,7 @@ defmodule Nx.FuzzRandomValuesTest do
               shape <- random_shape(),
               a <- random_tensor(shape, :f32),
               b <- random_tensor(shape, :f32),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         ab = Nx.multiply(a, b)
         ba = Nx.multiply(b, a)
@@ -216,7 +218,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape(),
               t <- random_tensor(shape, :f32),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         result = Nx.add(t, 0)
 
@@ -231,7 +233,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape(),
               t <- random_tensor(shape, :f32),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         result = Nx.multiply(t, 1)
 
@@ -246,7 +248,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape(),
               t <- random_tensor(shape, :f32),
-              max_runs: 30
+              max_runs: 30 * @fuzz_scale
             ) do
         result = Nx.subtract(t, t)
 
@@ -262,7 +264,7 @@ defmodule Nx.FuzzRandomValuesTest do
 
   describe "reductions with random values" do
     property "sum of all-ones is element count" do
-      check all(shape <- random_shape() |> filter(&(Nx.size(&1) > 0)), max_runs: 20) do
+      check all(shape <- random_shape() |> filter(&(Nx.size(&1) > 0)), max_runs: 20 * @fuzz_scale) do
         t = Nx.broadcast(1.0, shape)
         result = Nx.sum(t) |> Nx.to_number()
         expected = Nx.size(shape)
@@ -274,7 +276,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape() |> filter(&(Nx.size(&1) > 0)),
               t <- random_tensor(shape, :f32),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         max_val = Nx.reduce_max(t) |> Nx.to_number()
         min_val = Nx.reduce_min(t) |> Nx.to_number()
@@ -286,7 +288,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape() |> filter(&(Nx.size(&1) > 0)),
               t <- random_tensor(shape, :f32),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         mean_val = Nx.mean(t) |> Nx.to_number()
         max_val = Nx.reduce_max(t) |> Nx.to_number()
@@ -300,7 +302,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape() |> filter(&(Nx.size(&1) > 0)),
               t <- random_tensor(shape, :f32),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         var = Nx.variance(t) |> Nx.to_number()
         assert var >= -1.0e-5
@@ -315,7 +317,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape() |> filter(&(Nx.size(&1) > 0)),
               t <- random_tensor(shape, :f32),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         roundtripped = t |> Nx.as_type(:f64) |> Nx.as_type(:f32)
         diff = Nx.subtract(roundtripped, t) |> Nx.abs() |> Nx.reduce_max() |> Nx.to_number()
@@ -337,7 +339,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape() |> filter(&(Nx.size(&1) > 0)),
               t <- random_tensor(shape, :f32),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         result = Nx.equal(t, t)
         all_true = Nx.all(result) |> Nx.to_number()
@@ -349,7 +351,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               shape <- random_shape() |> filter(&(Nx.size(&1) > 0)),
               t <- random_tensor(shape, :f32),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         result = Nx.less(t, t)
         any_true = Nx.any(result) |> Nx.to_number()
@@ -362,7 +364,7 @@ defmodule Nx.FuzzRandomValuesTest do
               shape <- random_shape() |> filter(&(Nx.size(&1) > 0)),
               a <- random_tensor(shape, :f32),
               b <- random_tensor(shape, :f32),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         gt = Nx.greater(a, b)
         lt = Nx.less(b, a)
@@ -378,7 +380,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               m <- integer(1..8),
               n <- integer(1..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         a = Nx.tensor(for(_ <- 1..m, do: :rand.uniform() * 100 - 50), type: :f32)
         ones = Nx.broadcast(1.0, {Nx.size(a)})
@@ -391,7 +393,7 @@ defmodule Nx.FuzzRandomValuesTest do
     property "dot(I, x) == x for identity matrix" do
       check all(
               n <- integer(1..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         x = Nx.tensor(for(_ <- 1..n, do: :rand.uniform() * 100 - 50), type: :f32)
         eye = Nx.eye(n, type: :f32)
@@ -409,7 +411,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               len <- integer(1..32),
               t <- random_tensor({len}, :f32),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         sorted = Nx.sort(t, direction: :asc)
         values = Nx.to_flat_list(sorted)
@@ -421,7 +423,7 @@ defmodule Nx.FuzzRandomValuesTest do
       check all(
               len <- integer(1..16),
               t <- random_tensor({len}, :f32),
-              max_runs: 20
+              max_runs: 20 * @fuzz_scale
             ) do
         indices = Nx.argsort(t)
         sorted = Nx.take(t, indices)

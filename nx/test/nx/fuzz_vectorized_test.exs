@@ -8,6 +8,8 @@ defmodule Nx.FuzzVectorizedTest do
   use ExUnit.Case, async: true
   use ExUnitProperties
 
+  @fuzz_scale String.to_integer(System.get_env("FUZZ_SCALE", "1"))
+
   # ── Generators ─────────────────────────────────────────────────────
 
   defp vectorized_tensor do
@@ -33,7 +35,7 @@ defmodule Nx.FuzzVectorizedTest do
   describe "unary ops preserve vectorized axes" do
     for op <- @unary_ops do
       property "#{op} preserves vectorization" do
-        check all(t <- vectorized_tensor(), max_runs: 20) do
+        check all(t <- vectorized_tensor(), max_runs: 20 * @fuzz_scale) do
           result = apply(Nx, unquote(op), [t])
           assert result.vectorized_axes == t.vectorized_axes
           assert Nx.shape(result) == Nx.shape(t)
@@ -50,7 +52,7 @@ defmodule Nx.FuzzVectorizedTest do
               batch <- integer(1..6),
               cols <- integer(1..8),
               type <- member_of([:f32, :f64]),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = vectorized_tensor_with_shape(batch, {cols}, type)
 
@@ -76,7 +78,7 @@ defmodule Nx.FuzzVectorizedTest do
               batch <- integer(1..4),
               cols <- integer(1..6),
               type <- member_of([:f32]),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         a = vectorized_tensor_with_shape(batch, {cols}, type)
         b = vectorized_tensor_with_shape(batch, {cols}, type)
@@ -112,7 +114,7 @@ defmodule Nx.FuzzVectorizedTest do
                 batch <- integer(1..6),
                 cols <- integer(1..6),
                 type <- member_of([:f32, :f64]),
-                max_runs: 15
+                max_runs: 15 * @fuzz_scale
               ) do
           a = vectorized_tensor_with_shape(batch, {cols}, type)
           b = vectorized_tensor_with_shape(batch, {cols}, type)
@@ -133,7 +135,7 @@ defmodule Nx.FuzzVectorizedTest do
                 batch <- integer(1..6),
                 cols <- integer(1..8),
                 type <- member_of([:f32]),
-                max_runs: 15
+                max_runs: 15 * @fuzz_scale
               ) do
           t = vectorized_tensor_with_shape(batch, {cols}, type)
           result = apply(Nx, unquote(op), [t])
@@ -149,7 +151,7 @@ defmodule Nx.FuzzVectorizedTest do
               rows <- integer(1..4),
               cols <- integer(1..4),
               type <- member_of([:f32]),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = vectorized_tensor_with_shape(batch, {rows, cols}, type)
         result = Nx.sum(t, axes: [0])
@@ -166,7 +168,7 @@ defmodule Nx.FuzzVectorizedTest do
       check all(
               batch <- integer(1..4),
               type <- member_of([:f32]),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = vectorized_tensor_with_shape(batch, {2, 3}, type)
         result = Nx.reshape(t, {6})
@@ -181,7 +183,7 @@ defmodule Nx.FuzzVectorizedTest do
               rows <- integer(1..4),
               cols <- integer(1..4),
               type <- member_of([:f32]),
-              max_runs: 10
+              max_runs: 10 * @fuzz_scale
             ) do
         t = vectorized_tensor_with_shape(batch, {rows, cols}, type)
         result = Nx.transpose(t)
@@ -195,7 +197,7 @@ defmodule Nx.FuzzVectorizedTest do
               batch <- integer(1..4),
               n <- integer(1..6),
               type <- member_of([:f32]),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = vectorized_tensor_with_shape(batch, {1, n}, type)
         result = Nx.squeeze(t, axes: [0])
@@ -212,7 +214,7 @@ defmodule Nx.FuzzVectorizedTest do
       check all(
               batch <- integer(1..6),
               cols <- integer(1..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = vectorized_tensor_with_shape(batch, {cols}, :f32)
         result = Nx.add(t, 1.0)
@@ -225,7 +227,7 @@ defmodule Nx.FuzzVectorizedTest do
       check all(
               batch <- integer(1..6),
               cols <- integer(1..8),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = vectorized_tensor_with_shape(batch, {cols}, :f32)
         result = Nx.multiply(t, 2.0)
@@ -242,7 +244,7 @@ defmodule Nx.FuzzVectorizedTest do
         check all(
                 batch <- integer(1..4),
                 cols <- integer(1..6),
-                max_runs: 10
+                max_runs: 10 * @fuzz_scale
               ) do
           a = vectorized_tensor_with_shape(batch, {cols}, :f32)
           b = vectorized_tensor_with_shape(batch, {cols}, :f32)
@@ -262,7 +264,7 @@ defmodule Nx.FuzzVectorizedTest do
               batch <- integer(1..6),
               cols <- integer(1..8),
               type <- member_of([:f32, :f64]),
-              max_runs: 15
+              max_runs: 15 * @fuzz_scale
             ) do
         t = vectorized_tensor_with_shape(batch, {cols}, type)
         devec = Nx.devectorize(t, keep_names: false)
