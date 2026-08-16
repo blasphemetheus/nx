@@ -120,8 +120,16 @@ Status key: [ ] planned · [~] in progress · [x] landed
   (isolation across merge/split boundaries) and mixed request sizes,
   input-stream equality. No live bugs found. Partition concurrency and
   batch_keys left as follow-ups.
-- [ ] **T3.3 `shard_jit`/`Nx.Mesh` equivalence.** sharded == unsharded on the
-  Evaluator; smoke coverage for the newest subsystem in the tree.
+- [x] **T3.3 `shard_jit`/`Nx.Mesh` equivalence.** Landed 2026-08-16:
+  `exla/test/exla/defn/sharding_fuzz_test.exs` (3 properties) — shard inputs
+  by hand, run `EXLA.shard_jit` across the mesh, reassemble per-device
+  outputs, demand exact equality with the unsharded computation. Covers a
+  1-D mesh (axis-0 sharding, 4-function elementwise vocabulary), tuple
+  outputs, and a 2×2 mesh with block sharding. No live bugs found.
+  Premise correction vs the original plan: sharding is EXLA-only — the
+  Evaluator's `__shard_jit__` raises by design — so the suite lives in
+  exla/ and runs under `:multi_device`
+  (`EXLA_TARGET=host XLA_FLAGS=--xla_force_host_platform_device_count=4`).
 
 ### Cheap wins (no new code)
 
