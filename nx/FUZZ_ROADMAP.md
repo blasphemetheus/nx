@@ -131,8 +131,17 @@ Status key: [ ] planned · [~] in progress · [x] landed
   exla/ and runs under `:multi_device`
   (`EXLA_TARGET=host XLA_FLAGS=--xla_force_host_platform_device_count=4`).
 
-### Cheap wins (no new code)
+### Cheap wins
 
-- [ ] Bump `max_runs` on strong-oracle suites (invariants, grad, second-order)
-  for overnight runs — current budgets are 8–40.
-- [ ] Pin StreamData seeds in CI output for reproducibility of failures.
+- [x] **Deep-run scaling.** Landed 2026-08-16: every property's budget is now
+  `N * @fuzz_scale` with `@fuzz_scale` read from the `FUZZ_SCALE` env var
+  (default 1 — CI unchanged; inner `max_runs: 1` value-generation clauses
+  stay fixed to avoid quadratic blowup). Overnight harness: repeated
+  corpus runs at `FUZZ_SCALE=25` with a fresh `--seed` per iteration
+  (seed diversity finds more than single-seed depth), plus torchx/exla
+  differential and sharding legs. Needs `--timeout 600000` — deep budgets
+  exceed ExUnit's 60s default on the reduction properties.
+- [x] **Seed reproducibility** — already satisfied, no change needed:
+  StreamData derives its value stream from ExUnit's seed, which every run
+  prints (`Running ExUnit with seed: N`); rerun with `--seed N` to
+  reproduce any property failure exactly.
