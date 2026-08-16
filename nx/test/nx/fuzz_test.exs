@@ -42,7 +42,11 @@ defmodule Nx.FuzzTest do
   end
 
   defp tensor_shape do
-    # Rank 0 (scalar) through rank 4
+    # Rank 0 (scalar) through rank 4. Element count is capped globally:
+    # this file's oracles are crash+shape, which gain nothing from huge
+    # tensors, and unbounded shapes (up to 64x64x64) blow the test
+    # timeout at high FUZZ_SCALE (overnight runs: reductions at iter 5,
+    # broadcast at iter 97). 0-dims and edge shapes are preserved.
     frequency([
       {2, constant({})},
       {4, map(tensor_dim(), &{&1})},
@@ -54,6 +58,7 @@ defmodule Nx.FuzzTest do
          end)
        end)}
     ])
+    |> filter(&(Tuple.product(&1) <= 2048))
   end
 
   defp non_empty_shape do
