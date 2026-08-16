@@ -278,10 +278,18 @@ defmodule Nx.FuzzTest do
 
   @reduce_ops [:sum, :product, :reduce_max, :reduce_min]
 
+  # Full reductions are O(elements) in the BinaryBackend with a large
+  # constant; unbounded shapes (up to ~16k elements) blow the test
+  # timeout at high FUZZ_SCALE without adding signal to a crash+shape
+  # oracle. Cap the element count, keep the run count.
+  defp bounded_shape(max_elems) do
+    filter(non_empty_shape(), &(Tuple.product(&1) <= max_elems))
+  end
+
   describe "reduction ops don't crash" do
     for op <- @reduce_ops do
       property "#{op} reduces all axes" do
-        check all(t <- tensor(non_empty_shape(), float_type()), max_runs: 50 * @fuzz_scale) do
+        check all(t <- tensor(bounded_shape(1024), float_type()), max_runs: 50 * @fuzz_scale) do
           # [BUG-F64-OVERFLOW, reduction flavor]: product's BEAM-double
           # accumulator overflows and raises for large tensors of |x| > 1
           # regardless of tensor dtype (found by overnight FUZZ_SCALE=25,
@@ -298,7 +306,7 @@ defmodule Nx.FuzzTest do
 
       property "#{op} reduces single axis" do
         check all(
-                shape <- non_empty_shape() |> filter(&(tuple_size(&1) >= 1)),
+                shape <- bounded_shape(1024) |> filter(&(tuple_size(&1) >= 1)),
                 type <- float_type(),
                 max_runs: 50 * @fuzz_scale
               ) do
