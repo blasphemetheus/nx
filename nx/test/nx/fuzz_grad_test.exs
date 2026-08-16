@@ -84,6 +84,25 @@ defmodule Nx.FuzzGradTest do
     Nx.tensor(for(_ <- 1..n, do: :rand.uniform() * range + min), type: :f64)
   end
 
+  # Order-statistic ops (window_min/max) have subgradient kinks at ties:
+  # finite differences are invalid when two comparable elements sit within
+  # the FD step (1e-4) of each other — the perturbation flips the argmin
+  # and reports a fractional split (overnight run, seed 774902130, two
+  # elements 5.9e-6 apart). Redraw until all pairwise gaps clear 100x step.
+  defp separated_input(n, opts \\ []) do
+    x = random_input(n, opts)
+    values = Nx.to_flat_list(x)
+    sorted = Enum.sort(values)
+
+    min_gap =
+      sorted
+      |> Enum.zip(tl(sorted))
+      |> Enum.map(fn {a, b} -> b - a end)
+      |> Enum.min(fn -> 1.0 end)
+
+    if min_gap >= 1.0e-2, do: x, else: separated_input(n, opts)
+  end
+
   # ── Unary element-wise gradients ──────────────────────────────────
 
   describe "unary element-wise gradients" do
@@ -469,7 +488,7 @@ defmodule Nx.FuzzGradTest do
   describe "window op gradients" do
     property "grad of sum(window_sum(x, {2}))" do
       check all(n <- integer(3..8), max_runs: 8 * @fuzz_scale) do
-        x = random_input(n)
+        x = separated_input(n)
         check_grad(fn x -> Nx.sum(Nx.window_sum(x, {2})) end, x)
       end
     end
@@ -477,21 +496,21 @@ defmodule Nx.FuzzGradTest do
     property "grad of sum(window_max(x, {2}))" do
       check all(n <- integer(3..8), max_runs: 8 * @fuzz_scale) do
         # Use distinct values so max has clear winner
-        x = random_input(n)
+        x = separated_input(n)
         check_grad(fn x -> Nx.sum(Nx.window_max(x, {2})) end, x, atol: 0.1, rtol: 0.1)
       end
     end
 
     property "grad of sum(window_min(x, {2}))" do
       check all(n <- integer(3..8), max_runs: 8 * @fuzz_scale) do
-        x = random_input(n)
+        x = separated_input(n)
         check_grad(fn x -> Nx.sum(Nx.window_min(x, {2})) end, x, atol: 0.1, rtol: 0.1)
       end
     end
 
     property "grad of sum(window_sum(x, {3}, strides: [2]))" do
       check all(n <- integer(5..12), max_runs: 8 * @fuzz_scale) do
-        x = random_input(n)
+        x = separated_input(n)
         check_grad(fn x -> Nx.sum(Nx.window_sum(x, {3}, strides: [2])) end, x)
       end
     end
