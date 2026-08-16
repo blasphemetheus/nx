@@ -112,8 +112,14 @@ Status key: [ ] planned · [~] in progress · [x] landed
   - True three-way EXLA↔Torchx↔Binary in one test env is blocked by the
     umbrella layout (separate apps); both differential files share
     BinaryBackend as the hub, giving transitive coverage.
-- [ ] **T3.2 `Nx.Serving`/`Nx.Batch` metamorphic.** Results invariant to batch
-  split/merge boundaries; streaming; partition concurrency.
+- [x] **T3.2 `Nx.Serving`/`Nx.Batch` metamorphic.** Landed 2026-08-15:
+  `fuzz_serving_batch_test.exs` (6 properties + 3 tests) — Batch
+  stack/split/pad structure, inline-serving topology invariance (run ==
+  direct, batch_size splits, split-halves == whole, padded == plain),
+  supervised-process serving with 16 concurrent batched_run requests
+  (isolation across merge/split boundaries) and mixed request sizes,
+  input-stream equality. No live bugs found. Partition concurrency and
+  batch_keys left as follow-ups.
 - [ ] **T3.3 `shard_jit`/`Nx.Mesh` equivalence.** sharded == unsharded on the
   Evaluator; smoke coverage for the newest subsystem in the tree.
 
