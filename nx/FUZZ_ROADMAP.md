@@ -141,6 +141,15 @@ Status key: [ ] planned · [~] in progress · [x] landed
   (seed diversity finds more than single-seed depth), plus torchx/exla
   differential and sharding legs. Needs `--timeout 600000` — deep budgets
   exceed ExUnit's 60s default on the reduction properties.
+- [x] **First overnight run** (2026-08-16, 9h, 150 iterations, fresh seed per
+  iteration, 4 legs: nx corpus @ scale 25 / torchx diff / exla-cuda diff /
+  sharding). 6 failing iterations, all in the nx leg, all triaged live:
+  1 real bug (product-accumulator overflow — pinned, extends the
+  [f64 overflow finding](FUZZ_FINDINGS/f64_binary_op_overflow_arithmetic_error.md)
+  to every float dtype), 2 cost walls (shape generator now capped at 2048
+  elements), 2 oracle-validity fixes (SVD reconstruction tolerance tail;
+  FD-vs-tie separation for window min/max grads), 1 incomplete-fix catch.
+  Final 53 iterations fully clean; torchx/exla/sharding legs never failed.
 - [x] **Seed reproducibility** — already satisfied, no change needed:
   StreamData derives its value stream from ExUnit's seed, which every run
   prints (`Running ExUnit with seed: N`); rerun with `--seed N` to
