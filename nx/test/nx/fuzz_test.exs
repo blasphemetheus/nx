@@ -282,6 +282,13 @@ defmodule Nx.FuzzTest do
     for op <- @reduce_ops do
       property "#{op} reduces all axes" do
         check all(t <- tensor(non_empty_shape(), float_type()), max_runs: 50 * @fuzz_scale) do
+          # [BUG-F64-OVERFLOW, reduction flavor]: product's BEAM-double
+          # accumulator overflows and raises for large tensors of |x| > 1
+          # regardless of tensor dtype (found by overnight FUZZ_SCALE=25,
+          # seed 603648065). Clamp product inputs into [-1, 1] until
+          # fixed; the deterministic pin lives in fuzz_float_edge_test.exs.
+          t = if unquote(op) == :product, do: Nx.clip(t, -1.0, 1.0), else: t
+
           result = apply(Nx, unquote(op), [t])
           assert is_struct(result, Nx.Tensor)
           # Full reduction produces scalar

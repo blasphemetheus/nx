@@ -37,6 +37,23 @@ add/subtract/multiply/divide; silent `NaN` for `pow`.
 | `Nx.divide(max_t, tiny_t)` (tensor divisor) | ❌ `ArithmeticError` |
 | `Nx.add(max, max)` | ❌ `ArithmeticError` |
 
+## Reduction flavor (found 2026-08-16, overnight FUZZ_SCALE=25 run, seed 603648065)
+
+`Nx.product`'s accumulator is a BEAM double **regardless of tensor dtype**, so
+the reduction variant of this bug affects *every* float type, not just f64:
+
+```elixir
+t = Nx.broadcast(Nx.tensor(1.0e3, type: {:f, 16}), {600})
+Nx.product(t)
+# ** (ArithmeticError) bad argument in arithmetic expression: 863.0 * -4.397e306
+```
+
+The correct f16 result is Inf. The element-wise variant spares narrow dtypes
+because encode-time clamping catches the oversized double; a reduction
+accumulator overflows *before* any encode happens. Pinned in
+`fuzz_float_edge_test.exs`; the smoke suite clamps product inputs to [-1, 1]
+until fixed.
+
 ## Root cause hypothesis
 
 BEAM floats are f64 with no Inf/NaN representation — overflow in native

@@ -272,6 +272,17 @@ defmodule Nx.FuzzFloatEdgeTest do
       f32_max = Nx.from_binary(<<0x7F7FFFFF::32-native>>, {:f, 32})
       assert Nx.to_flat_list(Nx.multiply(f32_max, f32_max)) == [:infinity]
     end
+
+    test "reduction flavor: product accumulator overflow raises for EVERY float dtype" do
+      # Found by the overnight FUZZ_SCALE=25 run (seed 603648065): the
+      # product accumulator is a BEAM double regardless of tensor dtype,
+      # so ~600 elements of magnitude 1e3 overflow it and raise — even
+      # for f16, whose own max is 65504 and whose correct result is Inf.
+      # The element-wise variant spares narrow dtypes via encode-time
+      # clamping; a reduction accumulator never reaches the encode step.
+      t = Nx.broadcast(Nx.tensor(1.0e3, type: {:f, 16}), {600})
+      assert_raise ArithmeticError, fn -> Nx.product(t) end
+    end
   end
 
   describe "cancellation" do
