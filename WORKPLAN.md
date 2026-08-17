@@ -29,7 +29,9 @@ maintainer call; silent-wrong-output severity beats crashes.
 
 ## Phase 2 — non-finite/overflow cluster (discussion first)
 
-4. **File ONE consolidated issue** with the full matrix from
+4a. **eigh batched 1x1 fix** -> SUBMITTED: https://github.com/elixir-nx/nx/pull/1821 (PR-only, no issue — fix direction needed no maintainer input; preview was fork PR 19). Leftover corner: pinv double-batch 1x1 transposed-batch-axes, separate.
+
+4. **File specific smaller issues** (NOT one bundle — user preference) with the full matrix from
    `nx/FUZZ_FINDINGS/{unary_nonfinite_crashes_and_wrong_values,
    f64_binary_op_overflow_arithmetic_error}.md`: floor/ceil/round/atanh
    crashes; tanh(±Inf)=NaN, sign(NaN)=1.0, sign(-Inf)=+1.0 wrong values;
