@@ -14,12 +14,28 @@ Crashes for any batched input where a matrix dimension is 1:
 `{2, 1, 1}`, `{2, 1, 2}`, `{2, 2, 1}`. Unbatched `{1, 1}` and `{1, n}`
 work fine.
 
-## Classification
+## Root cause (diagnosed 2026-08-17)
 
-Separate from [pinv_batched_forward_crash.md](pinv_batched_forward_crash.md)
-(whose n>=2 modes are fixed by the pinv batched-dot PR); this svd bug is
-what remains behind pinv's n=1 mode. Likely in `Nx.LinAlg.SVD`'s batched
-reshape plumbing when min(m, n) == 1. Not yet filed upstream.
+Not svd itself: svd delegates to `Nx.LinAlg.eigh`, and the bug is the
+degenerate branch of `Nx.LinAlg.BlockEigh.decompose` for n == 1:
+
+    {Nx.take_diagonal(Nx.real(matrix)), Nx.tensor([1], type: matrix.type)}
+
+The eigenvectors are a fresh CONSTANT with no vectorized axes, so the
+batch (carried via collapsed vectorized axes) is silently dropped;
+`revectorize_result` then cannot reshape 1 element into the batched
+shape. Unbatched 1x1 survives only because 1 element happens to fit.
+
+Candidate one-line fix (validated on scratch/eigh-batched-size1):
+derive the eigenvector matrix from the input so it inherits the
+vectorized axes, e.g. `Nx.multiply(matrix, 0) |> Nx.add(1)`. This
+repairs eigh/svd/pinv for all single-batch size-1 shapes and
+double-batch eigh. LEFTOVER CORNER: pinv on a double-batch of 1x1
+({3,2,1,1}) still fails with transposed batch axes ("cannot broadcast
+{3,2,1,1} to {2,3,1,1}") somewhere in the svd composition — separate,
+deeper issue.
+
+Not yet filed upstream; draft issue on the fork for review.
 
 ## Pinned
 
