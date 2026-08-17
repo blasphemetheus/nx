@@ -18,7 +18,12 @@ maintainer call; silent-wrong-output severity beats crashes.
    silently returns rank-4 (worst severity in the queue). Fix mirrors the
    #1748-era batched handling of its siblings. Flip the three
    [BUG-PINV-BATCHED] pins in `fuzz_linalg_test.exs`.
-3. **PR C: sub-byte bitstring pair.** -> BUILT: fork draft PR 14 (branch `fix/sub-byte-bitstrings`, incl. reshape-:auto rider). HOLD upstream submission until PR A or B resolves (one-in-flight). `from_binary` is_binary→is_bitstring
+3. **PR C -> split into three single-topic fork drafts (bundled fork PR 14 closed):**
+   - C1 from_binary bitstring guard: fork PR 15 (`fix/from-binary-bitstring`)
+   - C2 inspect sub-byte crash: fork PR 16 (`fix/inspect-sub-byte`)
+   - C3 reshape :auto ArgumentError: fork PR 17 (`fix/reshape-auto-error`)
+   HOLD upstream submission per one-in-flight; these are small enough to
+   submit in quick succession once A/B resolve.
    guard + `Nx.Backend` inspect `tail::binary`→`tail::bitstring` for :s/:u.
    Pins in `fuzz_serialization_test.exs`. The reshape-two-`:auto` LOW
    (ArgumentError instead of ArithmeticError) rides along.
