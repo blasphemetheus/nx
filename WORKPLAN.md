@@ -20,7 +20,7 @@ maintainer call; silent-wrong-output severity beats crashes.
    [BUG-PINV-BATCHED] pins in `fuzz_linalg_test.exs`.
 3. **PR C -> split into three single-topic fork drafts (bundled fork PR 14 closed):**
    - C1 from_binary bitstring guard -> SUBMITTED: https://github.com/elixir-nx/nx/pull/1817 (preview was fork PR 15)
-   - C2 inspect sub-byte crash: fork PR 16 (`fix/inspect-sub-byte`)
+   - C2 inspect sub-byte crash -> SUBMITTED: https://github.com/elixir-nx/nx/pull/1818 (preview was fork PR 16)
    - C3 reshape :auto ArgumentError: fork PR 17 (`fix/reshape-auto-error`)
    HOLD upstream submission per one-in-flight; these are small enough to
    submit in quick succession once A/B resolve.
