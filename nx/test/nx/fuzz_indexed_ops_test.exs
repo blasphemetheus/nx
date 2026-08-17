@@ -30,23 +30,13 @@ defmodule Nx.FuzzIndexedOpsTest do
       Nx.sum(Nx.put_slice(t, [1], patch))
     end
 
-    # BUG-DISPATCH-put_slice-grad — one-line fix: dispatch via impl!(t, patch).
-    # Class: mixed concrete + Expr multi-tensor dispatch.
-    # See FUZZ_FINDINGS/put_slice_grad_mixed_backend_dispatch.md.
-    test "[BUG-DISPATCH-put_slice-grad] grad wrt update with captured target crashes" do
-      # Pins the CURRENT wrong behavior. When Nx.put_slice is fixed to
-      # dispatch via impl!(tensor, slice), this assert_raise will fail
-      # and the test should be flipped to assert_all_close below.
+    # FIXED-DISPATCH — fixed upstream (multi-tensor impl! dispatch).
+    test "[FIXED-DISPATCH-put_slice-grad] grad wrt update with captured target works" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       patch = Nx.tensor([10.0, 20.0])
 
-      assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
-        Nx.Defn.grad(patch, fn p -> put_slice_sum(t, p) end)
-      end
-
-      # Once fixed, replace the above with:
-      #   grad = Nx.Defn.grad(patch, fn p -> put_slice_sum(t, p) end)
-      #   assert_all_close(grad, Nx.tensor([1.0, 1.0]), atol: 1.0e-6)
+      grad = Nx.Defn.grad(patch, fn p -> put_slice_sum(t, p) end)
+      assert_all_close(grad, Nx.tensor([1.0, 1.0]), atol: 1.0e-6)
     end
 
     test "grad wrt target with captured update works (control)" do
@@ -79,24 +69,20 @@ defmodule Nx.FuzzIndexedOpsTest do
     # The bug is not grad-specific — any Nx.Defn.jit closure over a
     # concrete tensor hits the same impl!/1 dispatch path.
 
-    # BUG-DISPATCH-put_slice-jit — same fix as grad variant; bug is not grad-specific.
-    test "[BUG-DISPATCH-put_slice-jit] jit(fn p -> put_slice(captured_t, p) end) crashes" do
+    test "[FIXED-DISPATCH-put_slice-jit] jit(fn p -> put_slice(captured_t, p) end) works" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       jitted = Nx.Defn.jit(fn p -> Nx.sum(Nx.put_slice(t, [1], p)) end)
 
-      assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
-        jitted.(Nx.tensor([10.0, 20.0]))
-      end
+      assert_all_close(jitted.(Nx.tensor([10.0, 20.0])), Nx.tensor(40.0), atol: 1.0e-6)
     end
 
-    # BUG-DISPATCH-clip-jit — same class as put_slice dispatch.
-    test "[BUG-DISPATCH-clip-jit] jit(fn lo -> clip(captured_t, lo, hi) end) crashes" do
+    test "[FIXED-DISPATCH-clip-jit] jit(fn lo -> clip(captured_t, lo, hi) end) works" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       jitted = Nx.Defn.jit(fn lo -> Nx.clip(t, lo, 10.0) end)
 
-      assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
-        jitted.(Nx.tensor(1.5))
-      end
+      assert_all_close(jitted.(Nx.tensor(1.5)), Nx.tensor([1.5, 2.0, 3.0, 4.0, 5.0]),
+        atol: 1.0e-6
+      )
     end
 
     # BUG-EXPRBLOCK-take-jit — different class (Expr.expr_block, not impl!/1 dispatch).
@@ -123,33 +109,30 @@ defmodule Nx.FuzzIndexedOpsTest do
     defn clip_sum(t, lo, hi), do: Nx.sum(Nx.clip(t, lo, hi))
     defn gather_sum(t, idx), do: Nx.sum(Nx.gather(t, idx))
 
-    test "[BUG-DISPATCH-clip-grad-min] clip: grad wrt min with captured target crashes" do
+    test "[FIXED-DISPATCH-clip-grad-min] clip: grad wrt min with captured target works" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       hi = Nx.tensor(4.5)
 
-      assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
-        Nx.Defn.grad(Nx.tensor(1.5), fn lo -> clip_sum(t, lo, hi) end)
-      end
+      grad = Nx.Defn.grad(Nx.tensor(1.5), fn lo -> clip_sum(t, lo, hi) end)
+      assert_all_close(grad, Nx.tensor(1.0), atol: 1.0e-6)
     end
 
-    test "[BUG-DISPATCH-clip-grad-max] clip: grad wrt max with captured target crashes" do
+    test "[FIXED-DISPATCH-clip-grad-max] clip: grad wrt max with captured target works" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       lo = Nx.tensor(1.5)
 
-      assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
-        Nx.Defn.grad(Nx.tensor(4.5), fn hi -> clip_sum(t, lo, hi) end)
-      end
+      grad = Nx.Defn.grad(Nx.tensor(4.5), fn hi -> clip_sum(t, lo, hi) end)
+      assert_all_close(grad, Nx.tensor(1.0), atol: 1.0e-6)
     end
 
-    test "[BUG-DISPATCH-gather] gather: concrete source + Expr indices crashes" do
-      # Grad wrt indices is semantically meaningless (int type), but
-      # the dispatch should still route to Expr rather than crash.
+    test "[FIXED-DISPATCH-gather] gather: concrete source + Expr indices routes correctly" do
+      # Grad wrt integer indices is zero, but the dispatch must route
+      # to Expr rather than crash in BinaryBackend.to_binary/1.
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
       idx_f = Nx.tensor([[0.0], [2.0], [4.0]])
 
-      assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
-        Nx.Defn.grad(idx_f, fn i -> gather_sum(t, Nx.as_type(i, :s32)) end)
-      end
+      grad = Nx.Defn.grad(idx_f, fn i -> gather_sum(t, Nx.as_type(i, :s32)) end)
+      assert_all_close(grad, Nx.broadcast(0.0, {3, 1}), atol: 1.0e-6)
     end
   end
 
@@ -164,18 +147,19 @@ defmodule Nx.FuzzIndexedOpsTest do
       Nx.window_reduce(t, acc, {2}, fn a, b -> Nx.max(a, b) end)
     end
 
-    test "[BUG-DISPATCH-reduce] reduce: grad wrt acc with captured source crashes" do
+    test "[FIXED-DISPATCH-reduce] reduce: correct dispatch surfaces the documented no-grad error" do
+      # The dispatch crash previously masked the intended error.
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
 
-      assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
+      assert_raise ArgumentError, ~r/cannot compute gradient for Nx.reduce\/4/, fn ->
         Nx.Defn.grad(Nx.tensor(0.0), fn a -> reduce_to_scalar(t, a) end)
       end
     end
 
-    test "[BUG-DISPATCH-window_reduce] window_reduce: grad wrt acc with captured source crashes" do
+    test "[FIXED-DISPATCH-window_reduce] window_reduce: correct dispatch surfaces the documented no-grad error" do
       t = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0])
 
-      assert_raise FunctionClauseError, ~r/Nx\.BinaryBackend\.to_binary/, fn ->
+      assert_raise ArgumentError, ~r/cannot compute gradient for Nx.window_reduce\/5/, fn ->
         Nx.Defn.grad(Nx.tensor(0.0), fn a -> Nx.sum(windowed_max(t, a)) end)
       end
     end

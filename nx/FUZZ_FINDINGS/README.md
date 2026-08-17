@@ -12,6 +12,11 @@ worth the maintainer's attention, we file selectively.
 
 | Class | Upstream | Summary |
 |---|---|---|
+| **FIXED 2026-08-17** — multi-tensor `impl!` dispatch | PR 1815 | put_slice/clip/gather/reduce/window_reduce now dispatch via impl!/2,3; pins flipped |
+| **FIXED 2026-08-17** — batched pinv (n>=2) | PR 1816 | batched dot via batch_axes; n=1 still blocked by svd size-1 bug | 
+| **FIXED 2026-08-17** — from_binary sub-byte bitstrings | PR 1817 | guard is is_bitstring; round trip works; pins flipped |
+| **FIXED 2026-08-17** — inspect sub-byte crash | PR 1818 | tail::bitstring in :s/:u branches; pins flipped |
+| **FIXED 2026-08-17** — reshape multiple :auto | PR 1819 | descriptive ArgumentError; error-contract table updated |
 | batched-input grad in `Nx.LinAlg` (multi-op) | [meta #1748](https://github.com/elixir-nx/nx/issues/1748), per-op #1741–#1746 | `custom_grad` formulas assume 2D input; break silently for batched |
 | `Nx.LinAlg.eigh` grad | [#1740](https://github.com/elixir-nx/nx/issues/1740) | 2D and f64 inputs crash; only 3D batch-1 f32 works |
 | `Nx.Defn.while` reverse-mode AD | [#1747](https://github.com/elixir-nx/nx/issues/1747) | Wrong grad when loop body's Jacobian wrt accumulator depends on differentiated variable |
@@ -29,13 +34,7 @@ Priority key:
 |---|---|---|---|
 | **HIGH** | unary non-finite handling | [unary_nonfinite_crashes_and_wrong_values.md](unary_nonfinite_crashes_and_wrong_values.md) | `floor`/`ceil`/`round`/`atanh` crash on NaN/±Inf; `tanh(±Inf)` returns NaN (should be ±1), `sign(NaN)` returns 1.0 (should be NaN), `sign(-Inf)` returns **+1.0** (sign error). Found by T1.1 probe (2026-08-14). Pinned in `fuzz_float_edge_test.exs`. |
 | **HIGH** | f64 binary-op overflow | [f64_binary_op_overflow_arithmetic_error.md](f64_binary_op_overflow_arithmetic_error.md) | `Nx.add(max, max)`, `Nx.multiply(max, 2.0)`, tensor-divisor `divide` raise `ArithmeticError` when the f64 result overflows — IEEE requires ±Inf. `pow` silently returns NaN. f32/unary/scalar paths handled, tensor f64 paths not. **Reduction flavor affects ALL float dtypes**: `Nx.product` of ~600 × 1e3 f16 values crashes (accumulator is a BEAM double; found by overnight FUZZ_SCALE=25, 2026-08-16). Pinned in `fuzz_float_edge_test.exs`. |
-| **HIGH** | multi-tensor op dispatch uses `impl!/1` | [put_slice_grad_mixed_backend_dispatch.md](put_slice_grad_mixed_backend_dispatch.md) | `put_slice` / `gather` / `clip` / `reduce` / `window_reduce` dispatch on the first tensor's backend only; mixed concrete+Expr args crash in `BinaryBackend.to_binary/1`. **Not grad-specific** — also fires in plain `Nx.Defn.jit` closures and defn with `@module_attribute` tensors. One-line fix per op: use `impl!(a, b)`. Pinned in `fuzz_indexed_ops_test.exs`. |
-| **HIGH** | `Expr.expr_block` doesn't normalize args | [take_grad_with_captured_indices.md](take_grad_with_captured_indices.md) | `Nx.take` / `Nx.take_along_axis` / `Nx.all_close` route correctly to `Expr.block/4`, but `expr_block` calls `parameter/2` on args without `to_expr/1` first — crashes in `parameter/2` on any concrete tensor. Fix: `Enum.map(args, &to_expr/1)`. Pinned in `fuzz_indexed_ops_test.exs`. |
-| **HIGH** | `pinv` batched forward broken | [pinv_batched_forward_crash.md](pinv_batched_forward_crash.md) | `Nx.LinAlg.pinv` on batched input: n=1 reshape-crashes, n=2 **silently returns a rank-4 tensor** (wrong output, no error), n≥3 broadcast-crashes; siblings all support batching post-#1748. Found 2026-08-14. Pinned in `fuzz_linalg_test.exs`. |
-| **MED** | `Nx.from_binary` rejects bitstrings from `Nx.to_binary` | [from_binary_rejects_sub_byte_bitstrings.md](from_binary_rejects_sub_byte_bitstrings.md) | `to_binary` returns bitstrings for sub-byte types with non-aligned bit counts (docs acknowledge this); `from_binary`'s `is_binary` guard rejects bitstrings. Documented inverse round-trip crashes. One-line fix: guard becomes `is_bitstring`. Pinned in `fuzz_serialization_test.exs`. |
-| **MED** | `Nx.Backend.inspect` crashes on sub-byte int tensors | [inspect_crashes_on_sub_byte_int_tensors.md](inspect_crashes_on_sub_byte_int_tensors.md) | `IO.inspect` on any `u2/u4/s2/s4` tensor raises `MatchError` in `chunk/5` because `:s` and `:u` branches use `tail::binary` instead of `tail::bitstring`. Float branch already does it right. Affects BinaryBackend AND Torchx (the inspect code is shared). Pinned in `fuzz_serialization_test.exs`. |
 | **LOW-MED** | `svd` batched size-1 crash | [svd_batched_size1_crash.md](svd_batched_size1_crash.md) | `Nx.LinAlg.svd` crashes on any batched matrix with a size-1 dimension ({2,1,1}/{2,1,2}/{2,2,1}); root cause behind pinv n=1 mode. Found 2026-08-17 building PR B. |
-| **LOW** | `Nx.reshape` with multiple `:auto` | [reshape_multiple_auto_error_message.md](reshape_multiple_auto_error_message.md) | Bare `ArithmeticError` instead of a helpful `ArgumentError`. UX-only, not correctness. Not pinned as test. |
 
 ### Suggested filing order
 

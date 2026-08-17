@@ -40,30 +40,22 @@ defmodule Nx.FuzzSerializationTest do
       refute rem(bit_size(bin), 8) == 0
     end
 
-    # BUG-FROMBIN-u4-3elem — Nx.from_binary's is_binary guard rejects bitstrings.
-    # Fix: guard becomes is_bitstring (to_binary/from_binary are an inverse pair).
-    # See FUZZ_FINDINGS/from_binary_rejects_sub_byte_bitstrings.md.
-    test "[BUG-FROMBIN-u4-3elem] from_binary rejects the bitstring that to_binary produces (u4, 3 elements)" do
+    # FIXED-FROMBIN — fixed upstream (from_binary guard is is_bitstring now).
+    test "[FIXED-FROMBIN-u4-3elem] from_binary accepts the bitstring that to_binary produces (u4, 3 elements)" do
       t = Nx.tensor([0, 7, 15], type: :u4)
       bin = Nx.to_binary(t)
 
-      assert_raise FunctionClauseError, fn ->
-        Nx.from_binary(bin, :u4)
-      end
-
-      # Once fixed (relax guard to is_bitstring), replace with:
-      #   rt = Nx.from_binary(bin, :u4) |> Nx.reshape({3})
-      #   assert_equal(rt, t)
+      rt = Nx.from_binary(bin, :u4) |> Nx.reshape({3})
+      assert_equal(rt, t)
     end
 
-    test "[BUG-FROMBIN-u2-3elem] u2 tensor with 3 elements fails the same way" do
+    test "[FIXED-FROMBIN-u2-3elem] u2 tensor with 3 elements round-trips" do
       t = Nx.tensor([0, 1, 2], type: :u2)
       bin = Nx.to_binary(t)
       assert bit_size(bin) == 6
 
-      assert_raise FunctionClauseError, fn ->
-        Nx.from_binary(bin, :u2)
-      end
+      rt = Nx.from_binary(bin, :u2) |> Nx.reshape({3})
+      assert_equal(rt, t)
     end
 
     test "aligned sub-byte cases round-trip fine (4 u4 = 16 bits)" do
@@ -223,34 +215,26 @@ defmodule Nx.FuzzSerializationTest do
     # Nx.Backend.chunk/5 uses `tail::binary` in :s and :u branches;
     # should be `tail::bitstring` (as the float branch already does).
 
-    # BUG-INSPECT-u4 — Nx.Backend.chunk/5 uses tail::binary; should be tail::bitstring.
-    # Float branch already does it right. Affects BinaryBackend AND Torchx.
-    # See FUZZ_FINDINGS/inspect_crashes_on_sub_byte_int_tensors.md.
-    test "[BUG-INSPECT-u4] u4 tensor crashes inspect" do
+    # FIXED-INSPECT — fixed upstream (chunking uses tail::bitstring for :s/:u).
+    test "[FIXED-INSPECT-u4] u4 tensor inspects" do
       t = Nx.tensor([0, 1, 2, 3], type: :u4)
 
       result = inspect(t)
-      assert result =~ "Inspect.Error"
-      assert result =~ "MatchError"
-
-      # Once fixed, replace with:
-      #   assert result =~ "u4"
-      #   assert result =~ "[0, 1, 2, 3]"
+      assert result =~ "u4"
+      assert result =~ "[0, 1, 2, 3]"
     end
 
-    test "[BUG-INSPECT-s2] s2 tensor crashes inspect" do
+    test "[FIXED-INSPECT-s2] s2 tensor inspects" do
       t = Nx.tensor([-2, -1, 0, 1], type: :s2)
       result = inspect(t)
-      assert result =~ "Inspect.Error"
-      assert result =~ "MatchError"
+      assert result =~ "s2"
+      assert result =~ "[-2, -1, 0, 1]"
     end
 
-    test "[BUG-INSPECT-u4-size2] u4 of size 2 also crashes (tail misaligned after one element)" do
-      # [0, 1] = 8 bits total. After consuming one u4, tail is 4 bits —
-      # not byte-aligned, so chunk/5 crashes.
+    test "[FIXED-INSPECT-u4-size2] u4 of size 2 inspects (tail not byte-aligned after one element)" do
       t = Nx.tensor([0, 1], type: :u4)
       result = inspect(t)
-      assert result =~ "Inspect.Error"
+      assert result =~ "[0, 1]"
     end
   end
 end

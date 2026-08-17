@@ -717,26 +717,21 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    # LIVE BUG: pinv is broken on batched input in the FORWARD pass —
-    # the upstream #1748 fixes covered its siblings but not pinv. Three
-    # size-dependent failure modes; the n=2 silent rank-4 output is the
-    # worst (wrong result, no error). See
-    # FUZZ_FINDINGS/pinv_batched_forward_crash.md. Flip all three to
-    # shape assertions ({batch, n, n}) when fixed.
-    test "[BUG-PINV-BATCHED] batched pinv: n=1 crashes on reshape" do
+    # Batched pinv fixed upstream; n=1 remains blocked by a separate svd
+    # bug (FUZZ_FINDINGS/svd_batched_size1_crash.md).
+    test "[BUG-SVD-BATCHED-SIZE1] batched pinv n=1 still crashes (svd bug, not pinv)" do
       a = Nx.iota({2, 1, 1}, type: :f32) |> Nx.add(Nx.eye(1))
       assert_raise ArgumentError, ~r/cannot reshape/, fn -> Nx.LinAlg.pinv(a) end
     end
 
-    test "[BUG-PINV-BATCHED] batched pinv: n=2 silently returns rank-4 output" do
+    test "[FIXED-PINV-BATCHED] batched pinv: n=2 returns the correct shape" do
       a = Nx.iota({2, 2, 2}, type: :f32) |> Nx.add(Nx.eye(2))
-      # WRONG: should be {2, 2, 2}
-      assert Nx.shape(Nx.LinAlg.pinv(a)) == {2, 2, 2, 2}
+      assert Nx.shape(Nx.LinAlg.pinv(a)) == {2, 2, 2}
     end
 
-    test "[BUG-PINV-BATCHED] batched pinv: n>=3 crashes on broadcast" do
+    test "[FIXED-PINV-BATCHED] batched pinv: n>=3 works" do
       a = Nx.iota({2, 3, 3}, type: :f32) |> Nx.add(Nx.eye(3))
-      assert_raise ArgumentError, ~r/cannot broadcast tensor/, fn -> Nx.LinAlg.pinv(a) end
+      assert Nx.shape(Nx.LinAlg.pinv(a)) == {2, 3, 3}
     end
 
     # Class: same batched-grad class as #1741-#1746. Not separately filed.

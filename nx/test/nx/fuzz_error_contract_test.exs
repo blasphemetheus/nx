@@ -22,6 +22,7 @@ defmodule Nx.FuzzErrorContractTest do
   defp contract_cases do
     [
       {"reshape wrong size", fn -> Nx.reshape(Nx.iota({6}), {4}) end},
+      {"reshape two :auto", fn -> Nx.reshape(Nx.iota({12}), {:auto, :auto}) end},
       {"broadcast incompatible", fn -> Nx.broadcast(Nx.iota({3}), {2, 4}) end},
       {"add incompatible shapes", fn -> Nx.add(Nx.iota({3}), Nx.iota({4})) end},
       {"dot incompatible", fn -> Nx.dot(Nx.iota({2, 3}), Nx.iota({4, 2})) end},
@@ -95,16 +96,6 @@ defmodule Nx.FuzzErrorContractTest do
         for op <- [:sum, :mean, :product] do
           assert_raise ArgumentError, fn -> apply(Nx, op, [t, [axes: [bad_axis]]]) end
         end
-      end
-    end
-  end
-
-  describe "known violations ([BUG-ERROR-CONTRACT])" do
-    # See FUZZ_FINDINGS/reshape_multiple_auto_error_message.md. Flip to
-    # assert_raise ArgumentError when fixed.
-    test "reshape with two :auto leaks a bare ArithmeticError" do
-      assert_raise ArithmeticError, fn ->
-        Nx.reshape(Nx.iota({12}), {:auto, :auto})
       end
     end
   end
