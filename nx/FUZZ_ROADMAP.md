@@ -148,9 +148,15 @@ Status key: [ ] planned · [~] in progress · [x] landed
   diagonal family, tri/tril/triu, to_batched/split, bitcast,
   cumulative_product, window_product, window_scatter_min metamorphic,
   logical ops. Clean.
-- [ ] **Backend/scale frontier**: broad GPU differential sweeps, sharding
-  equivalence beyond elementwise (reductions => collectives), donation
-  semantics.
+- [x] **Backend/scale frontier** (2026-08-17): non-finite differential on
+  cuda (conventions agree except two pinned divergences — clip NaN
+  confirmed cross-backend with BinaryBackend the outlier, and NEW
+  [argmax NaN-tie divergence](FUZZ_FINDINGS/argmax_nan_tie_divergence.md));
+  large-shape GPU sweep (256x256 matmul @ precision :highest, softmax,
+  1e6 f64 reductions, 100k transcendental chain); sharding collectives
+  (sum over sharded axis all-reduces to replicated result, unsharded-axis
+  sums reassemble, dot contracting the sharded axis). Donation semantics
+  deferred.
 - [ ] **Coverage-guided gap finding**: mix test --cover over the corpus;
   aim new generators at unexecuted BinaryBackend/Shape/Grad branches.
 
