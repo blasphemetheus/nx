@@ -29,9 +29,11 @@ arm per position. Convention-consistency class (the rest of the min/max
 family — reduce/cumulative/arg — is coherent; see
 `fuzz_nonfinite_convention_test.exs`'s moduledoc for the established map).
 
-Cross-backend note: EXLA/XLA clamps via select chains that typically
-propagate NaN — so this likely also diverges across backends (untested;
-worth a differential probe before filing).
+Cross-backend divergence CONFIRMED (2026-08-17, cuda client): EXLA
+propagates NaN in all three positions — clip(NaN, 0, 2) is NaN on GPU
+and 0.0 on BinaryBackend. Same program, different results by backend.
+EXLA implements the min/max composition; BinaryBackend is the outlier.
+Every other op in the NaN convention map agrees across backends.
 
 ## Pinned
 
@@ -41,6 +43,7 @@ composition. Flip to NaN assertions when fixed.
 
 ## Priority
 
-**MED-HIGH** — silent wrong value in a guard-style op; narrow trigger
-(NaN present) but that is precisely when clip's output matters. Not yet
-filed upstream.
+**HIGH** (upgraded from MED-HIGH on divergence confirmation) — silent
+wrong value in a guard-style op AND a cross-backend divergence: code
+validated on BinaryBackend behaves differently on EXLA. Not yet filed
+upstream.
