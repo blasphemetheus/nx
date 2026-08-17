@@ -351,5 +351,13 @@ defmodule Nx.FuzzLongtailTest do
         end
       end
     end
+
+    test "logical ops treat complex zero as false, nonzero as true" do
+      # Coverage-guided: the Complex as_boolean clause was dark.
+      z = Nx.complex(Nx.tensor([0.0, 0.0, 1.0, 0.0]), Nx.tensor([0.0, 2.0, 0.0, 0.0]))
+
+      assert Nx.to_flat_list(Nx.logical_not(z)) == [1, 0, 0, 1]
+      assert Nx.to_flat_list(Nx.logical_and(z, z)) == [0, 1, 1, 0]
+    end
   end
 end

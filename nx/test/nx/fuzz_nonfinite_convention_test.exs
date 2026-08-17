@@ -163,6 +163,66 @@ defmodule Nx.FuzzNonfiniteConventionTest do
     end
   end
 
+  describe "comparison truth table over non-finites" do
+    # Coverage-guided: the BinaryBackend comparison clauses for
+    # finite-vs-Inf and NaN arms were dark under the whole test suite.
+    # IEEE reference: NaN compares false to everything (not_equal true);
+    # -Inf < finite < +Inf.
+    defp cmp_key(:neg_infinity), do: {0, 0}
+    defp cmp_key(:infinity), do: {2, 0}
+    defp cmp_key(x), do: {1, x}
+
+    defp ref_cmp(op, a, b) do
+      if a == :nan or b == :nan do
+        if op == :not_equal, do: 1, else: 0
+      else
+        result =
+          case op do
+            :equal -> a == b
+            :not_equal -> a != b
+            :greater -> cmp_key(a) > cmp_key(b)
+            :less -> cmp_key(a) < cmp_key(b)
+            :greater_equal -> cmp_key(a) >= cmp_key(b)
+            :less_equal -> cmp_key(a) <= cmp_key(b)
+          end
+
+        if result, do: 1, else: 0
+      end
+    end
+
+    property "all six comparisons match the IEEE reference" do
+      specials = [:nan, :infinity, :neg_infinity]
+
+      check all(
+              a <- one_of([float(min: -100.0, max: 100.0), member_of(specials)]),
+              b <- one_of([float(min: -100.0, max: 100.0), member_of(specials)]),
+              max_runs: 60 * @fuzz_scale
+            ) do
+        ta = Nx.tensor(a, type: {:f, 64})
+        tb = Nx.tensor(b, type: {:f, 64})
+
+        for op <- [:equal, :not_equal, :greater, :less, :greater_equal, :less_equal] do
+          assert Nx.to_number(apply(Nx, op, [ta, tb])) == ref_cmp(op, a, b),
+                 "#{op}(#{inspect(a)}, #{inspect(b)})"
+        end
+      end
+    end
+
+    test "exhaustive special-pair matrix" do
+      values = [:nan, :infinity, :neg_infinity, -1.0, 0.0, 1.0]
+
+      for a <- values,
+          b <- values,
+          op <- [:equal, :not_equal, :greater, :less, :greater_equal, :less_equal] do
+        ta = Nx.tensor(a, type: {:f, 64})
+        tb = Nx.tensor(b, type: {:f, 64})
+
+        assert Nx.to_number(apply(Nx, op, [ta, tb])) == ref_cmp(op, a, b),
+               "#{op}(#{inspect(a)}, #{inspect(b)})"
+      end
+    end
+  end
+
   describe "known bugs: clip non-finite handling ([BUG-CLIP-NONFINITE])" do
     # See FUZZ_FINDINGS/clip_nonfinite_inconsistent.md. clip is definable
     # as min(max(x, lo), hi); under Nx's own NaN-propagating min/max that

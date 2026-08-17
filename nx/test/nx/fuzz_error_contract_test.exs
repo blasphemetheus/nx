@@ -47,7 +47,30 @@ defmodule Nx.FuzzErrorContractTest do
       {"stack empty list", fn -> Nx.stack([]) end},
       {"new_axis out of range", fn -> Nx.new_axis(Nx.iota({2}), 5) end},
       {"indexed_put shape mismatch",
-       fn -> Nx.indexed_put(Nx.iota({3}), Nx.tensor([[0]]), Nx.tensor([1, 2])) end}
+       fn -> Nx.indexed_put(Nx.iota({3}), Nx.tensor([[0]]), Nx.tensor([1, 2])) end},
+      {"transpose axes length mismatch", fn -> Nx.transpose(Nx.iota({2, 3}), axes: [0]) end},
+      {"gather indices last-dim mismatch",
+       fn -> Nx.gather(Nx.iota({3}), Nx.tensor([[0, 1]])) end},
+      {"slice strides rank mismatch",
+       fn -> Nx.slice(Nx.iota({4}), [0], [2], strides: [1, 1]) end},
+      {"slice start indices rank mismatch", fn -> Nx.slice(Nx.iota({4}), [0, 0], [2]) end},
+      {"concatenate non-axis dim mismatch",
+       fn -> Nx.concatenate([Nx.iota({2, 2}), Nx.iota({2, 3})], axis: 0) end},
+      {"svd on rank-1", fn -> Nx.LinAlg.svd(Nx.tensor([1.0])) end},
+      {"lu on rank-1", fn -> Nx.LinAlg.lu(Nx.tensor([1.0])) end},
+      {"invert on rank-1", fn -> Nx.LinAlg.invert(Nx.tensor([1.0])) end},
+      {"triangular_solve incompatible dims",
+       fn ->
+         Nx.LinAlg.triangular_solve(Nx.iota({2, 2}, type: :f32), Nx.iota({3}, type: :f32))
+       end},
+      {"nuclear norm on rank-1", fn -> Nx.LinAlg.norm(Nx.tensor([1.0]), ord: :nuclear) end},
+      {"least_squares complex",
+       fn ->
+         Nx.LinAlg.least_squares(
+           Nx.tensor([[1.0, 0.0], [0.0, 1.0]], type: :c64),
+           Nx.tensor([1.0, 2.0], type: :c64)
+         )
+       end}
     ]
   end
 

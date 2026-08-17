@@ -145,6 +145,60 @@ defmodule Nx.FuzzIntSemanticsTest do
     end
   end
 
+  describe "bit counting for sub-byte types" do
+    # Coverage-guided: the 2-bit clz clause (element_clz2) was dark
+    # under the whole test suite.
+    property "population_count for u2/u4/s4 matches the bit-pattern reference" do
+      # s2 is pinned below: it cannot represent count 2 in its own type
+      check all(
+              type <- member_of([{:u, 2}, {:u, 4}, {:s, 4}]),
+              max_runs: 20 * @fuzz_scale
+            ) do
+        {_, bits} = type
+        {lo, hi} = range(type)
+
+        check all(a <- integer(lo..hi), max_runs: 4) do
+          ta = Nx.tensor(a, type: type)
+          pat = pattern(a, type)
+
+          pat_bin = <<pat::size(bits)>>
+          expected_pop = for(<<bit::1 <- pat_bin>>, do: bit) |> Enum.sum()
+
+          assert Nx.to_number(Nx.population_count(ta)) == expected_pop, "popcount(#{a})"
+        end
+      end
+    end
+
+    # See FUZZ_FINDINGS/clz_sub_byte_crash.md: element_clz/2 lacks
+    # width-4/2 dispatcher clauses; the helpers exist but are unreachable.
+    # Flip to bit-pattern reference assertions when fixed.
+    test "[BUG-CLZ-SUBBYTE] count_leading_zeros crashes on nonzero sub-byte values" do
+      for type <- [{:u, 2}, {:u, 4}, {:s, 4}] do
+        {_, bits} = type
+
+        # zero survives via the element_clz(0, size) clause
+        assert Nx.to_number(Nx.count_leading_zeros(Nx.tensor(0, type: type))) == bits
+      end
+
+      # s2 cannot even represent its zero answer: clz(0) is 2, wraps to -2
+      assert Nx.to_number(Nx.count_leading_zeros(Nx.tensor(0, type: :s2))) == -2
+
+      for type <- [{:u, 2}, {:s, 2}, {:u, 4}, {:s, 4}] do
+        assert_raise FunctionClauseError, fn ->
+          Nx.count_leading_zeros(Nx.tensor(1, type: type))
+        end
+      end
+    end
+
+    test "[BUG-POPCOUNT-S2-WRAP] popcount of s2 wraps counts it cannot represent" do
+      # bit pattern 11 -> true count 2 -> wraps to -2 in s2
+      assert Nx.to_number(Nx.population_count(Nx.tensor(-1, type: :s2))) == -2
+      # counts 0 and 1 are representable and correct
+      assert Nx.to_number(Nx.population_count(Nx.tensor(0, type: :s2))) == 0
+      assert Nx.to_number(Nx.population_count(Nx.tensor(1, type: :s2))) == 1
+    end
+  end
+
   describe "documented edge conventions" do
     test "INT_MIN / -1 wraps instead of overflowing" do
       for {:s, bits} = type <- [s: 8, s: 16, s: 32, s: 64] do
