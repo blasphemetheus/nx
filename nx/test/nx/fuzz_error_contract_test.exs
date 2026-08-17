@@ -70,7 +70,42 @@ defmodule Nx.FuzzErrorContractTest do
            Nx.tensor([[1.0, 0.0], [0.0, 1.0]], type: :c64),
            Nx.tensor([1.0, 2.0], type: :c64)
          )
-       end}
+       end},
+      {"named axis missing", fn -> Nx.sum(Nx.iota({2}, names: [:x]), axes: [:y]) end},
+      {"broadcast axes length mismatch",
+       fn -> Nx.broadcast(Nx.iota({2}), {2, 2}, axes: [0, 1]) end},
+      {"window padding non-integer pair",
+       fn -> Nx.window_sum(Nx.iota({4}), {2}, padding: [{0.5, 0}]) end},
+      {"window dilation below one",
+       fn -> Nx.window_sum(Nx.iota({4}), {2}, window_dilations: [0]) end},
+      {"indexed rank-1 indices length mismatch",
+       fn -> Nx.indexed_add(Nx.iota({2, 2}), Nx.tensor([0]), Nx.tensor(1)) end},
+      {"indexed scalar updates non-scalar",
+       fn -> Nx.indexed_put(Nx.iota({2, 2}), Nx.tensor([0, 0]), Nx.tensor([1])) end},
+      {"pad config longer than rank", fn -> Nx.pad(Nx.iota({2}), 0, [{0, 0, 0}, {0, 0, 0}]) end},
+      {"broadcast to lower rank", fn -> Nx.broadcast(Nx.iota({2, 2, 2}), {2, 2}) end},
+      {"put_slice start rank mismatch",
+       fn -> Nx.put_slice(Nx.iota({2, 2}), [0], Nx.iota({1, 1})) end},
+      {"dot batch dim mismatch",
+       fn -> Nx.dot(Nx.iota({2, 3, 4}), [2], [0], Nx.iota({3, 4, 5}), [1], [0]) end},
+      {"eigh on rank-1", fn -> Nx.LinAlg.eigh(Nx.tensor([1.0])) end},
+      {"matrix_power non-square", fn -> Nx.LinAlg.matrix_power(Nx.iota({2, 3}), 2) end},
+      {"triangular_solve batched non-square",
+       fn ->
+         Nx.LinAlg.triangular_solve(Nx.iota({2, 2, 3}, type: :f32), Nx.iota({2, 3}, type: :f32))
+       end},
+      {"triangular_solve batched incompatible b",
+       fn ->
+         Nx.LinAlg.triangular_solve(Nx.iota({2, 3, 3}, type: :f32), Nx.iota({3, 4}, type: :f32))
+       end},
+      {"solve batched non-square",
+       fn -> Nx.LinAlg.solve(Nx.iota({2, 3, 4}, type: :f32), Nx.iota({2, 3}, type: :f32)) end},
+      {"solve batched incompatible b",
+       fn -> Nx.LinAlg.solve(Nx.iota({2, 3, 3}, type: :f32), Nx.iota({2, 4}, type: :f32)) end},
+      {"fft on rank-0", fn -> Nx.fft(Nx.tensor(1.0)) end},
+      {"binary backend options",
+       fn -> Nx.backend_copy(Nx.tensor(1), {Nx.BinaryBackend, [x: 1]}) end},
+      {"to_pointer unsupported", fn -> Nx.to_pointer(Nx.tensor([1])) end}
     ]
   end
 
