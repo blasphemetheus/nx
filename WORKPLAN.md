@@ -14,7 +14,7 @@ maintainer call; silent-wrong-output severity beats crashes.
    window_reduce dispatch on the first tensor only; mixed concrete+Expr args
    crash. ~5 one-line fixes + flip the [BUG-DISPATCH-*] pins in
    `fuzz_indexed_ops_test.exs`. Easiest review → goes first.
-2. **PR B: batched pinv.** -> PREVIEW: fork PR 13 (branch `fix/pinv-batched`), one-line batched-dot fix + batched tests; n=1 mode excluded (root cause is svd, see FUZZ_FINDINGS/svd_batched_size1_crash.md). Awaiting go-ahead for upstream. Forward-pass broken for all batched input; n=2
+2. **PR B: batched pinv.** -> SUBMITTED: https://github.com/elixir-nx/nx/pull/1816 (open, not draft; preview was fork PR 13). n=1 excluded (svd bug, own finding doc).
    silently returns rank-4 (worst severity in the queue). Fix mirrors the
    #1748-era batched handling of its siblings. Flip the three
    [BUG-PINV-BATCHED] pins in `fuzz_linalg_test.exs`.
