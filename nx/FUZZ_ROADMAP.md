@@ -131,6 +131,29 @@ Status key: [ ] planned · [~] in progress · [x] landed
   exla/ and runs under `:multi_device`
   (`EXLA_TARGET=host XLA_FLAGS=--xla_force_host_platform_device_count=4`).
 
+### Frontier suites (post-roadmap, 2026-08-17)
+
+- [x] **Non-finite convention suite** (`fuzz_nonfinite_convention_test.exs`,
+  14 properties): consistency oracles over the empirically-established NaN
+  map (min/max family propagates; arg* points at reduce_*; sort orders
+  -Inf < finite < +Inf < NaN; median follows sort). **Found
+  [BUG-CLIP-NONFINITE]** — clip handles NaN differently per argument
+  position; clip(NaN, 0, 2) returns 0.0.
+- [x] **Integer semantics suite** (`fuzz_int_semantics_test.exs`, 40
+  properties): exact unbounded-integer references wrapped to type for
+  quotient/remainder/shifts/bitwise/popcount/clz; INT_MIN / -1 wrap and
+  div-by-zero conventions pinned. Clean.
+- [x] **Long-tail suite** (`fuzz_longtail_test.exs`, 16 properties): mode,
+  weighted_mean, covariance, logsumexp (incl. overflow-regime stability),
+  diagonal family, tri/tril/triu, to_batched/split, bitcast,
+  cumulative_product, window_product, window_scatter_min metamorphic,
+  logical ops. Clean.
+- [ ] **Backend/scale frontier**: broad GPU differential sweeps, sharding
+  equivalence beyond elementwise (reductions => collectives), donation
+  semantics.
+- [ ] **Coverage-guided gap finding**: mix test --cover over the corpus;
+  aim new generators at unexecuted BinaryBackend/Shape/Grad branches.
+
 ### Cheap wins
 
 - [x] **Deep-run scaling.** Landed 2026-08-16: every property's budget is now
