@@ -1067,4 +1067,170 @@ defmodule DifferentialFuzzTest do
       )
     end
   end
+
+  # ── Non-finite differential (backend-frontier, 2026-08-17) ─────────
+  # The NaN-convention map from fuzz_nonfinite_convention_test.exs must
+  # hold identically on EXLA — exact comparison, no tolerance.
+
+  defp diff_exact(fun) do
+    a = run_under(@binary_backend, fun) |> Nx.backend_copy(Nx.BinaryBackend)
+    b = run_under(@exla_backend, fun) |> Nx.backend_copy(Nx.BinaryBackend)
+
+    assert Nx.shape(a) == Nx.shape(b)
+    assert Nx.to_flat_list(a) == Nx.to_flat_list(b)
+  end
+
+  defp nonfinite_values(n) do
+    list_of(
+      frequency([
+        {3, float(min: -100.0, max: 100.0)},
+        {1, member_of([:nan, :infinity, :neg_infinity, 0.0])}
+      ]),
+      length: n
+    )
+  end
+
+  describe "non-finite conventions agree across backends" do
+    property "min/max/sort/argmax/median/cumulative_max agree exactly" do
+      check all(n <- integer(2..8), values <- nonfinite_values(8), max_runs: 15) do
+        values = Enum.take(values, n)
+
+        for fun <- [
+              fn -> Nx.sort(Nx.tensor(values, type: {:f, 64}), axis: 0) end,
+              fn -> Nx.median(Nx.tensor(values, type: {:f, 64})) end,
+              fn -> Nx.cumulative_max(Nx.tensor(values, type: {:f, 64})) end,
+              fn -> Nx.reduce_min(Nx.tensor(values, type: {:f, 64})) end
+            ] do
+          diff_exact(fun)
+        end
+      end
+    end
+
+    property "argmax/argmin agree when at most one NaN is present" do
+      check all(n <- integer(2..8), values <- nonfinite_values(8), max_runs: 15) do
+        # cap to a single NaN: the multi-NaN tie-break diverges (see pin)
+        values =
+          values
+          |> Enum.take(n)
+          |> Enum.with_index()
+          |> Enum.map(fn
+            {:nan, i} when i > 0 -> 1.0
+            {v, _} -> v
+          end)
+
+        diff_exact(fn -> Nx.argmax(Nx.tensor(values, type: {:f, 64})) end)
+        diff_exact(fn -> Nx.argmin(Nx.tensor(values, type: {:f, 64})) end)
+      end
+    end
+
+    # [DIVERGENCE-ARGMAX-NAN-TIE] — with multiple NaNs, BinaryBackend
+    # returns the LAST NaN index while EXLA returns the FIRST (honoring
+    # tie_break: :low). See
+    # nx/FUZZ_FINDINGS/argmax_nan_tie_divergence.md. Flip to diff_exact
+    # when BinaryBackend is fixed.
+    test "[DIVERGENCE-ARGMAX-NAN-TIE] multi-NaN argmax diverges between backends" do
+      values = [1.0, :nan, 2.0, :nan]
+
+      binary_idx =
+        run_under(@binary_backend, fn -> Nx.argmax(Nx.tensor(values, type: {:f, 64})) end)
+        |> Nx.backend_copy(Nx.BinaryBackend)
+        |> Nx.to_number()
+
+      exla_idx =
+        run_under(@exla_backend, fn -> Nx.argmax(Nx.tensor(values, type: {:f, 64})) end)
+        |> Nx.backend_copy(Nx.BinaryBackend)
+        |> Nx.to_number()
+
+      assert binary_idx == 3
+      assert exla_idx == 1
+    end
+
+    # [DIVERGENCE-CLIP-NONFINITE] — see
+    # nx/FUZZ_FINDINGS/clip_nonfinite_inconsistent.md. EXLA propagates
+    # NaN (the min/max composition); BinaryBackend returns a bound.
+    # These pins assert the DIVERGENCE; when BinaryBackend is fixed,
+    # flip them to diff_exact.
+    test "[DIVERGENCE-CLIP-NONFINITE] clip with NaN diverges between backends" do
+      nan = fn -> Nx.tensor(:nan, type: {:f, 64}) end
+
+      binary_val =
+        run_under(@binary_backend, fn -> Nx.clip(nan.(), 0.0, 2.0) end)
+        |> Nx.backend_copy(Nx.BinaryBackend)
+
+      exla_val =
+        run_under(@exla_backend, fn -> Nx.clip(nan.(), 0.0, 2.0) end)
+        |> Nx.backend_copy(Nx.BinaryBackend)
+
+      assert Nx.to_flat_list(binary_val) == [0.0]
+      assert Nx.to_flat_list(exla_val) == [:nan]
+    end
+  end
+
+  # ── Large-shape GPU sweep (backend-frontier, 2026-08-17) ───────────
+
+  describe "large-shape differential" do
+    test "256x256 f32 matmul under precision: :highest" do
+      :rand.seed(:exsss, {200, 201, 202})
+      va = for _ <- 1..(256 * 256), do: :rand.uniform() - 0.5
+      vb = for _ <- 1..(256 * 256), do: :rand.uniform() - 0.5
+
+      control = Nx.Defn.jit(fn a, b -> Nx.dot(a, b) end, precision: :highest)
+
+      diff(
+        fn ->
+          a = Nx.tensor(va, type: :f32) |> Nx.reshape({256, 256})
+          b = Nx.tensor(vb, type: :f32) |> Nx.reshape({256, 256})
+          control.(a, b)
+        end,
+        atol: 0.0,
+        rtol: 1.0e-5
+      )
+    end
+
+    test "softmax over 4096 f32 elements" do
+      :rand.seed(:exsss, {210, 211, 212})
+      vals = for _ <- 1..4096, do: (:rand.uniform() - 0.5) * 20.0
+
+      diff(
+        fn ->
+          x = Nx.tensor(vals, type: :f32)
+          m = Nx.reduce_max(x)
+          e = Nx.exp(Nx.subtract(x, m))
+          Nx.divide(e, Nx.sum(e))
+        end,
+        atol: 1.0e-8,
+        rtol: 1.0e-5
+      )
+    end
+
+    test "1e6-element f64 reduction stays tight" do
+      diff(
+        fn ->
+          x = Nx.iota({1_000_000}, type: :f64) |> Nx.multiply(1.0e-6) |> Nx.subtract(0.5)
+
+          {Nx.sum(x) |> Nx.reshape({1}), Nx.mean(Nx.multiply(x, x)) |> Nx.reshape({1})}
+          |> then(fn {a, b} -> Nx.concatenate([a, b]) end)
+        end,
+        # summation ORDER differs legitimately between backends (sequential
+        # vs GPU tree reduction); on a cancellation-prone sum that shows up
+        # as ~1e-7 relative — calibrate, do not chase
+        atol: 1.0e-9,
+        rtol: 1.0e-6
+      )
+    end
+
+    test "100k-element f32 transcendental chain" do
+      :rand.seed(:exsss, {220, 221, 222})
+      vals = for _ <- 1..100_000, do: (:rand.uniform() - 0.5) * 8.0
+
+      diff(
+        fn ->
+          x = Nx.tensor(vals, type: :f32)
+          x |> Nx.tanh() |> Nx.multiply(Nx.sigmoid(x)) |> Nx.sum() |> Nx.reshape({1})
+        end,
+        atol: 1.0e-2,
+        rtol: 1.0e-4
+      )
+    end
+  end
 end

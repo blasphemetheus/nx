@@ -153,4 +153,101 @@ defmodule EXLA.Defn.ShardingFuzzTest do
       end
     end
   end
+  describe "reductions over sharded inputs (collectives)" do
+    property "sum over the sharded axis: every device holds the full result" do
+      check all(
+              rows_per_dev <- integer(1..3),
+              cols <- integer(1..4),
+              max_runs: 10
+            ) do
+        rows = rows_per_dev * @devices
+
+        check all(
+                xs <- list_of(float(min: -10.0, max: 10.0), length: rows * cols),
+                max_runs: 1
+              ) do
+          x = random_tensor(rows, cols, xs)
+          fun = fn t -> Nx.sum(t, axes: [0]) end
+
+          mesh = %Mesh{name: "mesh", shape: {@devices}}
+          args = Enum.map(shard_axis0(x, @devices), &[&1])
+
+          results = EXLA.shard_jit(fun, mesh, input_shardings: [%{0 => [0]}]).(args)
+
+          expected = Nx.Defn.jit_apply(fun, [x])
+
+          # reducing away the sharded axis requires an all-reduce; the
+          # result must be replicated — identical and complete on every
+          # device
+          for r <- results do
+            assert_all_close(to_binary_backend(r), to_binary_backend(expected), atol: 1.0e-5)
+          end
+        end
+      end
+    end
+
+    property "sum over the unsharded axis: results stay sharded and reassemble" do
+      check all(
+              rows_per_dev <- integer(1..3),
+              cols <- integer(2..4),
+              max_runs: 10
+            ) do
+        rows = rows_per_dev * @devices
+
+        check all(
+                xs <- list_of(float(min: -10.0, max: 10.0), length: rows * cols),
+                max_runs: 1
+              ) do
+          x = random_tensor(rows, cols, xs)
+          fun = fn t -> Nx.sum(t, axes: [1]) end
+
+          mesh = %Mesh{name: "mesh", shape: {@devices}}
+          args = Enum.map(shard_axis0(x, @devices), &[&1])
+
+          results = EXLA.shard_jit(fun, mesh, input_shardings: [%{0 => [0]}]).(args)
+          reassembled = Nx.concatenate(results)
+
+          expected = Nx.Defn.jit_apply(fun, [x])
+          assert_all_close(to_binary_backend(reassembled), to_binary_backend(expected), atol: 1.0e-5)
+        end
+      end
+    end
+
+    property "dot contracting the sharded axis: replicated partial-sum reduction" do
+      check all(
+              rows_per_dev <- integer(1..2),
+              k <- integer(1..3),
+              cols <- integer(1..3),
+              max_runs: 10
+            ) do
+        rows = rows_per_dev * @devices
+
+        check all(
+                xs <- list_of(float(min: -5.0, max: 5.0), length: rows * k),
+                ys <- list_of(float(min: -5.0, max: 5.0), length: rows * cols),
+                max_runs: 1
+              ) do
+          x = random_tensor(rows, k, xs)
+          y = random_tensor(rows, cols, ys)
+          fun = fn a, b -> Nx.dot(a, [0], b, [0]) end
+
+          mesh = %Mesh{name: "mesh", shape: {@devices}}
+          shardings = [%{0 => [0]}, %{0 => [0]}]
+
+          args =
+            Enum.zip_with(shard_axis0(x, @devices), shard_axis0(y, @devices), fn xi, yi ->
+              [xi, yi]
+            end)
+
+          results = EXLA.shard_jit(fun, mesh, input_shardings: shardings).(args)
+
+          expected = Nx.Defn.jit_apply(fun, [x, y])
+
+          for r <- results do
+            assert_all_close(to_binary_backend(r), to_binary_backend(expected), atol: 1.0e-4)
+          end
+        end
+      end
+    end
+  end
 end
