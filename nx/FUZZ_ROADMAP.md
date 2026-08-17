@@ -164,6 +164,15 @@ Status key: [ ] planned · [~] in progress · [x] landed
   complex as_boolean coverage, and sub-byte bit counting — the last found
   TWO bugs on first execution:
   [clz sub-byte crash + s2 count wrap](FUZZ_FINDINGS/clz_sub_byte_crash.md).
+  Grad-arm dig (2026-08-17): custom_grad count-validation finding (extras
+  silently dropped / shortfall leaks internal error — see
+  FUZZ_FINDINGS/custom_grad_count_validation.md); lines 320-322 confirmed
+  DEAD CODE (the true-> fallback re-tests the predicate the cond arm above
+  it already caught — upstream refactor candidate); remaining ~24 dark
+  Grad lines are deep vectorized-grad reconciliation guards from the
+  1533-era rework plus defensive raises, resistant to synthetic
+  construction.
+
   Round 2 (same day): error-contract table to 46 entries,
   fuzz_darklines_test.exs for semantic arms (argmax tie_break witnesses,
   complex reduce acc, multi-axis aggregation, vectorized qr/lu, Expr/

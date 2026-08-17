@@ -242,6 +242,95 @@ defmodule Nx.FuzzDarklinesTest do
     end
   end
 
+  describe "Grad reconciliation and custom_grad arms" do
+    defmodule GradArms do
+      import Nx.Defn
+
+      defn param_in_inner_grad(a, b), do: grad(b, fn y -> Nx.sum(Nx.multiply(a, y)) end)
+
+      defn custom_non_list(x) do
+        custom_grad(Nx.sin(x), [x], fn g -> {g} end) |> Nx.sum()
+      end
+
+      defn custom_two_for_one(x) do
+        custom_grad(Nx.sin(x), [x], fn g -> [g, Nx.multiply(g, 100.0)] end) |> Nx.sum()
+      end
+
+      defn custom_none_for_one(x) do
+        custom_grad(Nx.sin(x), [x], fn _g -> [] end) |> Nx.sum()
+      end
+    end
+
+    test "grad of a plain number works" do
+      grad = Nx.Defn.grad(2.0, fn x -> Nx.multiply(x, x) end)
+      assert_all_close(grad, Nx.tensor(4.0), atol: 1.0e-6)
+    end
+
+    test "defn parameter captured inside an inner grad becomes a constant leaf" do
+      grad = GradArms.param_in_inner_grad(Nx.tensor([1.0, 2.0]), Nx.tensor([3.0, 4.0]))
+      assert_all_close(grad, Nx.tensor([1.0, 2.0]), atol: 1.0e-6)
+    end
+
+    test "custom_grad returning a non-list raises the friendly message" do
+      assert_raise RuntimeError, ~r/custom_grad\/3 must return a list of tensors/, fn ->
+        Nx.Defn.grad(Nx.tensor([1.0]), &GradArms.custom_non_list/1)
+      end
+    end
+
+    # See FUZZ_FINDINGS/custom_grad_count_validation.md — count is not
+    # validated symmetrically. Flip both when fixed.
+    test "[BUG-CUSTOM-GRAD-COUNT] extra custom_grad entries are silently dropped" do
+      grad = Nx.Defn.grad(Nx.tensor([0.5]), &GradArms.custom_two_for_one/1)
+      # first entry (upstream g == 1.0) used; the 100x entry is discarded
+      assert Nx.to_flat_list(grad) == [1.0]
+    end
+
+    test "[BUG-CUSTOM-GRAD-COUNT] missing custom_grad entries leak the internal invariant" do
+      assert_raise RuntimeError, ~r/ERROR! grad for metadata returned 0 entries/, fn ->
+        Nx.Defn.grad(Nx.tensor([0.5]), &GradArms.custom_none_for_one/1)
+      end
+    end
+
+    test "grad through bitcast round-trip runs" do
+      grad =
+        Nx.Defn.grad(Nx.tensor([1.0]), fn x ->
+          Nx.sum(Nx.as_type(Nx.bitcast(x, {:s, 32}), {:f, 32}))
+        end)
+
+      assert Nx.shape(grad) == {1}
+    end
+
+    test "vectorized grad with an inner new_axis reconciles" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]]) |> Nx.vectorize(:b)
+
+      grad = Nx.Defn.grad(x, fn t -> Nx.sum(Nx.new_axis(t, 0)) end)
+      assert Keyword.keys(grad.vectorized_axes) == [:b]
+
+      assert_all_close(
+        Nx.devectorize(grad, keep_names: false),
+        Nx.broadcast(1.0, {2, 2}),
+        atol: 1.0e-6
+      )
+    end
+
+    test "grad across two distinct vectorized axes broadcasts them" do
+      xa = Nx.tensor([1.0, 2.0]) |> Nx.vectorize(:a)
+      yc = Nx.tensor([10.0, 20.0, 30.0]) |> Nx.vectorize(:c)
+
+      grad = Nx.Defn.grad(xa, fn x -> Nx.sum(Nx.multiply(x, yc)) end)
+
+      # the grad matches the ARG axes; the :c direction is summed away:
+      # d/dx sum_c(x * y_c) = sum(y) = 60 per :a element
+      assert Keyword.keys(grad.vectorized_axes) == [:a]
+
+      assert_all_close(
+        Nx.devectorize(grad, keep_names: false),
+        Nx.tensor([60.0, 60.0]),
+        atol: 1.0e-6
+      )
+    end
+  end
+
   describe "defn while validations (trace-time CompileError arms)" do
     defmodule ScalarGenerator do
       import Nx.Defn
