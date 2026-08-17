@@ -157,8 +157,15 @@ Status key: [ ] planned · [~] in progress · [x] landed
   (sum over sharded axis all-reduces to replicated result, unsharded-axis
   sums reassemble, dot contracting the sharded axis). Donation semantics
   deferred.
-- [ ] **Coverage-guided gap finding**: mix test --cover over the corpus;
-  aim new generators at unexecuted BinaryBackend/Shape/Grad branches.
+- [x] **Coverage-guided gap finding** (2026-08-17): intersected
+  never-executed lines across corpus + full-suite .coverdata; only ~130
+  dark lines existed in the load-bearing modules. Targeted them with a
+  comparison truth-table property, 12 dark-raise error-contract entries,
+  complex as_boolean coverage, and sub-byte bit counting — the last found
+  TWO bugs on first execution:
+  [clz sub-byte crash + s2 count wrap](FUZZ_FINDINGS/clz_sub_byte_crash.md).
+  Remaining dark: raise guards, the pinned-unreachable clz2 clause, and
+  ~29 Grad/25 Expr lines (candidates for a second pass).
 
 ### Cheap wins
 
