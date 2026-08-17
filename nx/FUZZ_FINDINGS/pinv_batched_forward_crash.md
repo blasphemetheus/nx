@@ -23,6 +23,15 @@ The failure mode depends on the inner matrix size — three different bugs:
 Non-square batched fails like n≥3. 2-D input works fine. The n=2 silent
 rank-4 output is the worst variant — no error, wrong shape.
 
+**Double-batch corner RESOLVED (2026-08-17)**: the "transposed batch
+axes" failure for double-batch inputs ({3,2,n,n} -> "cannot broadcast
+{3,2,..} to {2,3,..}") is NOT in svd — it is `pinv_zero_shape`
+reversing the batch prefix (it transposes the last two dims via a
+reversed dim list and never re-reverses the rest). Equal batch dims
+mask it via silent broadcast. Trivial put_elem fix verified on
+scratch/svd-batch-transpose. PR-ready, independent of the eigh fix
+(test via {3,2,2,2}/{5,4,2,3} + zeros for the zero branch).
+
 ## Expected vs observed
 
 Expected: batched pinv, like the rest of `Nx.LinAlg` (svd, qr, lu, solve,
