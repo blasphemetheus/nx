@@ -21,7 +21,7 @@ maintainer call; silent-wrong-output severity beats crashes.
 3. **PR C -> split into three single-topic fork drafts (bundled fork PR 14 closed):**
    - C1 from_binary bitstring guard -> SUBMITTED: https://github.com/elixir-nx/nx/pull/1817 (preview was fork PR 15)
    - C2 inspect sub-byte crash -> SUBMITTED: https://github.com/elixir-nx/nx/pull/1818 (preview was fork PR 16)
-   - C3 reshape :auto ArgumentError -> SUBMITTED: https://github.com/elixir-nx/nx/pull/1819 (preview was fork PR 17)
+   - C3 reshape :auto ArgumentError -> MERGED upstream (1819). Follow-up from pol review note: https://github.com/elixir-nx/nx/pull/1820 adds test coverage for revectorize·s existing multiple-:auto guard (verified guard already covers all three combos).
    All of Phase 1 is now in flight upstream: 1815 (draft), 1816, 1817, 1818, 1819.
    guard + `Nx.Backend` inspect `tail::binary`→`tail::bitstring` for :s/:u.
    Pins in `fuzz_serialization_test.exs`. The reshape-two-`:auto` LOW
