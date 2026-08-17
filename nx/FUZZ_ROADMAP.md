@@ -164,8 +164,12 @@ Status key: [ ] planned · [~] in progress · [x] landed
   complex as_boolean coverage, and sub-byte bit counting — the last found
   TWO bugs on first execution:
   [clz sub-byte crash + s2 count wrap](FUZZ_FINDINGS/clz_sub_byte_crash.md).
-  Remaining dark: raise guards, the pinned-unreachable clz2 clause, and
-  ~29 Grad/25 Expr lines (candidates for a second pass).
+  Round 2 (same day): error-contract table to 46 entries,
+  fuzz_darklines_test.exs for semantic arms (argmax tie_break witnesses,
+  complex reduce acc, multi-axis aggregation, vectorized qr/lu, Expr/
+  Evaluator/Grad trace contracts, Matrix complex conjugate). Dark lines
+  ~130 -> 80; remainder is defensive/unreachable code and deep
+  vectorized-grad reconciliation arms.
 
 ### Cheap wins
 
