@@ -138,6 +138,13 @@ defmodule Nx.Defn.Evaluator do
     {[initial, pred, block, while_cache], cache}
   end
 
+  defp compute_cache(:checkpoint, %{data: %Expr{args: args}}, state, cache) do
+    [input, expr, _fun, param] = args
+    {input, cache} = compute_cache(input, state, cache)
+    {expr, expr_cache} = init_compute_cache(expr, state)
+    {[input, expr, expr_cache, param], cache}
+  end
+
   defp compute_cache(:block, %{data: %Expr{args: args}}, state, cache) do
     [struct, in_args, expr, callback] = args
 
@@ -216,6 +223,25 @@ defmodule Nx.Defn.Evaluator do
 
   defp eval(%Nx.Tensor{data: %Expr{op: op, id: id}} = ans, state, [cache | caches]) do
     case cache do
+      %{^id => {:args, _count, args}} when op == :checkpoint ->
+        # Checkpoint manages its own cache entry: it stores a
+        # :recompute thunk instead of a :result, so the output is
+        # re-evaluated from the saved input rather than cached.
+        {res, caches} = eval_apply(:checkpoint, args, ans, state, [cache | caches])
+        state.gc && :erlang.garbage_collect(self())
+        {res, caches}
+
+      %{^id => {:recompute, count, recompute_fun}} ->
+        res = recompute_fun.()
+        state.gc && :erlang.garbage_collect(self())
+
+        cache =
+          if count == 1,
+            do: Map.delete(cache, id),
+            else: %{cache | id => {:recompute, count - 1, recompute_fun}}
+
+        {res, [cache | caches]}
+
       %{^id => {:args, count, args}} ->
         {res, [cache | caches]} = eval_apply(op, args, ans, state, [cache | caches])
         state.gc && :erlang.garbage_collect(self())
@@ -258,9 +284,20 @@ defmodule Nx.Defn.Evaluator do
 
   defp decrement_parents([cache | caches], id) do
     case cache do
-      %{^id => {:result, count, value}} -> [decrement_cache(cache, id, count, value) | caches]
-      %{^id => {:args, count, args}} -> [%{cache | id => {:args, count - 1, args}} | caches]
-      %{} -> [cache | decrement_parents(caches, id)]
+      %{^id => {:result, count, value}} ->
+        [decrement_cache(cache, id, count, value) | caches]
+
+      %{^id => {:args, count, args}} ->
+        [%{cache | id => {:args, count - 1, args}} | caches]
+
+      %{^id => {:recompute, 1, _fun}} ->
+        [Map.delete(cache, id) | caches]
+
+      %{^id => {:recompute, count, fun}} ->
+        [%{cache | id => {:recompute, count - 1, fun}} | caches]
+
+      %{} ->
+        [cache | decrement_parents(caches, id)]
     end
   end
 
@@ -330,6 +367,47 @@ defmodule Nx.Defn.Evaluator do
   defp eval_apply(:while, [initial, pred, block, while_cache], _ans, state, caches) do
     {initial, caches} = composite_eval(initial, state, caches)
     {while(initial, pred, block, state, [while_cache]), caches}
+  end
+
+  defp eval_apply(:checkpoint, [input, expr, expr_cache, param], ans, state, [cache | caches]) do
+    {input_value, [cache | caches]} = eval(input, state, [cache | caches])
+
+    recompute_fun = fn ->
+      # Pre-seed the body cache with the parameter's evaluated value.
+      # We don't replace state.params because the body may reference
+      # outer defn parameters (captured variables like weights).
+      # expr_cache is immutable — safe to reuse across recomputations.
+      param_id = param.data.id
+
+      seeded_cache =
+        case expr_cache do
+          %{^param_id => {:args, count, _}} ->
+            Map.put(expr_cache, param_id, {:result, count, input_value})
+
+          _ ->
+            expr_cache
+        end
+
+      {res, _} = composite_eval(expr, state, [seeded_cache | [cache | caches]])
+      res
+    end
+
+    res = recompute_fun.()
+
+    # Store as :recompute instead of :result — the output is never
+    # cached, it is re-evaluated from the saved input each time a
+    # downstream op needs it.
+    id = ans.data.id
+    count = cache[id] |> elem(1)
+
+    cache =
+      if count == 1 do
+        Map.delete(cache, id)
+      else
+        Map.put(cache, id, {:recompute, count - 1, recompute_fun})
+      end
+
+    {res, [cache | caches]}
   end
 
   defp eval_apply(:block, [struct, in_args, expr, callback], ans, state, caches) do

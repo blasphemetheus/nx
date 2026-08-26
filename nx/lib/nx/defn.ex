@@ -564,6 +564,40 @@ defmodule Nx.Defn do
   end
 
   @doc """
+  Marks a computation region for gradient checkpointing.
+
+  `checkpoint(input, fun)` applies `fun` to `input` during the forward pass.
+  During the backward pass inside `grad`, the function is re-executed with the
+  saved input to recompute intermediates, rather than storing them. This reduces
+  peak activation memory from O(n) to O(sqrt(n)) for optimally placed checkpoints.
+
+  The gradients produced are identical to those without checkpointing —
+  only memory usage changes.
+
+  `input` is the tensor to save for recomputation. Variables captured via
+  closure (e.g., weights) are always available and do not need to be passed
+  as inputs.
+
+  ## Examples
+
+      defn forward(params, input) do
+        input
+        |> Nx.Defn.checkpoint(fn x -> dense_block(x, params.layer1) end)
+        |> Nx.Defn.checkpoint(fn x -> dense_block(x, params.layer2) end)
+      end
+
+  """
+  def checkpoint(input, fun) when is_function(fun, 1) do
+    case input do
+      %Nx.Tensor{data: %Nx.Defn.Expr{}} ->
+        Nx.Defn.Expr.checkpoint(input, fun)
+
+      _ ->
+        fun.(input)
+    end
+  end
+
+  @doc """
   Receives an anonymous function and returns a new anonymous function
   that returns the value and gradient of the input function when invoked.
 
