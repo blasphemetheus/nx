@@ -12,11 +12,14 @@ worth the maintainer's attention, we file selectively.
 
 | Class | Upstream | Summary |
 |---|---|---|
-| **FIXED 2026-08-17** — multi-tensor `impl!` dispatch | PR 1815 | put_slice/clip/gather/reduce/window_reduce now dispatch via impl!/2,3; pins flipped |
-| **FIXED 2026-08-17** — batched pinv (n>=2) | PR 1816 | batched dot via batch_axes; n=1 still blocked by svd size-1 bug | 
-| **FIXED 2026-08-17** — from_binary sub-byte bitstrings | PR 1817 | guard is is_bitstring; round trip works; pins flipped |
-| **FIXED 2026-08-17** — inspect sub-byte crash | PR 1818 | tail::bitstring in :s/:u branches; pins flipped |
-| **FIXED 2026-08-17** — reshape multiple :auto | PR 1819 | descriptive ArgumentError; error-contract table updated |
+| **MERGED** — multi-tensor `impl!` dispatch | PR 1815 | put_slice/clip/gather/reduce/window_reduce now dispatch via impl!/2,3; pins flipped |
+| **MERGED** — batched pinv (n>=2) | PR 1816 | batched dot via batch_axes |
+| **MERGED** — eigh batched 1x1 (unblocked svd/pinv n=1) | PR 1821 | 1x1 eigenvectors derived from input so they inherit vectorized axes |
+| **MERGED** — revectorize :auto guard coverage | PR 1820 | tests for the existing multiple-:auto guard |
+| **MERGED** — EXLA CUDA OutputBuffer ctor | PR 1813 | XLA_TARGET=cuda12 builds compile again | 
+| **MERGED** — from_binary sub-byte bitstrings | PR 1817 | guard is is_bitstring; round trip works; pins flipped |
+| **MERGED** — inspect sub-byte crash | PR 1818 | tail::bitstring in :s/:u branches; pins flipped |
+| **MERGED** — reshape multiple :auto | PR 1819 | descriptive ArgumentError; error-contract table updated |
 | batched-input grad in `Nx.LinAlg` (multi-op) | [meta #1748](https://github.com/elixir-nx/nx/issues/1748), per-op #1741–#1746 | `custom_grad` formulas assume 2D input; break silently for batched |
 | `Nx.LinAlg.eigh` grad | [#1740](https://github.com/elixir-nx/nx/issues/1740) | 2D and f64 inputs crash; only 3D batch-1 f32 works |
 | `Nx.Defn.while` reverse-mode AD | [#1747](https://github.com/elixir-nx/nx/issues/1747) | Wrong grad when loop body's Jacobian wrt accumulator depends on differentiated variable |
@@ -35,10 +38,10 @@ Priority key:
 | **HIGH** | unary non-finite handling | [unary_nonfinite_crashes_and_wrong_values.md](unary_nonfinite_crashes_and_wrong_values.md) | `floor`/`ceil`/`round`/`atanh` crash on NaN/±Inf; `tanh(±Inf)` returns NaN (should be ±1), `sign(NaN)` returns 1.0 (should be NaN), `sign(-Inf)` returns **+1.0** (sign error). Found by T1.1 probe (2026-08-14). Pinned in `fuzz_float_edge_test.exs`. |
 | **HIGH** | f64 binary-op overflow | [f64_binary_op_overflow_arithmetic_error.md](f64_binary_op_overflow_arithmetic_error.md) | `Nx.add(max, max)`, `Nx.multiply(max, 2.0)`, tensor-divisor `divide` raise `ArithmeticError` when the f64 result overflows — IEEE requires ±Inf. `pow` silently returns NaN. f32/unary/scalar paths handled, tensor f64 paths not. **Reduction flavor affects ALL float dtypes**: `Nx.product` of ~600 × 1e3 f16 values crashes (accumulator is a BEAM double; found by overnight FUZZ_SCALE=25, 2026-08-16). Pinned in `fuzz_float_edge_test.exs`. |
 | **HIGH** | `clip` non-finite inconsistency (cross-backend divergence)  | [clip_nonfinite_inconsistent.md](clip_nonfinite_inconsistent.md) | `clip(NaN, 0, 2)` returns `0.0` — NaN input silently becomes an in-range value; each argument position handles NaN differently, contradicting the min/max composition. Found 2026-08-17, convention-frontier probes. Pinned in `fuzz_nonfinite_convention_test.exs`. |
+| **MED** | `pinv` zero-branch batch transpose | [pinv_batched_forward_crash.md](pinv_batched_forward_crash.md) | pinv_zero_shape reverses the batch prefix; unequal double-batch dims crash, equal ones silently broadcast. FIX BUILT + TESTED on branch `fix/pinv-zero-shape-batch` (pushed to fork), awaiting PR go-ahead. |
 | **MED** | `custom_grad` count validation | [custom_grad_count_validation.md](custom_grad_count_validation.md) | Extra returned gradients are silently dropped (plausible wrong grad, no error); missing ones leak an internal "ERROR! grad for metadata" message. Found 2026-08-17 targeting Grad dark arms. Pinned. |
 | **MED** | `count_leading_zeros` sub-byte crash | [clz_sub_byte_crash.md](clz_sub_byte_crash.md) | element_clz/2 has no width-4/2 dispatcher clauses; crashes on any nonzero sub-byte element. The width-2 helper exists but is unreachable (found via coverage-guided targeting of that dead clause). |
 | **MED** | argmax/argmin NaN tie divergence | [argmax_nan_tie_divergence.md](argmax_nan_tie_divergence.md) | With multiple NaNs, BinaryBackend argmax returns the LAST NaN index, EXLA the FIRST (documented tie_break: :low); silent cross-backend index divergence. Found 2026-08-17 backend-frontier differential. Pinned in exla differential. |
-| **LOW-MED** | `svd` batched size-1 crash | [svd_batched_size1_crash.md](svd_batched_size1_crash.md) | `Nx.LinAlg.svd` crashes on any batched matrix with a size-1 dimension ({2,1,1}/{2,1,2}/{2,2,1}); root cause behind pinv n=1 mode. Found 2026-08-17 building PR B. |
 
 ### Suggested filing order
 

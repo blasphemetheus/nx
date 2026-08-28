@@ -1,4 +1,4 @@
-# Nx.LinAlg.svd crashes on batched matrices with a size-1 dimension
+# [FIXED upstream 2026-08-17, PR 1821] Nx.LinAlg.svd crashed on batched matrices with a size-1 dimension
 
 Found 2026-08-17 while building the batched-pinv fix (PR B): the pinv n=1
 failure mode turned out to be svd's, not pinv's.
