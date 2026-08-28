@@ -717,11 +717,13 @@ defmodule Nx.FuzzLinAlgTest do
       end
     end
 
-    # Batched pinv fixed upstream; n=1 remains blocked by a separate svd
-    # bug (FUZZ_FINDINGS/svd_batched_size1_crash.md).
-    test "[BUG-SVD-BATCHED-SIZE1] batched pinv n=1 still crashes (svd bug, not pinv)" do
+    test "[FIXED-SVD-BATCHED-SIZE1] batched pinv n=1 works" do
       a = Nx.iota({2, 1, 1}, type: :f32) |> Nx.add(Nx.eye(1))
-      assert_raise ArgumentError, ~r/cannot reshape/, fn -> Nx.LinAlg.pinv(a) end
+
+      pinv = Nx.LinAlg.pinv(a)
+      assert Nx.shape(pinv) == {2, 1, 1}
+      # pinv of a 1x1 [a] is [1/a]: a = [[1.0]], [[2.0]]
+      assert_all_close(pinv, Nx.tensor([[[1.0]], [[0.5]]]), atol: 1.0e-6)
     end
 
     test "[FIXED-PINV-BATCHED] batched pinv: n=2 returns the correct shape" do
