@@ -118,6 +118,23 @@ SOURCES += $(wildcard $(EXLA_DIR)/custom_calls/*.cc)
 HEADERS = $(EXLA_DIR)/exla_mlir.h $(EXLA_DIR)/custom_calls/runtime_callback_bridge.h $(EXLA_DIR)/exla_client.h $(EXLA_DIR)/exla_nif_util.h $(EXLA_DIR)/exla_log_sink.h $(EXLA_DIR)/ipc.h
 OBJECTS = $(patsubst $(EXLA_DIR)/%.cc,$(EXLA_CACHE_OBJ_DIR)/%.o,$(SOURCES)) $(EXLA_CACHE_OBJ_DIR)/exla_cuda.o
 
+# Edifice fused CUDA kernels (symlinked from ../edifice/native/cuda),
+# compiled with -DEXLA_FFI so their XLA FFI handlers register into
+# libexla.so ("exla_fused_*_f32" custom-call targets — see edifice's
+# Edifice.Block.FusedOp defimpl). Only present when CUDA is available;
+# with no nvcc the wildcard objects never build and the link skips them.
+ifeq ($(NVCC_TEST),nvcc)
+GPU_ARCH ?= sm_120
+NVCC_FFI_FLAGS = -std=c++17 -arch=$(GPU_ARCH) -Xcompiler "$(CFLAGS)" -DCUDA_ENABLED -DEXLA_FFI
+CUDA_SOURCES = $(wildcard $(EXLA_DIR)/custom_calls/*.cu)
+CUDA_OBJECTS = $(patsubst $(EXLA_DIR)/%.cu,$(EXLA_CACHE_OBJ_DIR)/%.o,$(CUDA_SOURCES))
+OBJECTS += $(CUDA_OBJECTS)
+
+$(EXLA_CACHE_OBJ_DIR)/custom_calls/%.o: $(EXLA_DIR)/custom_calls/%.cu
+	@ mkdir -p $(EXLA_CACHE_OBJ_DIR)/custom_calls
+	$(NVCC) $(NVCC_FFI_FLAGS) -c $< -o $@
+endif
+
 $(EXLA_CACHE_OBJ_DIR)/exla_cuda.o: $(EXLA_DIR)/exla_cuda.cc $(EXLA_DIR)/exla_cuda.h
 	@ mkdir -p $(EXLA_CACHE_OBJ_DIR)
 	$(NVCC) $(NVCCFLAGS) -c $< -o $@
