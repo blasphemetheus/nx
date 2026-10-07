@@ -60,14 +60,12 @@ and edit before marking ready.
 
 ### Small focused PRs — fix direction is unambiguous
 
-1. **clip non-finite** (HIGH, do first). `clip(NaN, 0, 2)` returns `0.0` on
-   BinaryBackend — launders a NaN into a legitimate-looking in-range value.
-   **Confirmed cross-backend divergence**: EXLA/cuda propagates NaN in all
-   three argument positions. EXLA, IEEE, and Nx's own min/max composition
-   all agree on the correct answer, so there is nothing to debate. Fix is in
-   BinaryBackend's clip comparison chain; tests come free by flipping
-   `[BUG-CLIP-NONFINITE]` pins plus the EXLA `[DIVERGENCE-CLIP-NONFINITE]`
-   pin into exact agreement.
+1. **clip non-finite** — **draft PR open**: https://github.com/elixir-nx/nx/pull/1855
+   (2026-10-07, fork `fix/clip-nan`). BinaryBackend clip now composes
+   `element_min(element_max(x, lo), hi)`; verified identical to EXLA/cuda on
+   all three NaN positions plus float/int controls. Once merged, flip the
+   `[BUG-CLIP-NONFINITE]` pins in `fuzz_nonfinite_convention_test.exs` and
+   the EXLA `[DIVERGENCE-CLIP-NONFINITE]` pin to exact agreement.
 2. **argmax/argmin NaN tie-break** (MED). Multiple NaNs: BinaryBackend
    returns the LAST NaN index, EXLA the FIRST, and the documented contract
    (`tie_break: :low`) says first. Fix the fold direction; flip the
@@ -235,6 +233,6 @@ HLO evidence and the fix shape are in
    exla-host, 4-device sharding, and the CUDA differential suite (33
    properties, 31 tests, both GPU divergence pins intact).
 3. Review/edit draft PR 1854 (`fix/pinv-zero-shape-batch`) and mark it ready.
-4. Build the clip fix, preview on fork, then submit.
+4. Review/edit draft PR 1855 (clip NaN) and mark it ready; flip the clip pins after merge.
 5. Review/edit draft Complex PR 31 (f64 overflow) and mark it ready; after a
    Complex release, bump nx's dep and flip the `[BUG-F64-OVERFLOW]` pins.
