@@ -135,7 +135,11 @@ Before posting anything to the issue, two things are worth doing locally:
   suite.
 - **Cross-backend differentials**: `exla/test/differential_fuzz_test.exs`
   (f64 + complex + large-shape GPU sweeps, non-finite agreement, two pinned
-  divergences) and `torchx/test/differential_fuzz_test.exs`.
+  divergences) and `torchx/test/differential_fuzz_test.exs`. The EXLA file
+  is CUDA-only in practice: with `EXLA_CLIENT=host` the same 5 tests fail
+  before and after the v1.0 merge (3 QR Q-matrix sign flips, the
+  clip-NaN divergence pin, one NaN reduction) — host artifacts, not bugs.
+  Everything else in `exla/` and the 4-device sharding suite is green on host.
 - **Sharding**: `exla/test/exla/defn/sharding_fuzz_test.exs` — elementwise
   equivalence plus collectives (all-reduce over the sharded axis). Run with
   `EXLA_TARGET=host XLA_FLAGS=--xla_force_host_platform_device_count=4`.
@@ -185,9 +189,10 @@ Before posting anything to the issue, two things are worth doing locally:
 
 ## Immediate next actions
 
-1. Re-run the EXLA and Torchx fuzz suites against the v1.0 merge (only
-   `nx/` was run on 2026-10-06; the GPU was busy training). Watch the
-   two pinned EXLA divergences and the sharding suite in particular.
+1. Re-run `exla/test/differential_fuzz_test.exs` on the CUDA client once
+   the exphil training queue drains (Torchx, EXLA-host and sharding were
+   verified green against v1.0 on 2026-10-06 from the `nx-v1-verify`
+   worktree). Watch the two pinned GPU divergences.
 2. Decide on `fix/pinv-zero-shape-batch` → upstream PR (rebase onto v1.0).
 3. Build the clip fix, preview on fork, then submit.
 4. Draft the f64-overflow issue on the fork for review before filing.
