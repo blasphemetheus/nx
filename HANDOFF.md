@@ -136,29 +136,78 @@ s2 cannot represent the count 2, so `popcount(s2 -1)` returns `-2`. Fixing
 means widening the output type, saturating, or documenting — a design
 decision, bundled in `clz_sub_byte_crash.md`.
 
-## Checkpoint (#765) — parked, deliberately
+## Checkpoint (#765) — discussion prep done 2026-10-07, no code posted
 
-Gradient checkpointing has a working Evaluator implementation ported to
-current main on `feat/gradient-checkpointing` (local) and
-`feat/gradient-checkpointing-v2` (fork), with 57 tests including
-rematerialization execution-count assertions. polvalente asked to hold for
-after 1.0 as "purely additive", and said it's a missing feature for Axon 1.0.
+Branch state: local `feat/gradient-checkpointing` == fork
+`feat/gradient-checkpointing-v2` (d635c222), based on da1f4fb8, 30 commits
+behind `origin/main`. The older fork branch `feat/gradient-checkpointing`
+predates `Nx.block` and is obsolete. The branch adds a `:checkpoint` Expr op,
+`Nx.Defn.checkpoint/2` (explicit input + fun/1), grad clauses that mirror
+`:block`, an Evaluator `{:recompute, count, thunk}` cache entry so the output
+is never cached, and a 1244-line `checkpoint_test.exs` (57 tests). No EXLA
+support. polvalente asked to hold the PR until José reviews the spec, and
+said it is a missing feature for Axon 1.0, to land after Nx 1.0 (now out).
 
-Before posting anything to the issue, two things are worth doing locally:
+### What was verified on 2026-10-07 (scripts in `scratch/checkpoint_*.exs`)
 
-1. **Prototype the block-route question.** The drafted reply claims
-   checkpoint might become an `Nx.Block` struct since the grad machinery is
-   now identical to `:block`'s. Unverified: block's evaluator path *caches*
-   its output while checkpoint must never cache. Settle it in code so the
-   comment carries evidence.
-2. **EXLA barrier design.** The subtlety recorded in the test file: the
-   barrier cannot live only in EXLA's lowering, because by then grad has
-   already re-traced the body into ordinary ops indistinguishable from the
-   forward pass — CSE would merge them and silently restore O(n) memory
-   while every gradient test stays green. The fence must go in at re-trace
-   time, mirroring JAX's `_remat_lowering` with `prevent_cse=True`. EXLA has
-   no `:checkpoint` lowering and no `stablehlo.optimization_barrier` emitter
-   today.
+1. **`Nx.block` already has checkpoint semantics at the expression level.**
+   `Nx.Defn.Grad.parents_args(:block)` re-invokes the callback on the
+   original inputs and differentiates that fresh tree. The backward never
+   references the forward body's intermediates. `debug_expr` of
+   `grad(sum(block(f)(x)^2))` shows the forward as one `block` node and the
+   recompute as separate inline `exp`/`cos` nodes. The checkpoint branch's
+   grad clauses are a copy of block's.
+2. **XLA undoes the recompute by CSE unless a barrier is present.** The
+   unoptimised HLO has the forward body inside a `call` plus the inline
+   recompute (two `exponential`). After optimisation on either backend the
+   call is inlined and CSE merges them to one `exponential`.
+3. **A `stablehlo.optimization_barrier` on the block's inputs prevents the
+   CSE on CUDA but not on CPU.** Throwaway patch: 5-line
+   `Value.optimization_barrier/1` using the generic `op/5` emitter, applied
+   to `call_args` at the top of `EXLA.Defn.default_block_implementation/5`.
+   Per-pass dump (`--xla_dump_hlo_pass_re=.*`):
+   - CUDA, no barrier: CSE at pass 7 → 1 `exponential` in the final module.
+   - CUDA, barrier: barrier expanded at pass 49 (`remat-pipeline`, the end
+     of the pipeline, after every CSE) → 2 `exponential` survive.
+   - CPU, barrier: `cse_barrier_expander` runs at pass 6, CSE at pass 15 →
+     1 `exponential`. The CPU pipeline removes barriers before CSE, so the
+     memory saving cannot exist on the host client and a regression test
+     for it must run on a GPU or inspect pre-CSE HLO.
+   Gradients were numerically identical in every configuration.
+4. **Measurement tool**: the XLA dump also writes
+   `module_*.{cpu,gpu}_after_optimizations-memory-usage-report.txt` with
+   peak buffer-assignment bytes. That is how to show a peak-memory drop on a
+   layered model without timing anything.
+
+Corrections to earlier notes: the fence does *not* have to go in at re-trace
+time. Putting the barrier on the *forward* block's inputs inside EXLA's
+lowering is enough to defeat CSE, because forward becomes `f(barrier(x))`
+and the recompute stays `f(x)`. What EXLA-only placement cannot do is tie
+the recompute to the incoming cotangent so the scheduler is forced to run it
+late; that needs the barrier in the gradient expression, built where `g` is
+known (`update_grads`), which means a backend-neutral Nx-level node. The
+issue's "Torchx: delegate to torch.utils.checkpoint" item is moot: Torchx is
+a backend under the Evaluator and has no autograd of its own.
+
+### Decision points to settle with polvalente/José before coding
+
+1. Representation: new `:checkpoint` Expr op (branch) vs `Nx.block` with a
+   `%Nx.Block.Checkpoint{}` struct (thin layer, grad machinery free,
+   Evaluator body already uncached because block callbacks run eagerly).
+2. Evaluator output semantics: never cache the output (polvalente's stated
+   preference, branch does this with `{:recompute}`) vs refcounted like any
+   node (JAX semantics; intermediates are already freed by refcounting).
+3. Public API: `checkpoint(fun)` closure (issue text) vs `checkpoint(input,
+   fun)` (branch) vs list of inputs; module (`Nx.Defn` vs `Nx.Defn.Kernel`
+   next to `custom_grad`/`stop_grad`); name (checkpoint vs remat).
+4. EXLA barrier placement: forward-input barrier in lowering only (verified,
+   no Nx-core change, CSE only) vs cotangent-tied barrier in the grad
+   expression (JAX-style scheduling guarantee, needs update_grads-time
+   re-trace like `:while` and a backend-neutral barrier node).
+5. Policy hook: opts/struct field reserved now (`policy:`), implemented later.
+6. Tests: new file vs `describe "checkpoint"` in grad_test.exs; must include
+   vectorized inputs (block's grad devectorizes the re-trace; the branch's
+   clause does not) and a GPU-only HLO/memory assertion for the barrier.
 
 ### Found 2026-10-06, needs an EXLA fix (token chaining) — not yet filed
 
