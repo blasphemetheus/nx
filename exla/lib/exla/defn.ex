@@ -59,8 +59,15 @@ defmodule EXLA.Defn do
     {executable, {used_inputs, outputs, outfeed, _input_typespecs?}} =
       compile(key, vars, fun, compile_options, 0, [], callback)
 
-    if compile_options[:module_compilation] == :to_mlir do
-      throw({:mlir_module, executable.ref, MapSet.new(Map.keys(used_inputs)), outputs})
+    case compile_options[:module_compilation] do
+      :to_mlir ->
+        throw({:mlir_module, executable.ref, MapSet.new(Map.keys(used_inputs)), outputs})
+
+      :to_executable ->
+        throw({:executable, executable})
+
+      _ ->
+        :ok
     end
 
     fn [args] ->
@@ -780,6 +787,24 @@ defmodule EXLA.Defn do
        ) do
     {values, cache} = Enum.map_reduce(tensors, cache, &recur_operator(&1, state, &2))
     {Value.optimization_barrier(values), cache}
+  end
+
+  defp cached_recur_operator(
+         :checkpoint,
+         %T{data: %Expr{args: [input, body, _fun, param]}},
+         state,
+         cache
+       ) do
+    {input_value, cache} = recur_operator(input, state, cache)
+    cache = Map.put(cache, param.data.id, input_value)
+
+    case body do
+      %T{} ->
+        recur_operator(body, state, cache)
+
+      tuple when is_tuple(tuple) ->
+        tuple |> Tuple.to_list() |> Enum.map_reduce(cache, &recur_operator(&1, state, &2))
+    end
   end
 
   # C-backed custom_call blocks (QR, Eigh, …): `EXLA.CustomCall`; else compile default callback.
