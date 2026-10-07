@@ -36,10 +36,11 @@ perms, CallbackServer.
 
 **`fix/pinv-zero-shape-batch`** (on fork, off current main). `pinv_zero_shape`
 reverses the dim list to transpose the trailing two dims and never
-re-reverses the batch prefix — unequal double-batch dims crash, equal ones
-silently broadcast. Two-line `put_elem` fix; tests cover `{3,2,2,2}`,
+re-reverses the batch prefix — unequal double-batch dims crash (equal ones
+are a no-op and come out right). Two-line `put_elem` fix; tests cover `{3,2,2,2}`,
 non-square `{5,4,2,3}` with Moore-Penrose identity, and the all-zeros
-branch. Full nx suite green. Commit message is written for upstream.
+branch. Full nx suite green. Opened as draft PR
+https://github.com/elixir-nx/nx/pull/1854 on 2026-10-07 for review.
 
 **`fix/qr-f16-eps`** (on fork, off `origin/main` 9333caed, 1 commit). Found
 2026-10-06 by the EXLA CUDA suite after the v1.0 merge: `Nx.LinAlg.qr` on
@@ -217,6 +218,6 @@ Before posting anything to the issue, two things are worth doing locally:
 2. All suites verified against the v1.0 merge on 2026-10-06: nx, torchx,
    exla-host, 4-device sharding, and the CUDA differential suite (33
    properties, 31 tests, both GPU divergence pins intact).
-3. Decide on `fix/pinv-zero-shape-batch` → upstream PR (rebase onto v1.0).
+3. Review/edit draft PR 1854 (`fix/pinv-zero-shape-batch`) and mark it ready.
 4. Build the clip fix, preview on fork, then submit.
 5. Draft the f64-overflow issue on the fork for review before filing.
