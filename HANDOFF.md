@@ -279,6 +279,61 @@ Other facts: EXLA pins openxla bb760b047 (2026-01-15) via `elixir-nx/xla`
 (2026-08-12). xla releases: 0.8 2024-08, 0.9 2025-06, 0.10 2026-02. The
 trainer env exports `MODE=cli`; do not use `MODE` as a probe env var.
 
+### Variant C built and measured, 2026-10-07 late (the design to propose)
+
+Branch `exp/checkpoint-barrier-tied` on the fork (f3fc284c), on top of
+Variant B. All three variant branches are pushed to the fork; none has a PR.
+
+What Variant C does (`nx/lib/nx/defn/grad.ex`):
+- `parents_args(:checkpoint)` no longer re-traces for differentiation. It
+  registers the input and the tensors the body captures from the outer graph
+  as children, so the outer pass processes the checkpoint before finishing
+  them. Captures are found by walking a fresh trace and the stored trace side
+  by side (`checkpoint_captured/3`): trace-built nodes get new ids, captured
+  outer tensors keep theirs, so the first shared id on each path is a
+  capture. The capture list is stored in the node kept in the grad `nodes` map
+  (five args), the expression itself keeps four.
+- `update_grads(:checkpoint)` passes `[input | stop_grad(gs)]` through one
+  `optimization_barrier`, re-traces the body on the barriered input, runs a
+  nested `parents_tree`/`traverse_parents` over that fresh tree with the
+  barrier node and the captured tensors as stops (the `cond` grad is the
+  template), then exports the input's and captures' gradients into the outer
+  grads. Conds inside the body are processed first via the `__MODULE__` key,
+  and their direct writes to top-level inputs are carried over (skipping ids
+  that are also captures, which would double count).
+- Variant B's `:optimization_barrier` Expr node is reused (placeholder name).
+  EXLA's `:checkpoint` lowering is a plain inline of the body.
+
+Results: nx suite green (1379 doctests, 1481 tests). CUDA: barrier has two
+operands (input and cotangent), both `exp` survive, gradients equal. 8-layer
+relu MLP peak scratch: plain 1.42 GiB, Variant C 1.17 GiB (hand-built ideal
+1.14). Under EXLA/CUDA the branch's 57-test file has 5 failures: the
+Evaluator-only counter test, three tuple-of-tensor comparisons, and one that
+asserts *bitwise* identical gradients (unreasonable under a compiler).
+
+Test infrastructure added on the same branch (`exla/`):
+- `EXLA.to_executable/3` (like `to_mlir_module/3`, via
+  `module_compilation: :to_executable`) returns the `EXLA.Executable`.
+- `EXLA.Executable.memory_stats/1` (PJRT `GetCompiledMemoryStats`;
+  `:temp_size_in_bytes` is the peak scratch memory) and
+  `EXLA.Executable.optimized_hlo/1` (`GetHloModules` text). Two small NIFs
+  in `exla.cc` using the existing `unwrap` helper.
+- `exla/test/exla/defn/checkpoint_test.exs`: gradient equality (runs
+  everywhere); "recomputed body survives" (two `exponential` in optimized
+  HLO vs one without checkpoint); "lowers peak scratch memory"
+  (`temp_size_in_bytes` smaller than without). The last two carry
+  `@tag :rematerialization`, excluded on the host client in
+  `test_helper.exs` with a comment naming openxla 5e9201ee3. Forced on with
+  `--include rematerialization` on host they fail exactly as expected (one
+  `exp`, equal scratch), so they discriminate. Porting to CPU after the XLA
+  bump is deleting that exclusion line.
+
+Remaining before any PR: name for the barrier node; whether the capture
+discovery walk is acceptable or captures should be explicit; the Evaluator
+caching question (drafted for the user, not posted); convert tuple compares
+and drop the bitwise test in the old test file; consider moving tests into
+`grad_test.exs` per AGENTS.md; the rebase is already done.
+
 ### Found 2026-10-06, needs an EXLA fix (token chaining) — not yet filed
 
 **io_call program order on CUDA**: independent io_calls are lowered as
