@@ -334,6 +334,52 @@ caching question (drafted for the user, not posted); convert tuple compares
 and drop the bitwise test in the old test file; consider moving tests into
 `grad_test.exs` per AGENTS.md; the rebase is already done.
 
+### Variant D: polvalente's semantics as a custom block (2026-10-07, later)
+
+polvalente replied on the issue (2026-10-07 21:59): explore through custom
+blocks (user-definable), expect a new kind of annotation eventually, use PR
+stacks, GPU-only tests are fine, and the goal is not CSE but that a
+checkpoint's output is never held: each use re-runs the body where it is
+used. Branch `exp/checkpoint-block-recompute` (751d1208, on the fork) builds
+exactly that off `main`:
+
+- `Nx.Block.Checkpoint` struct; `Nx.Defn.Kernel.checkpoint/2` wraps a body in
+  that block from one input or an explicit list (wrappers for 1..4 inputs).
+- Evaluator: keeps the block's evaluated inputs and re-runs the body for every
+  consumer (`{:recompute, count, {args, in_values}}` cache entry).
+- EXLA: a checkpoint block is never cached by node id. A consumer lowers its
+  other operands first; the block's copy for that consumer reads its inputs
+  through an `optimization_barrier` shared with those operands, so it cannot
+  run before the consumer could. Gradient: the existing block rule.
+
+Findings:
+1. **Blocks cannot see tensors captured by closure.** Backends re-invoke the
+   callback at run time (the Evaluator passes concrete tensors into a body
+   that holds trace-time weights: "cannot pass a tensor expression as
+   argument to defn"), and EXLA compiles the body as a function of its
+   declared inputs (captured `ws[0]` lowered against the wrong parameter
+   table: "start_indices (3) does not match the rank of the operand (2)").
+   So the block route forces **explicit inputs**: `checkpoint([x, w1, w2],
+   fn x, w1, w2 -> ... end)`. The issue's closure examples do not fit it.
+2. With explicit inputs: 8-layer relu MLP peak **1.02 GiB** (plain 1.42,
+   C 1.17), gradients identical. The cotangent tie emerges by itself: a
+   backward consumer's other operand is the gradient.
+3. The cost: 182 gemm fusions after optimisation vs 77 plain and 111 for C.
+   Literal recompute-at-every-use cascades through a chain (each copy of
+   block i+1 re-inlines block i), so compute grows with depth. In the small
+   probe `y * y` already yields three copies of the body. Standard remat
+   avoids this by storing a checkpoint's inputs and sharing its forward
+   output; only backward uses recompute. The Evaluator variant stores the
+   inputs in each thunk, so in a chain it retains every block output anyway.
+4. Carried-over test file: 402 run, 6 fail: three closure-capture tests and
+   one multi-layer test (by design, see 1), tuple input (blocks take tensor
+   lists), and the "inspect shows checkpoint" test (shows `block`).
+
+Variant E (next, branch `exp/checkpoint-block-remat`): D's block with
+explicit inputs, forward lowered as an ordinary block, and C's update-time
+gradient rule with the barrier over `in_args ++ gs`. No capture discovery is
+needed because inputs are explicit.
+
 ### Found 2026-10-06, needs an EXLA fix (token chaining) — not yet filed
 
 **io_call program order on CUDA**: independent io_calls are lowered as
