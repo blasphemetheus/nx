@@ -86,7 +86,14 @@ and edit before marking ready.
    ±Inf since libtorch defines sign(NaN)=0). **Complex half NOT started**:
    tanh(±Inf)→NaN (want ±1), atanh(any non-finite) crashes, log/log1p/acosh
    on -Inf crash (Complex returns a complex value / raises for a real -Inf).
-   Needs a Complex PR; do not open until the user says. Original note: `floor`/`ceil`/`round`/`atanh` crash on
+   Complex half built on fork `fix/nonfinite-tanh-atanh-log-acosh` (commit
+   f0975fc, off complex main v1.0): tanh(±Inf)→±1.0, atanh(non-finite)→:nan,
+   acosh(-Inf)→:nan (replaces a tested raise). Suite green; verified via dep
+   swap that Nx tanh/atanh/acosh now match EXLA. **No PR yet — user said
+   wait.** log/log1p(-Inf) deliberately left out: Complex has a test pinning
+   log(:neg_infinity) == Inf+πi (complex-domain choice), so the real-tensor
+   CaseClauseError is an Nx-layer question (BinaryBackend receiving a
+   %Complex{} for a real dtype). Original note: `floor`/`ceil`/`round`/`atanh` crash on
    NaN/±Inf; `tanh(±Inf)` returns NaN (want ±1); `sign(NaN)` returns 1.0;
    **`sign(-Inf)` returns +1.0**. ~10 missing clauses, patterned on the
    `ieee754_fallback` table in `fork/fix/binary-backend-ieee754`. Minor
