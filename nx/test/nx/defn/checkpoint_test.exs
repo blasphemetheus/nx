@@ -2,6 +2,7 @@ defmodule Nx.Defn.CheckpointTest do
   use ExUnit.Case, async: true
 
   import Nx.Defn
+  import Nx.Testing, only: [assert_equal: 2]
 
   # --- Forward pass: checkpoint is a no-op ---
 
@@ -12,7 +13,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "returns same result as calling the function directly" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert checkpoint_identity(x) == x
+      assert_equal(checkpoint_identity(x), x)
     end
 
     defn checkpoint_computation(x) do
@@ -25,7 +26,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "produces identical result to non-checkpointed computation" do
       x = Nx.tensor([0.5, 1.0, 1.5])
-      assert checkpoint_computation(x) == no_checkpoint_computation(x)
+      assert_equal(checkpoint_computation(x), no_checkpoint_computation(x))
     end
 
     defn checkpoint_chain(x) do
@@ -41,7 +42,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "chained checkpoints produce identical result" do
       x = Nx.tensor(3.0)
-      assert checkpoint_chain(x) == no_checkpoint_chain(x)
+      assert_equal(checkpoint_chain(x), no_checkpoint_chain(x))
     end
   end
 
@@ -60,7 +61,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "simple elementwise: sin" do
       x = Nx.tensor([0.5, 1.0, 1.5])
-      assert grad_with_checkpoint(x) == grad_without_checkpoint(x)
+      assert_equal(grad_with_checkpoint(x), grad_without_checkpoint(x))
     end
 
     defn grad_checkpoint_multiply(x) do
@@ -75,7 +76,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "reduction: sum of squares" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert grad_checkpoint_multiply(x) == grad_no_checkpoint_multiply(x)
+      assert_equal(grad_checkpoint_multiply(x), grad_no_checkpoint_multiply(x))
     end
 
     defn grad_checkpoint_composed(x) do
@@ -92,7 +93,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "composed: tanh then sum" do
       x = Nx.tensor([0.5, 1.0, 2.0])
-      assert grad_checkpoint_composed(x) == grad_no_checkpoint_composed(x)
+      assert_equal(grad_checkpoint_composed(x), grad_no_checkpoint_composed(x))
     end
   end
 
@@ -126,7 +127,7 @@ defmodule Nx.Defn.CheckpointTest do
       w2 = Nx.tensor([[0.1, 0.4], [-0.2, 0.3]])
       x = Nx.tensor([1.0, 2.0])
 
-      assert grad_checkpointed_layers(w1, w2, x) == grad_plain_layers(w1, w2, x)
+      assert_equal(grad_checkpointed_layers(w1, w2, x), grad_plain_layers(w1, w2, x))
     end
   end
 
@@ -151,7 +152,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "nested checkpoints produce correct gradient" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert grad_nested_checkpoint(x) == grad_no_nested(x)
+      assert_equal(grad_nested_checkpoint(x), grad_no_nested(x))
     end
   end
 
@@ -182,12 +183,12 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "checkpoint with cond (true branch)" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert grad_checkpoint_with_cond(x) == grad_cond_no_checkpoint(x)
+      assert_equal(grad_checkpoint_with_cond(x), grad_cond_no_checkpoint(x))
     end
 
     test "checkpoint with cond (false branch)" do
       x = Nx.tensor([-1.0, -2.0, -3.0])
-      assert grad_checkpoint_with_cond(x) == grad_cond_no_checkpoint(x)
+      assert_equal(grad_checkpoint_with_cond(x), grad_cond_no_checkpoint(x))
     end
   end
 
@@ -218,7 +219,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "checkpoint wrapping while produces correct gradient" do
       x = Nx.tensor([0.5, 1.0])
-      assert grad_checkpoint_with_while(x) == grad_while_no_checkpoint(x)
+      assert_equal(grad_checkpoint_with_while(x), grad_while_no_checkpoint(x))
     end
   end
 
@@ -247,7 +248,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "checkpoint with custom_grad produces correct gradient" do
       x = Nx.tensor([-1.0, 0.5, 2.0])
-      assert grad_checkpoint_custom_grad(x) == grad_custom_grad_no_checkpoint(x)
+      assert_equal(grad_checkpoint_custom_grad(x), grad_custom_grad_no_checkpoint(x))
     end
   end
 
@@ -273,7 +274,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "checkpoint returning tuple produces correct gradient" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert grad_checkpoint_tuple_output(x) == grad_tuple_no_checkpoint(x)
+      assert_equal(grad_checkpoint_tuple_output(x), grad_tuple_no_checkpoint(x))
     end
   end
 
@@ -296,8 +297,8 @@ defmodule Nx.Defn.CheckpointTest do
       x = Nx.tensor([1.0, 2.0, 3.0])
       {val_cp, grad_cp} = vag_with_checkpoint(x)
       {val_no, grad_no} = vag_without_checkpoint(x)
-      assert val_cp == val_no
-      assert grad_cp == grad_no
+      assert_equal(val_cp, val_no)
+      assert_equal(grad_cp, grad_no)
     end
   end
 
@@ -312,7 +313,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "scalar input/output" do
       x = Nx.tensor(3.0)
-      assert grad_checkpoint_scalar(x) == Nx.tensor(6.0)
+      assert_equal(grad_checkpoint_scalar(x), Nx.tensor(6.0))
     end
 
     defn grad_checkpoint_no_grad_path(x, y) do
@@ -325,7 +326,7 @@ defmodule Nx.Defn.CheckpointTest do
     test "captured non-grad variable" do
       x = Nx.tensor([1.0, 2.0, 3.0])
       y = Nx.tensor([4.0, 5.0, 6.0])
-      assert grad_checkpoint_no_grad_path(x, y) == y
+      assert_equal(grad_checkpoint_no_grad_path(x, y), y)
     end
 
     defn grad_checkpoint_high_rank(x) do
@@ -339,7 +340,7 @@ defmodule Nx.Defn.CheckpointTest do
     test "high-rank tensor" do
       x = Nx.iota({2, 3, 4}, type: :f32)
       expected = Nx.Defn.grad(x, &Nx.sum(Nx.sin(&1)))
-      assert grad_checkpoint_high_rank(x) == expected
+      assert_equal(grad_checkpoint_high_rank(x), expected)
     end
   end
 
@@ -402,8 +403,8 @@ defmodule Nx.Defn.CheckpointTest do
 
       {val_cp, grad_cp} = vag_params_with_checkpoint(params, x)
       {val_no, grad_no} = vag_params_no_checkpoint(params, x)
-      assert val_cp == val_no
-      assert grad_cp == grad_no
+      assert_equal(val_cp, val_no)
+      assert_equal(grad_cp, grad_no)
     end
   end
 
@@ -426,7 +427,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "two checkpoints sharing the same input" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert grad_diamond_checkpoint(x) == grad_diamond_no_checkpoint(x)
+      assert_equal(grad_diamond_checkpoint(x), grad_diamond_no_checkpoint(x))
     end
   end
 
@@ -450,7 +451,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "ops before and after checkpoint boundary" do
       x = Nx.tensor([0.1, 0.2, 0.3])
-      assert grad_middle_checkpoint(x) == grad_middle_no_checkpoint(x)
+      assert_equal(grad_middle_checkpoint(x), grad_middle_no_checkpoint(x))
     end
   end
 
@@ -473,7 +474,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "stop_grad inside checkpoint" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert grad_checkpoint_with_stop_grad(x) == grad_stop_grad_no_checkpoint(x)
+      assert_equal(grad_checkpoint_with_stop_grad(x), grad_stop_grad_no_checkpoint(x))
     end
   end
 
@@ -500,7 +501,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "second-order gradient through checkpoint" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert grad_of_grad_checkpoint(x) == grad_of_grad_no_checkpoint(x)
+      assert_equal(grad_of_grad_checkpoint(x), grad_of_grad_no_checkpoint(x))
     end
   end
 
@@ -521,7 +522,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "exp/log chain produces bitwise identical gradient" do
       x = Nx.tensor([0.1, 1.0, 5.0])
-      assert grad_checkpoint_exp_log(x) == grad_exp_log_no_checkpoint(x)
+      assert_equal(grad_checkpoint_exp_log(x), grad_exp_log_no_checkpoint(x))
     end
   end
 
@@ -549,7 +550,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "tuple outputs used in independent expressions" do
       x = Nx.tensor([0.5, 1.0, 1.5])
-      assert grad_multi_output_checkpoint(x) == grad_multi_output_no_checkpoint(x)
+      assert_equal(grad_multi_output_checkpoint(x), grad_multi_output_no_checkpoint(x))
     end
   end
 
@@ -571,7 +572,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "many sequential checkpointed layers forward" do
       x = Nx.tensor([0.5, 1.0])
-      assert apply_checkpointed_sins(x) == apply_plain_sins(x)
+      assert_equal(apply_checkpointed_sins(x), apply_plain_sins(x))
     end
 
     test "gradient through many sequential checkpointed layers" do
@@ -579,7 +580,7 @@ defmodule Nx.Defn.CheckpointTest do
 
       grad_cp = Nx.Defn.grad(x, fn x -> Nx.sum(apply_checkpointed_sins(x)) end)
       grad_plain = Nx.Defn.grad(x, fn x -> Nx.sum(apply_plain_sins(x)) end)
-      assert grad_cp == grad_plain
+      assert_equal(grad_cp, grad_plain)
     end
   end
 
@@ -595,7 +596,7 @@ defmodule Nx.Defn.CheckpointTest do
     test "checkpoint returning constant gives zero gradient" do
       x = Nx.tensor([1.0, 2.0, 3.0])
       result = grad_checkpoint_constant(x)
-      assert result == Nx.broadcast(0.0, {3})
+      assert_equal(result, Nx.broadcast(0.0, {3}))
     end
   end
 
@@ -618,7 +619,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "broadcasting inside checkpoint" do
       x = Nx.tensor([[0.5, 1.0, 1.5], [2.0, 2.5, 3.0]])
-      assert grad_checkpoint_broadcast(x) == grad_broadcast_no_checkpoint(x)
+      assert_equal(grad_checkpoint_broadcast(x), grad_broadcast_no_checkpoint(x))
     end
   end
 
@@ -635,14 +636,14 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "f64 tensors" do
       x = Nx.tensor([1.0, 2.0, 3.0], type: :f64)
-      assert grad_checkpoint_f64(x) == grad_f64_no_checkpoint(x)
+      assert_equal(grad_checkpoint_f64(x), grad_f64_no_checkpoint(x))
     end
 
     test "bf16 tensors" do
       x = Nx.tensor([1.0, 2.0, 3.0], type: :bf16)
       result = grad_checkpoint_f64(x)
       expected = grad_f64_no_checkpoint(x)
-      assert result == expected
+      assert_equal(result, expected)
     end
   end
 
@@ -663,7 +664,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "reshape inside checkpoint" do
       x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-      assert grad_checkpoint_reshape(x) == grad_reshape_no_checkpoint(x)
+      assert_equal(grad_checkpoint_reshape(x), grad_reshape_no_checkpoint(x))
     end
 
     defn grad_checkpoint_transpose(x) do
@@ -682,7 +683,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "transpose inside checkpoint" do
       x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-      assert grad_checkpoint_transpose(x) == grad_transpose_no_checkpoint(x)
+      assert_equal(grad_checkpoint_transpose(x), grad_transpose_no_checkpoint(x))
     end
   end
 
@@ -696,7 +697,7 @@ defmodule Nx.Defn.CheckpointTest do
         end)
 
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert fun.(x) == Nx.sin(x)
+      assert_equal(fun.(x), Nx.sin(x))
     end
 
     test "grad through checkpoint via jit" do
@@ -708,7 +709,7 @@ defmodule Nx.Defn.CheckpointTest do
         end)
 
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert fun.(x) == Nx.Defn.grad(x, &Nx.sum(Nx.sin(&1)))
+      assert_equal(fun.(x), Nx.Defn.grad(x, &Nx.sum(Nx.sin(&1))))
     end
   end
 
@@ -777,7 +778,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "input shape differs from output shape" do
       x = Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
-      assert grad_shape_change(x) == grad_shape_change_plain(x)
+      assert_equal(grad_shape_change(x), grad_shape_change_plain(x))
     end
 
     defn grad_expand_shape(x) do
@@ -797,7 +798,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "output larger than input" do
       x = Nx.tensor([1.0, 2.0])
-      assert grad_expand_shape(x) == grad_expand_shape_plain(x)
+      assert_equal(grad_expand_shape(x), grad_expand_shape_plain(x))
     end
   end
 
@@ -810,7 +811,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "integer tensor forward pass" do
       x = Nx.tensor([1, 2, 3])
-      assert checkpoint_integer_forward(x) == Nx.tensor([2, 3, 4])
+      assert_equal(checkpoint_integer_forward(x), Nx.tensor([2, 3, 4]))
     end
   end
 
@@ -843,7 +844,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "checkpoint inside while inside checkpoint" do
       x = Nx.tensor([0.5, 1.0])
-      assert grad_checkpoint_while_checkpoint(x) == grad_deep_plain(x)
+      assert_equal(grad_checkpoint_while_checkpoint(x), grad_deep_plain(x))
     end
   end
 
@@ -870,7 +871,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "same function reused across multiple checkpoints" do
       x = Nx.tensor([0.5, 1.0, 1.5])
-      assert grad_shared_fun(x) == grad_shared_plain(x)
+      assert_equal(grad_shared_fun(x), grad_shared_plain(x))
     end
   end
 
@@ -897,7 +898,7 @@ defmodule Nx.Defn.CheckpointTest do
     test "tuple as checkpoint input" do
       x = Nx.tensor([1.0, 2.0, 3.0])
       y = Nx.tensor([0.5, 1.0, 1.5])
-      assert grad_tuple_input(x, y) == grad_tuple_input_plain(x, y)
+      assert_equal(grad_tuple_input(x, y), grad_tuple_input_plain(x, y))
     end
   end
 
@@ -919,7 +920,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "identity checkpoint in the middle of chain" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert grad_back_to_back(x) == grad_back_to_back_plain(x)
+      assert_equal(grad_back_to_back(x), grad_back_to_back_plain(x))
     end
   end
 
@@ -942,7 +943,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "complex tensor input" do
       x = Nx.tensor([Complex.new(1.0, 2.0), Complex.new(3.0, -1.0)])
-      assert grad_checkpoint_complex(x) == grad_complex_plain(x)
+      assert_equal(grad_checkpoint_complex(x), grad_complex_plain(x))
     end
   end
 
@@ -963,7 +964,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "slice inside checkpoint" do
       x = Nx.tensor([1.0, 2.0, 3.0, 4.0])
-      assert grad_checkpoint_slice(x) == grad_slice_plain(x)
+      assert_equal(grad_checkpoint_slice(x), grad_slice_plain(x))
     end
 
     defn grad_checkpoint_gather(x) do
@@ -980,7 +981,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "gather inside checkpoint" do
       x = Nx.tensor([1.0, 2.0, 3.0, 4.0])
-      assert grad_checkpoint_gather(x) == grad_gather_plain(x)
+      assert_equal(grad_checkpoint_gather(x), grad_gather_plain(x))
     end
   end
 
@@ -1038,7 +1039,7 @@ defmodule Nx.Defn.CheckpointTest do
     test "grad target captured in checkpoint closure" do
       w = Nx.tensor([[0.5], [0.3]])
       x = Nx.tensor([1.0, 2.0])
-      assert grad_capture_is_target(w, x) == grad_capture_is_target_plain(w, x)
+      assert_equal(grad_capture_is_target(w, x), grad_capture_is_target_plain(w, x))
     end
   end
 
@@ -1056,7 +1057,7 @@ defmodule Nx.Defn.CheckpointTest do
     test "preserves behavior with named tensors" do
       x = Nx.tensor([1.0, 2.0, 3.0], names: [:features])
       expected = Nx.Defn.grad(x, &Nx.sum(Nx.sin(&1)))
-      assert grad_checkpoint_named(x) == expected
+      assert_equal(grad_checkpoint_named(x), expected)
     end
   end
 
@@ -1081,7 +1082,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "chain of different functions" do
       x = Nx.tensor([0.1, 0.5, 1.0])
-      assert grad_asymmetric(x) == grad_asymmetric_plain(x)
+      assert_equal(grad_asymmetric(x), grad_asymmetric_plain(x))
     end
   end
 
@@ -1102,7 +1103,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "Nx.LinAlg.norm inside checkpoint" do
       x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]])
-      assert grad_checkpoint_linalg(x) == grad_linalg_plain(x)
+      assert_equal(grad_checkpoint_linalg(x), grad_linalg_plain(x))
     end
   end
 
@@ -1121,7 +1122,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "checkpoint output used by multiple downstream ops gives correct result" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert checkpoint_used_twice(x) == plain_used_twice(x)
+      assert_equal(checkpoint_used_twice(x), plain_used_twice(x))
     end
 
     defn grad_checkpoint_used_twice(x) do
@@ -1140,7 +1141,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "gradient correct when checkpoint output used by multiple downstream ops" do
       x = Nx.tensor([1.0, 2.0, 3.0])
-      assert grad_checkpoint_used_twice(x) == grad_plain_used_twice(x)
+      assert_equal(grad_checkpoint_used_twice(x), grad_plain_used_twice(x))
     end
   end
 
