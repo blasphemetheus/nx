@@ -177,11 +177,13 @@ Before posting anything to the issue, two things are worth doing locally:
 - `mix` must run from `nx/`, `exla/`, or `torchx/` — from the repo root it
   picks up the wrong project. Compound `cd nx && ... && git ...` breaks
   because git paths are repo-root-relative; keep them in separate calls.
-- `devenv shell` in this repo is BROKEN as of 2026-10-06: CLI 2.3.0 vs an
-  older `devenv.lock` → "option `dotenv.resolved` ... has no value". Fix is
-  `devenv update` (rewrites the untracked lock); not run yet because the
-  exphil trainer was live. Workaround used for pure-Elixir tests: borrow
-  PATH/MIX_HOME/HEX_HOME from a working devenv process.
+- devenv 2.3 reads `devenv.yaml` keys in snake_case, and once a `nixpkgs:`
+  block exists it takes the nixpkgs config from that block only — a top-level
+  `allow_unfree` is silently ignored (error: "package 'cuda_nvcc' has an
+  unfree license"). `devenv.yaml` (untracked) now sets `allow_unfree` and
+  `cuda_capabilities: ["12.0"]` under `nixpkgs:`; the latter cuts NCCL from
+  nine GPU archs to one (an hour+ → minutes) at the cost of no binary-cache
+  hits for CUDA packages. Widen the list if another GPU ever joins.
 - CUDA/EXLA work needs `devenv shell` (a bare shell lacks `make`, CUDA libs,
   and `python3`). `XLA_TARGET=cuda12`, not `cuda` — the bare name is no
   longer a valid target in xla 0.10.
@@ -216,4 +218,3 @@ Before posting anything to the issue, two things are worth doing locally:
 3. Decide on `fix/pinv-zero-shape-batch` → upstream PR (rebase onto v1.0).
 4. Build the clip fix, preview on fork, then submit.
 5. Draft the f64-overflow issue on the fork for review before filing.
-6. `devenv update` once no trainer depends on this checkout.
