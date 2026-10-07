@@ -41,6 +41,20 @@ silently broadcast. Two-line `put_elem` fix; tests cover `{3,2,2,2}`,
 non-square `{5,4,2,3}` with Moore-Penrose identity, and the all-zeros
 branch. Full nx suite green. Commit message is written for upstream.
 
+**`fix/qr-f16-eps`** (on fork, off `origin/main` 9333caed, 1 commit). Found
+2026-10-06 by the EXLA CUDA suite after the v1.0 merge: `Nx.LinAlg.qr` on
+f16 returns all-NaN for wide matrices and for any rank-deficient column.
+Root cause is upstream's "read float literals at the precision of the
+surrounding expression" change (merged 2026-09-10): the default
+`eps: 1.0e-10` is zero in f16, so the zero-norm guard in
+`householder_reflector` never fires and it divides by zero. Reproduces on
+the Evaluator too; EXLA host hides it via the CPU QR custom call. Only QR
+is affected (cholesky/determinant/eigh/svd/pinv/lu probed clean in f16).
+Fix clamps eps to `Nx.Constants.smallest_positive_normal(type)`, the idiom
+`invert` already uses. Regression test in the existing `qr` describe,
+verified failing-before/passing-after; full nx suite and the CUDA
+`EXLA.MLIR.CustomCallTest` f16 case green. Not reported upstream yet.
+
 ### Small focused PRs — fix direction is unambiguous
 
 1. **clip non-finite** (HIGH, do first). `clip(NaN, 0, 2)` returns `0.0` on
@@ -140,6 +154,12 @@ Before posting anything to the issue, two things are worth doing locally:
   before and after the v1.0 merge (3 QR Q-matrix sign flips, the
   clip-NaN divergence pin, one NaN reduction) — host artifacts, not bugs.
   Everything else in `exla/` and the 4-device sharding suite is green on host.
+  On the CUDA client the full `exla/` suite has 24 long-standing failures
+  (same set before and after the merge): the donation and memory-tracking
+  tests build buffers on `:host` and jit on the default client, the
+  `CustomCallAliasTest` asserts CPU custom-call names in MLIR, the
+  `qr_cpu_custom_call` f32 case is too tight for GPU, the io_call
+  program-order test, and nine last-ULP doctests. None are fork bugs.
 - **Sharding**: `exla/test/exla/defn/sharding_fuzz_test.exs` — elementwise
   equivalence plus collectives (all-reduce over the sharded axis). Run with
   `EXLA_TARGET=host XLA_FLAGS=--xla_force_host_platform_device_count=4`.
@@ -189,11 +209,10 @@ Before posting anything to the issue, two things are worth doing locally:
 
 ## Immediate next actions
 
-1. Re-run `exla/test/differential_fuzz_test.exs` on the CUDA client once
-   the exphil training queue drains (Torchx, EXLA-host and sharding were
-   verified green against v1.0 on 2026-10-06 from the `nx-v1-verify`
-   worktree). Watch the two pinned GPU divergences.
-2. Decide on `fix/pinv-zero-shape-batch` → upstream PR (rebase onto v1.0).
-3. Build the clip fix, preview on fork, then submit.
-4. Draft the f64-overflow issue on the fork for review before filing.
-5. `devenv update` once no trainer depends on this checkout.
+1. Decide on `fix/qr-f16-eps` → upstream PR (real v1.0 regression, see above).
+2. All suites verified against the v1.0 merge on 2026-10-06: nx, torchx,
+   exla-host, 4-device sharding, and the CUDA differential suite (33
+   properties, 31 tests, both GPU divergence pins intact).
+4. Build the clip fix, preview on fork, then submit.
+5. Draft the f64-overflow issue on the fork for review before filing.
+6. `devenv update` once no trainer depends on this checkout.
