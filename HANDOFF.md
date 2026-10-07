@@ -94,14 +94,21 @@ and edit before marking ready.
 
 ### Discussion first — fix layer is a maintainer call
 
-**f64 overflow + product-accumulator flavor** (HIGH). `Nx.add(max_f64,
-max_f64)` raises `ArithmeticError` where IEEE wants `Inf`; `pow` returns NaN.
-The reduction flavor is worse: `Nx.product`'s accumulator is a BEAM double
-regardless of dtype, so ~600 f16 elements of 1e3 crash — **this flavor
-affects every float type**. Do NOT open a PR blind: PR #1707 was previously
-closed with "IEEE 754 deferred to Complex library PR", so the rescues may
-belong in the `complex` package rather than BinaryBackend. File one small
-issue with the matrix and ask. The finding doc is effectively the issue text.
+**f64 overflow + product-accumulator flavor** (HIGH) — **fix is in Complex,
+draft PR open**: https://github.com/elixir-nx/complex/pull/31 (2026-10-07,
+fork branch `fix/real-binary-op-overflow`). `Nx.add(max_f64, max_f64)`
+raised `ArithmeticError` and `Nx.pow` returned NaN because
+`Complex.add/subtract/multiply/divide` on reals re-raised BEAM float
+overflow and `Complex.pow` mapped it to `:nan`. BinaryBackend routes ALL
+of its element-wise arithmetic and the `Nx.product` accumulator through
+these, so one Complex change fixes both the element-wise and the
+reduction flavor (verified: with the patched dep swapped into the nx
+build, all five repro cases return ±Inf, including 600×1e3 f16 product).
+Nx follow-up once a Complex release ships and nx bumps the dep: flip the
+`[BUG-F64-OVERFLOW]` pins in `fuzz_float_edge_test.exs` to value
+assertions and drop the [1e-3, 1e3] magnitude cap in the NaN-propagation
+property there. Earlier context: PR #1707 was closed with "defer to the
+Complex library" — this is that deferral, done.
 
 ### Needs a real-world repro before it's worth chasing
 
@@ -229,4 +236,5 @@ HLO evidence and the fix shape are in
    properties, 31 tests, both GPU divergence pins intact).
 3. Review/edit draft PR 1854 (`fix/pinv-zero-shape-batch`) and mark it ready.
 4. Build the clip fix, preview on fork, then submit.
-5. Draft the f64-overflow issue on the fork for review before filing.
+5. Review/edit draft Complex PR 31 (f64 overflow) and mark it ready; after a
+   Complex release, bump nx's dep and flip the `[BUG-F64-OVERFLOW]` pins.
