@@ -786,7 +786,8 @@ defmodule EXLA.Defn do
 
     case body do
       %T{} -> recur_operator(body, state, cache)
-      tuple when is_tuple(tuple) -> recur_composite(tuple, state, cache)
+      tuple when is_tuple(tuple) ->
+        tuple |> Tuple.to_list() |> Enum.map_reduce(cache, &recur_operator(&1, state, &2))
     end
   end
 
