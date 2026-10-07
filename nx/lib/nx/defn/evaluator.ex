@@ -216,17 +216,6 @@ defmodule Nx.Defn.Evaluator do
 
   defp eval(%Nx.Tensor{data: %Expr{op: op, id: id}} = ans, state, [cache | caches]) do
     case cache do
-      %{^id => {:args, count, [%Nx.Block.Checkpoint{} | _] = args}} when op == :block ->
-        {in_values, [cache | caches]} = eval_block_inputs(args, state, [cache | caches])
-        res = eval_block(args, in_values, ans)
-        state.gc && :erlang.garbage_collect(self())
-        {res, [decrement_recompute(cache, id, count, {args, in_values}) | caches]}
-
-      %{^id => {:recompute, count, {args, in_values}}} ->
-        res = eval_block(args, in_values, ans)
-        state.gc && :erlang.garbage_collect(self())
-        {res, [decrement_recompute(cache, id, count, {args, in_values}) | caches]}
-
       %{^id => {:args, count, args}} ->
         {res, [cache | caches]} = eval_apply(op, args, ans, state, [cache | caches])
         state.gc && :erlang.garbage_collect(self())
@@ -244,19 +233,11 @@ defmodule Nx.Defn.Evaluator do
     end
   end
 
-  defp decrement_recompute(cache, id, 1, _thunk), do: Map.delete(cache, id)
-
-  defp decrement_recompute(cache, id, counter, thunk),
-    do: %{cache | id => {:recompute, counter - 1, thunk}}
-
   defp decrement_cache(cache, id, 1, _res), do: Map.delete(cache, id)
   defp decrement_cache(cache, id, counter, res), do: %{cache | id => {:result, counter - 1, res}}
 
   defp eval_parent([cache | caches], id, op, ans, state, acc) do
     case cache do
-      %{^id => {:recompute, _count, {args, in_values}}} ->
-        {eval_block(args, in_values, ans), Enum.reverse(acc, [cache | caches])}
-
       %{^id => {:result, _count, res}} ->
         {res, Enum.reverse(acc, [cache | caches])}
 
@@ -277,20 +258,9 @@ defmodule Nx.Defn.Evaluator do
 
   defp decrement_parents([cache | caches], id) do
     case cache do
-      %{^id => {:result, count, value}} ->
-        [decrement_cache(cache, id, count, value) | caches]
-
-      %{^id => {:args, count, args}} ->
-        [%{cache | id => {:args, count - 1, args}} | caches]
-
-      %{^id => {:recompute, 1, _}} ->
-        [Map.delete(cache, id) | caches]
-
-      %{^id => {:recompute, count, thunk}} ->
-        [%{cache | id => {:recompute, count - 1, thunk}} | caches]
-
-      %{} ->
-        [cache | decrement_parents(caches, id)]
+      %{^id => {:result, count, value}} -> [decrement_cache(cache, id, count, value) | caches]
+      %{^id => {:args, count, args}} -> [%{cache | id => {:args, count - 1, args}} | caches]
+      %{} -> [cache | decrement_parents(caches, id)]
     end
   end
 
@@ -303,6 +273,11 @@ defmodule Nx.Defn.Evaluator do
       %Nx.Tensor{} = tensor ->
         {Nx.devectorize(tensor), caches}
     end
+  end
+
+  defp eval_apply(:optimization_barrier, [tensors], _ans, state, caches) do
+    {values, caches} = Enum.map_reduce(tensors, caches, &eval(&1, state, &2))
+    {List.to_tuple(values), caches}
   end
 
   defp eval_apply(:elem, [tuple, i], _ans, state, caches) do
@@ -427,23 +402,6 @@ defmodule Nx.Defn.Evaluator do
   end
 
   ## Control flow helpers
-
-  defp eval_block_inputs([_struct, in_args, _expr, _callback], state, caches) do
-    Enum.map_reduce(in_args, caches, &eval(&1, state, &2))
-  end
-
-  defp eval_block([struct, _in_args, expr, callback], in_values, ans) do
-    {param_prefix, _} = Enum.split_while(in_values, &(not is_list(&1)))
-    backend = Nx.Shared.list_impl!(param_prefix)
-
-    out =
-      case ans do
-        %{type: {:tuple, _}} -> expr
-        _ -> ans
-      end
-
-    backend.block(struct, out, in_values, callback)
-  end
 
   defp while(acc, condition, block, state, caches) do
     state = %{state | params: composite_to_params(acc)}

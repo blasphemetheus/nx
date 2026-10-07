@@ -846,6 +846,13 @@ defmodule Nx.Defn.Expr do
     end
   end
 
+  @doc false
+  def optimization_barrier(tensors) when is_list(tensors) do
+    {tensors, context} = to_exprs(tensors)
+    out = expr(tuple_out(length(tensors)), context || :root, :optimization_barrier, [tensors])
+    tuple(out, tensors)
+  end
+
   @impl true
   def init(opts) do
     if opts != [] do
