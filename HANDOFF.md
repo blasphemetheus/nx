@@ -141,6 +141,15 @@ Before posting anything to the issue, two things are worth doing locally:
    no `:checkpoint` lowering and no `stablehlo.optimization_barrier` emitter
    today.
 
+### Found 2026-10-06, needs an EXLA fix (token chaining) — not yet filed
+
+**io_call program order on CUDA**: independent io_calls are lowered as
+unconnected side-effecting custom calls, so the GPU scheduler reorders them
+(deterministically b, c, a for a three-call chain). Upstream's own
+`EXLA.Defn.APITest` asserts program order and fails on CUDA. Root cause,
+HLO evidence and the fix shape are in
+`nx/FUZZ_FINDINGS/exla_io_call_order_not_preserved_on_gpu.md`.
+
 ## Infrastructure on `integration`
 
 - **Fuzz corpus**: 36 `nx/test/nx/fuzz_*.exs` files. Highlights beyond the
