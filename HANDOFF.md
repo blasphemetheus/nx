@@ -200,7 +200,9 @@ a backend under the Evaluator and has no autograd of its own.
 3. Public API: `checkpoint(fun)` closure (issue text) vs `checkpoint(input,
    fun)` (branch) vs list of inputs; module (`Nx.Defn` vs `Nx.Defn.Kernel`
    next to `custom_grad`/`stop_grad`); name (checkpoint vs remat).
-4. EXLA barrier placement: forward-input barrier in lowering only (verified,
+4. EXLA barrier placement: see "Prototypes and measurements" below; the
+   barrier must include the cotangent, so it has to be built in Grad at
+   update time. Earlier text kept for history: forward-input barrier in lowering only (verified,
    no Nx-core change, CSE only) vs cotangent-tied barrier in the grad
    expression (JAX-style scheduling guarantee, needs update_grads-time
    re-trace like `:while` and a backend-neutral barrier node).
@@ -210,24 +212,72 @@ a backend under the Evaluator and has no autograd of its own.
    clause does not) and a GPU-only HLO/memory assertion for the barrier.
 
 
-### Follow-up checks 2026-10-07 (change decision point 4)
+### Prototypes and measurements, 2026-10-07 evening (supersede decision point 4)
 
-- JAX (`jax/_src/ad_checkpoint.py`, `_remat_lowering`) passes only the
-  *primal inputs* of the recomputed body through `optimization_barrier`,
-  and only when `differentiated` is true. It does not tie the barrier to
-  cotangents. The "cotangent-tied barrier" variant above was speculation;
-  drop it. The design question is just: who inserts the barrier on the
-  inputs, EXLA when lowering `:checkpoint` (forward side, verified) or Nx
-  when re-tracing in grad (recompute side, needs an Nx-level barrier node).
-- XLA `main` `cpu_compiler.cc` adds `OptimizationBarrierExpander` to the
-  "HLO passes after scheduling" pipeline, i.e. late, like GPU. The early
-  expansion observed here (pass 6, pipeline name `cse_barrier_expander`)
-  is the behaviour of the XLA version EXLA currently pins. A future XLA bump
-  should make the host client keep the recompute too; re-run
-  `scratch/checkpoint_block_cse_probe.exs` on `:host` after any bump.
-- The issue body says Evaluator is "pass-through (optionally remat)", while
-  polvalente's later comment says the output must always be recomputed.
-  These conflict; ask which before implementing the Evaluator side.
+Worktree `/home/blewf/git/nx-checkpoint`, off `origin/main` 41e471a6 (which
+already contains the QR f16 fix, #1853 merged). EXLA built for CUDA there.
+Two branches, neither pushed:
+
+- `exp/checkpoint-barrier-exla` = `feat/gradient-checkpointing-v2` rebased
+  onto main (clean, 402 checkpoint+grad tests green) + Variant A: EXLA lowers
+  `:checkpoint` by passing the input through `stablehlo.optimization_barrier`
+  and inlining the body (`cached_recur_operator(:checkpoint, ...)` seeds the
+  cache with the body's parameter id; tuple bodies flattened). Plus a commit
+  converting the test file's raw `==` on tensors to `assert_equal` (the
+  raw form fails on device tensors, which is why AGENTS.md forbids it).
+- `exp/checkpoint-barrier-nx` = the above + Variant B: a tuple-valued
+  `:optimization_barrier` Expr node (`Nx.Defn.Expr.optimization_barrier/1`,
+  `Nx.Defn.Kernel.optimization_barrier/1`, Evaluator identity, EXLA lowering,
+  grad passthrough, `Tree.apply_args` list clause) which
+  `Grad.parents_args(:checkpoint)` wraps around the input before re-tracing.
+  EXLA's `:checkpoint` lowering drops its own barrier. Name is a placeholder;
+  AGENTS.md says no StableHLO terms in Nx.
+
+Measurements (CUDA, RTX 5090, XLA buffer-assignment peak from the dump's
+`*memory-usage-report.txt`; scripts in `scratch/checkpoint_*probe.exs`):
+
+1. Both variants stop CSE on CUDA (two `exponential` survive; gradients equal
+   to the un-checkpointed grad). Neither stops it on the host client (barrier
+   expanded before CSE in the pinned XLA), confirmed for B.
+2. 8-layer dense+relu MLP, 4 checkpoints of two layers each, batch 16384,
+   n 2048, grad wrt weights. Peak bytes: plain 1.42 GiB; Variant A 1.55 GiB;
+   Variant B 1.33 GiB. Variant A made memory *worse*: the schedule shows
+   each block's recompute gemms placed immediately after that block's forward
+   pass and held until the backward. Stopping CSE alone does not give the
+   memory saving.
+3. Hand-written forward+backward (no grad transform) for the same model,
+   varying only what the recompute reads: raw `x` 1.42 GiB (same as plain);
+   `barrier({x})` 1.55 GiB (same as A); `barrier({x, g})` **1.14 GiB**, with
+   the forward pass clean and each recompute scheduled right after its
+   incoming gradient. Feeding the cotangent through the same barrier as the
+   saved input is the mechanism. This is what JAX does: `remat_transpose`
+   extends `prevent_cse` to cover the cotangent args, and `_remat_lowering`
+   puts all flagged args through one `OptimizationBarrierOp`.
+4. XLA's own rematerialisation (GPU `remat-pipeline`, post-scheduling, limit
+   = 80% device memory × `xla_gpu_memory_limit_slop_factor`/100, no per-region
+   hint) forced with slop 3% and 1% on the plain model: it added instructions
+   (380 → 429/416) but the peak stayed 1.42 GiB. "Rematerialization hints"
+   from the issue text are not an available mechanism.
+
+Design consequence: the barrier must be built where the cotangent is known,
+i.e. in `Grad.update_grads(:checkpoint)`, not in `parents_args` where both
+prototypes re-trace today, and not in EXLA's lowering alone (no access to g).
+That means the re-trace has to move to update-time with a nested
+`parents_tree`/`to_grad` over the fresh body (the `:while` grad is the
+template), with captured outer tensors registered as parents up front so the
+outer traversal still visits them. This is the substantive design question
+for the thread; the Evaluator caching question is secondary.
+
+Test-shape findings: the checkpoint test file passes 57/57 on the Evaluator
+after the `assert_equal` conversion; under EXLA/CUDA 4 remain: three compare
+tuples of tensors (needs per-element compare) and one is the Evaluator-only
+"body ran N times" counter. The memory assertion for a real PR should read the
+XLA dump report or count ops on the GPU client only.
+
+Other facts: EXLA pins openxla bb760b047 (2026-01-15) via `elixir-nx/xla`
+0.10.0 (released 2026-02-10); CPU barrier fix is openxla 5e9201ee3
+(2026-08-12). xla releases: 0.8 2024-08, 0.9 2025-06, 0.10 2026-02. The
+trainer env exports `MODE=cli`; do not use `MODE` as a probe env var.
 
 ### Found 2026-10-06, needs an EXLA fix (token chaining) — not yet filed
 
