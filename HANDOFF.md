@@ -213,6 +213,7 @@ Before posting anything to the issue, two things are worth doing locally:
 2. All suites verified against the v1.0 merge on 2026-10-06: nx, torchx,
    exla-host, 4-device sharding, and the CUDA differential suite (33
    properties, 31 tests, both GPU divergence pins intact).
+3. Decide on `fix/pinv-zero-shape-batch` → upstream PR (rebase onto v1.0).
 4. Build the clip fix, preview on fork, then submit.
 5. Draft the f64-overflow issue on the fork for review before filing.
 6. `devenv update` once no trainer depends on this checkout.
