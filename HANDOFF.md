@@ -209,6 +209,26 @@ a backend under the Evaluator and has no autograd of its own.
    vectorized inputs (block's grad devectorizes the re-trace; the branch's
    clause does not) and a GPU-only HLO/memory assertion for the barrier.
 
+
+### Follow-up checks 2026-10-07 (change decision point 4)
+
+- JAX (`jax/_src/ad_checkpoint.py`, `_remat_lowering`) passes only the
+  *primal inputs* of the recomputed body through `optimization_barrier`,
+  and only when `differentiated` is true. It does not tie the barrier to
+  cotangents. The "cotangent-tied barrier" variant above was speculation;
+  drop it. The design question is just: who inserts the barrier on the
+  inputs, EXLA when lowering `:checkpoint` (forward side, verified) or Nx
+  when re-tracing in grad (recompute side, needs an Nx-level barrier node).
+- XLA `main` `cpu_compiler.cc` adds `OptimizationBarrierExpander` to the
+  "HLO passes after scheduling" pipeline, i.e. late, like GPU. The early
+  expansion observed here (pass 6, pipeline name `cse_barrier_expander`)
+  is the behaviour of the XLA version EXLA currently pins. A future XLA bump
+  should make the host client keep the recompute too; re-run
+  `scratch/checkpoint_block_cse_probe.exs` on `:host` after any bump.
+- The issue body says Evaluator is "pass-through (optionally remat)", while
+  polvalente's later comment says the output must always be recomputed.
+  These conflict; ask which before implementing the Evaluator side.
+
 ### Found 2026-10-06, needs an EXLA fix (token chaining) — not yet filed
 
 **io_call program order on CUDA**: independent io_calls are lowered as
