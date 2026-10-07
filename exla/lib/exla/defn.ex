@@ -772,6 +772,24 @@ defmodule EXLA.Defn do
      ), cache}
   end
 
+  # The barrier makes the forward body read a distinct operand from the
+  # gradient's re-traced copy, so XLA cannot merge the two.
+  defp cached_recur_operator(
+         :checkpoint,
+         %T{data: %Expr{args: [input, body, _fun, param]}},
+         state,
+         cache
+       ) do
+    {input_value, cache} = recur_operator(input, state, cache)
+    [barrier] = Value.optimization_barrier([input_value])
+    cache = Map.put(cache, param.data.id, barrier)
+
+    case body do
+      %T{} -> recur_operator(body, state, cache)
+      tuple when is_tuple(tuple) -> recur_composite(tuple, state, cache)
+    end
+  end
+
   # C-backed custom_call blocks (QR, Eigh, …): `EXLA.CustomCall`; else compile default callback.
   defp cached_recur_operator(
          :block,
