@@ -4036,7 +4036,7 @@ defmodule Nx do
   the tensor is clipped on either end according to the
   padding width. Interior padding widths cannot be negative.
 
-  See also: `reflect/2`, `pad_outer/3`
+  See also: `pad_outer/3`
 
   ## Examples
 
@@ -4267,7 +4267,7 @@ defmodule Nx do
   the tensor is clipped on either end according to the
   padding width. Interior padding widths cannot be negative.
 
-  See also: `reflect/2`, `pad/3`
+  See also: `pad/3`
 
   ## Examples
 
@@ -6016,8 +6016,39 @@ defmodule Nx do
 
   defp element_wise_bin_op(left, right, op, fun) do
     type = binary_type(left, right) |> fun.()
+
+    # to_tensor/1 stores every float as f32 and every integer as s32.
+    # Read the literal at the result type instead.
+    left = literal_tensor(left, type)
+    right = literal_tensor(right, type)
+
     apply_vectorized([left, right], &devectorized_element_wise_bin_op(type, &1, &2, op))
   end
+
+  defp literal_tensor(number, type) when is_number(number) do
+    tensor(number, type: literal_type(number, type))
+  end
+
+  defp literal_tensor(other, _type), do: other
+
+  # A float literal is an Elixir f64. Keep it at the output float width, and at
+  # the complex component width, so an f64/c128 op does not round it to f32 first.
+  # bf16 and other floats stay on Type.infer/1, same as to_tensor/1.
+  defp literal_type(number, {:f, size}) when is_float(number), do: {:f, size}
+  defp literal_type(number, {:c, size}) when is_float(number), do: {:f, div(size, 2)}
+
+  # Integers stay integers wide enough to hold the value. Casting one to f32
+  # before the arithmetic rounds it early (for example 16777217 + 1.0).
+  defp literal_type(number, type) when is_integer(number) do
+    if Nx.Type.integer?(type) do
+      type
+    else
+      base = if number < 0, do: {:s, 8}, else: {:u, 8}
+      Nx.Type.merge_number(base, number)
+    end
+  end
+
+  defp literal_type(number, _type), do: Nx.Type.infer(number)
 
   defp devectorized_element_wise_bin_op(type, %T{} = left, %T{} = right, op) do
     %T{shape: left_shape, names: left_names} = left
@@ -12830,7 +12861,7 @@ defmodule Nx do
   ## Error cases
 
       iex> Nx.dot(Nx.tensor([1, 2, 3]), Nx.tensor([1, 2]))
-      ** (ArgumentError) dot/zip expects shapes to be compatible, dimension 0 of left-side (3) does not equal dimension 0 of right-side (2)
+      ** (ArgumentError) dot/zip expects shapes to be compatible, dimension 0 of left shape {3} (3) does not equal dimension 0 of right shape {2} (2)
   """
   @doc type: :ndim
   def dot(t1, t2) do
@@ -13092,12 +13123,12 @@ defmodule Nx do
       iex> u = Nx.tensor([[[1, 1]], [[2, 2]]])
       iex> v = Nx.tensor([[[3], [3]], [[4], [4]]])
       iex> Nx.dot(u, [2], [0], v, [1], [])
-      ** (ArgumentError) right tensor must be batched if left tensor is batched
+      ** (ArgumentError) right tensor of shape {2, 2, 1} must be batched if left tensor of shape {2, 1, 2} is batched, got left batch axes [0] and right batch axes []
 
       iex> u = Nx.tensor([[[1, 1]], [[2, 2]]])
       iex> v = Nx.tensor([[[3], [3]], [[4], [4]]])
       iex> Nx.dot(u, [2], [], v, [1], [0])
-      ** (ArgumentError) left tensor must be batched if right tensor is batched
+      ** (ArgumentError) left tensor of shape {2, 1, 2} must be batched if right tensor of shape {2, 2, 1} is batched, got left batch axes [] and right batch axes [0]
 
       iex> u = Nx.tensor([[[1, 1]], [[2, 2]]])
       iex> v = Nx.tensor([[[3], [3]], [[4], [4]]])
@@ -17809,50 +17840,6 @@ defmodule Nx do
     impl!(tensor).to_pointer(tensor, opts)
   end
 
-  ## Reflect
-
-  @doc """
-  Pads a tensor of rank 1 or greater along the given axes through periodic reflections.
-
-  ## Options
-
-    * `:padding_config` - A list of tuples in the format `{pre, post}`,
-      which specify the length (0 or greater) of the reflection before and
-      after the tensor along a each axis.
-
-  See also: `pad/3`
-
-  ## Examples
-
-      iex> Nx.reflect(Nx.tensor([0, 1, 2]), padding_config: [{3, 1}])
-      #Nx.Tensor<
-        s32[7]
-        [1, 2, 1, 0, 1, 2, 1]
-      >
-
-      iex> Nx.reflect(Nx.tensor([[0, 1, 2], [3, 4, 5]], names: [:x, :y]), padding_config: [{2, 0}, {2, 1}])
-      #Nx.Tensor<
-        s32[x: 4][y: 6]
-        [
-          [2, 1, 0, 1, 2, 1],
-          [5, 4, 3, 4, 5, 4],
-          [2, 1, 0, 1, 2, 1],
-          [5, 4, 3, 4, 5, 4]
-        ]
-      >
-  """
-  @doc type: :shape
-  @deprecated "Use pad_outer/3 instead"
-  def reflect(tensor, opts \\ []) do
-    opts = keyword!(opts, [:padding_config])
-
-    padding_with_index(tensor,
-      padding_config: opts[:padding_config],
-      left_index_period: &left_reflect_index_period/1,
-      right_index_period: &right_reflect_index_period/1
-    )
-  end
-
   @doc """
   Calculates the element-wise logarithm of a tensor with base 2.
 
@@ -18004,28 +17991,6 @@ defmodule Nx do
   end
 
   ## Sigils
-
-  @doc false
-  @deprecated "Use ~MAT instead"
-  defmacro sigil_M({:<<>>, _meta, [string]}, modifiers) do
-    {numbers, type} = string |> String.trim() |> binary_to_numbers()
-    numbers_to_tensor(numbers, type, modifiers)
-  end
-
-  @doc false
-  @deprecated "Use ~VEC instead"
-  defmacro sigil_V({:<<>>, _meta, [string]}, modifiers) do
-    string
-    |> String.trim()
-    |> binary_to_numbers()
-    |> case do
-      {[numbers], type} ->
-        numbers_to_tensor(numbers, type, modifiers)
-
-      _ ->
-        raise ArgumentError, "must be one-dimensional"
-    end
-  end
 
   @doc """
   A convenient `~MAT` sigil for building matrices (two-dimensional tensors).

@@ -111,7 +111,7 @@ defmodule Nx.Defn.Grad do
 
   defp constant(float, %T{shape: shape} = t) do
     names = List.duplicate(nil, tuple_size(shape))
-    Expr.constant(%{t | names: names, type: {:f, 32}}, float, [])
+    Expr.constant(%{t | names: names, type: Nx.Type.to_floating(t.type)}, float, [])
   end
 
   # Align heterogenous vectorized inputs to the union of vec axes — matching
@@ -211,7 +211,7 @@ defmodule Nx.Defn.Grad do
   end
 
   defp parents_args(:block, %{data: %{args: [struct, in_args, _expr, callback]}} = t, id, acc) do
-    expr = apply(callback, [struct | in_args])
+    expr = apply(callback, [struct | in_args]) |> Composite.traverse(&Nx.devectorize/1)
 
     # Now traverse over the block expression where args are the new parameters.
     # Once we access the parameter itself, we point the parameter to the arg.
@@ -433,30 +433,56 @@ defmodule Nx.Defn.Grad do
     flatten_initial = Composite.flatten_list([initial])
     context = hd(flatten_initial).data.context
     arg_context = condition.data.context
-    gs = Enum.zip_with(gs, flatten_initial, &Nx.broadcast/2)
-    n_args = length(flatten_initial)
 
-    # Convert all gradients into while parameters.
-    # Positions: arg is 0..n_args-1; grad_args continue from n_args.
-    {grad_args, pos_after_grads} =
-      Enum.map_reduce(gs, n_args, fn g, pos ->
-        {Expr.parameter(g, arg_context, pos), pos + 1}
+    gs =
+      Enum.zip_with(gs, flatten_initial, fn g, init ->
+        g |> Nx.broadcast(init) |> Nx.as_type(Nx.Type.to_floating(init.type))
       end)
+
+    n_args = length(flatten_initial)
 
     # Now compute the gradient of the body, first we build the tree as usual.
     {parents, nodes} = parents_tree(body, %{})
 
-    # The bodies have the grad_arg as their gradient, recursively.
-    {while_grads, []} =
-      Composite.reduce(body, {%{}, grad_args}, fn arg, {grads, [g | gs]} ->
-        {Map.put(grads, arg.data.id, [g]), gs}
-      end)
+    # Convert all gradients into while parameters and differentiate the body
+    # through them. Positions: arg is 0..n_args-1; grad_args continue from n_args.
+    build_grad_body = fn gs ->
+      {grad_args, pos_after_grads} =
+        Enum.map_reduce(gs, n_args, fn g, pos ->
+          {Expr.parameter(g, arg_context, pos), pos + 1}
+        end)
 
-    # Now grad over each input.
-    {grad_body, _} =
-      [arg]
-      |> Composite.flatten_list()
-      |> Enum.map_reduce({nodes, while_grads}, &to_grad(&1, {arg, %{}, 0}, parents, &2, []))
+      # The bodies have the grad_arg as their gradient, recursively.
+      {while_grads, []} =
+        Composite.reduce(body, {%{}, grad_args}, fn arg, {grads, [g | gs]} ->
+          {Map.put(grads, arg.data.id, [g]), gs}
+        end)
+
+      # Now grad over each input.
+      {grad_body, _} =
+        [arg]
+        |> Composite.flatten_list()
+        |> Enum.map_reduce({nodes, while_grads}, &to_grad(&1, {arg, %{}, 0}, parents, &2, []))
+
+      {grad_args, pos_after_grads, grad_body}
+    end
+
+    {grad_args, pos_after_grads, grad_body} = build_grad_body.(gs)
+
+    # The body may compute a carry's gradient in a wider type than the carry it
+    # flows into: an f32 carry combined with an f64 one comes back f64. The loop
+    # requires the carry and the body to agree, so widen the carries to whatever
+    # the body produced and differentiate again.
+    promoted = Enum.zip_with(gs, grad_body, fn g, gb -> Nx.Type.merge(g.type, gb.type) end)
+
+    {gs, grad_args, pos_after_grads, grad_body} =
+      if promoted == Enum.map(gs, & &1.type) do
+        {gs, grad_args, pos_after_grads, grad_body}
+      else
+        gs = Enum.zip_with(gs, promoted, &Nx.as_type/2)
+        {grad_args, pos_after_grads, grad_body} = build_grad_body.(gs)
+        {gs, grad_args, pos_after_grads, grad_body}
+      end
 
     # Reverse-mode through while must apply body VJPs from last iteration to first.
     # We rematerialize each intermediate state from `initial` (O(n²) time, O(1)
@@ -1158,12 +1184,7 @@ defmodule Nx.Defn.Grad do
   end
 
   defp grad(:sigmoid, [x], ans, g, _batch_count) do
-    gs =
-      x
-      |> Nx.negate()
-      |> Nx.exp()
-      |> Nx.multiply(ans)
-      |> Nx.multiply(ans)
+    gs = Nx.multiply(ans, Nx.subtract(1, ans))
 
     [{x, Nx.multiply(g, gs)}]
   end

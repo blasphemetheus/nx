@@ -3,7 +3,7 @@ defmodule Nx.Defn.GradTest do
 
   import Nx.Defn
   import Nx.Helpers
-  import Nx.Testing, only: [assert_equal: 2]
+  import Nx.Testing
   import Nx, only: :sigils
 
   @iters 1..25
@@ -134,6 +134,24 @@ defmodule Nx.Defn.GradTest do
         Nx.add(io_call_tuple_first(a), io_call_tuple_second(a)),
         io_call_tuple_both(a)
       )
+    end
+
+    defn value_and_grad_runtime_raise(t) do
+      value_and_grad(t, fn t ->
+        if t < 0 do
+          runtime_raise("negative input")
+        else
+          Nx.pow(t, 2)
+        end
+      end)
+    end
+
+    test "runtime_raise in if passes gradients through and runs on the primal path" do
+      assert value_and_grad_runtime_raise(Nx.tensor(3.0)) == {Nx.tensor(9.0), Nx.tensor(6.0)}
+
+      assert_raise RuntimeError, "negative input", fn ->
+        value_and_grad_runtime_raise(Nx.tensor(-1.0))
+      end
     end
   end
 
@@ -2067,7 +2085,7 @@ defmodule Nx.Defn.GradTest do
   end
 
   for fun <-
-        [:cbrt, :cos, :exp, :expm1, :log, :log1p, :sigmoid] ++
+        [:cbrt, :cos, :exp, :expm1, :log, :log1p] ++
           [:mean, :negate, :rsqrt, :sin, :sqrt, :sum, :tanh] do
     describe "#{fun}" do
       grad_fun = :"grad_#{fun}"
@@ -2092,6 +2110,42 @@ defmodule Nx.Defn.GradTest do
           t = random_uniform(0.1, 10.0, type: {:c, 128})
           check_grads!(&Nx.unquote(fun)(&1), &(__MODULE__.unquote(grad_fun) / 1), t)
         end
+      end
+    end
+  end
+
+  describe "sigmoid" do
+    defn grad_sigmoid(t), do: grad(t, &Nx.sigmoid/1)
+    defn grad_x_times_sigmoid(t), do: grad(t, &Nx.sum(&1 * Nx.sigmoid(&1)))
+
+    test "computes gradient" do
+      for _ <- @iters, type <- @types do
+        t = random_uniform(0.1, 10.0, type: type)
+        check_grads!(&Nx.sigmoid/1, &grad_sigmoid/1, t)
+      end
+    end
+
+    test "is finite at the extremes of each float type" do
+      for type <- [{:f, 16}, {:bf, 16}, {:f, 32}, {:f, 64}] do
+        t =
+          Nx.stack([
+            Nx.Constants.neg_infinity(type),
+            Nx.Constants.min_finite(type),
+            Nx.tensor(-100.0, type: type),
+            Nx.Constants.max_finite(type),
+            Nx.Constants.infinity(type)
+          ])
+
+        assert_all_close(grad_sigmoid(t), Nx.tensor([0.0, 0.0, 0.0, 0.0, 0.0], type: type))
+
+        t =
+          Nx.stack([
+            Nx.Constants.min_finite(type),
+            Nx.tensor(-100.0, type: type),
+            Nx.Constants.max_finite(type)
+          ])
+
+        assert_all_close(grad_x_times_sigmoid(t), Nx.tensor([0.0, 0.0, 1.0], type: type))
       end
     end
   end
@@ -2246,39 +2300,39 @@ defmodule Nx.Defn.GradTest do
     defn grad_sum_broadcast(t), do: grad(t, &Nx.sum(Nx.broadcast(&1, {3, 2, 2})))
 
     test "computes gradient" do
-      for multiplier <- [1, Complex.new(0, 1)] do
+      for {multiplier, type} <- [{1, {:f, 32}}, {Complex.new(0, 1), {:c, 64}}] do
         assert grad_sum_broadcast({3, 2, 2} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(1.0, {3, 2, 2})
+                 Nx.broadcast(Nx.tensor(1.0, type: type), {3, 2, 2})
 
         assert grad_sum_broadcast({1, 2, 2} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(3.0, {1, 2, 2})
+                 Nx.broadcast(Nx.tensor(3.0, type: type), {1, 2, 2})
 
         assert grad_sum_broadcast({3, 1, 2} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(2.0, {3, 1, 2})
+                 Nx.broadcast(Nx.tensor(2.0, type: type), {3, 1, 2})
 
         assert grad_sum_broadcast({3, 2, 1} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(2.0, {3, 2, 1})
+                 Nx.broadcast(Nx.tensor(2.0, type: type), {3, 2, 1})
 
         assert grad_sum_broadcast({3, 1, 1} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(4.0, {3, 1, 1})
+                 Nx.broadcast(Nx.tensor(4.0, type: type), {3, 1, 1})
 
         assert grad_sum_broadcast({1, 1, 1} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(12.0, {1, 1, 1})
+                 Nx.broadcast(Nx.tensor(12.0, type: type), {1, 1, 1})
 
         assert grad_sum_broadcast({2, 2} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(3.0, {2, 2})
+                 Nx.broadcast(Nx.tensor(3.0, type: type), {2, 2})
 
         assert grad_sum_broadcast({1, 2} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(6.0, {1, 2})
+                 Nx.broadcast(Nx.tensor(6.0, type: type), {1, 2})
 
         assert grad_sum_broadcast({2, 1} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(6.0, {2, 1})
+                 Nx.broadcast(Nx.tensor(6.0, type: type), {2, 1})
 
         assert grad_sum_broadcast({2} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(6.0, {2})
+                 Nx.broadcast(Nx.tensor(6.0, type: type), {2})
 
         assert grad_sum_broadcast({} |> Nx.iota() |> Nx.multiply(multiplier)) ==
-                 Nx.broadcast(12.0, {})
+                 Nx.broadcast(Nx.tensor(12.0, type: type), {})
       end
     end
   end
@@ -3116,34 +3170,34 @@ defmodule Nx.Defn.GradTest do
 
     test "computes gradient for complex" do
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({3, 2, 2}))) ==
-               Nx.broadcast(1.0, {3, 2, 2})
+               Nx.broadcast(Complex.new(1.0), {3, 2, 2})
 
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({1, 2, 2}))) ==
-               Nx.broadcast(3.0, {1, 2, 2})
+               Nx.broadcast(Complex.new(3.0), {1, 2, 2})
 
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({1, 1, 2}))) ==
-               Nx.broadcast(6.0, {1, 1, 2})
+               Nx.broadcast(Complex.new(6.0), {1, 1, 2})
 
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({1, 1, 1}))) ==
-               Nx.broadcast(12.0, {1, 1, 1})
+               Nx.broadcast(Complex.new(12.0), {1, 1, 1})
 
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({2, 2}))) ==
-               Nx.broadcast(3.0, {2, 2})
+               Nx.broadcast(Complex.new(3.0), {2, 2})
 
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({1, 2}))) ==
-               Nx.broadcast(6.0, {1, 2})
+               Nx.broadcast(Complex.new(6.0), {1, 2})
 
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({1, 1}))) ==
-               Nx.broadcast(12.0, {1, 1})
+               Nx.broadcast(Complex.new(12.0), {1, 1})
 
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({2}))) ==
-               Nx.broadcast(6.0, {2})
+               Nx.broadcast(Complex.new(6.0), {2})
 
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({1}))) ==
-               Nx.broadcast(12.0, {1})
+               Nx.broadcast(Complex.new(12.0), {1})
 
       assert grad_sum_squeeze_broadcast(Nx.multiply(Nx.Constants.i(), Nx.iota({}))) ==
-               Nx.broadcast(12.0, {})
+               Nx.broadcast(Complex.new(12.0), {})
     end
   end
 
@@ -3185,7 +3239,7 @@ defmodule Nx.Defn.GradTest do
         |> Nx.multiply(Nx.Constants.i())
         |> grad_sum_pad
 
-      rhs = Nx.tensor([[0.0, 0.0], [1.0, 1.0]])
+      rhs = Nx.tensor([[0.0, 0.0], [1.0, 1.0]], type: {:c, 64})
 
       assert lhs == rhs
     end
@@ -3238,7 +3292,7 @@ defmodule Nx.Defn.GradTest do
                Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])
                |> Nx.multiply(Nx.Constants.i())
              ) ==
-               Nx.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]])
+               Nx.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]], type: {:c, 64})
 
       assert grad_sum_dynamic_slice(Nx.tensor([[1.0, 2.0, 3.0], [4.0, 5.0, 6.0]])) ==
                Nx.tensor([[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]])
@@ -3560,7 +3614,7 @@ defmodule Nx.Defn.GradTest do
 
     test "as_type passes through for non-downcasting calls" do
       assert grad_as_type(Nx.tensor([1, 2, 3])) == Nx.tensor([1.0, 1.0, 1.0])
-      assert grad_as_type_complex(~VEC[1+i 2+i 3+i]) == Nx.tensor([1.0, 1.0, 1.0])
+      assert grad_as_type_complex(~VEC[1+i 2+i 3+i]) == ~VEC[1 1 1]c64
     end
 
     test "bitcast passes through" do
@@ -3676,6 +3730,33 @@ defmodule Nx.Defn.GradTest do
     test "computes gradient for constant loop" do
       tensor = Nx.tensor([-2.5, -1.0, 0.0, 1.0, 1.5])
       assert grad_while_constant(tensor) == Nx.tensor([1.0, 1.0, 1.0, 1.0, 1.0])
+    end
+
+    defn grad_while_doubling(t) do
+      grad(t, fn t ->
+        {_, t} =
+          while {i = 0, t}, i < 3 do
+            {i + 1, t * 2.0}
+          end
+
+        Nx.sum(t)
+      end)
+    end
+
+    test "preserves the input type across the loop carry" do
+      # Three doublings, so Σ(8t) and ∂/∂t = 8 everywhere.
+      tensor = Nx.tensor([1.0, 2.0, 3.0], type: {:f, 64})
+      result = grad_while_doubling(tensor)
+
+      assert Nx.type(result) == {:f, 64}
+      assert result == Nx.tensor([8.0, 8.0, 8.0], type: {:f, 64})
+    end
+
+    test "preserves complex types across the loop carry" do
+      result = grad_while_doubling(~VEC[1+1i 2-2i 3])
+
+      assert Nx.type(result) == {:c, 64}
+      assert result == ~VEC[8 8 8]c64
     end
 
     defn grad_while_param(t, x) do
@@ -3830,6 +3911,60 @@ defmodule Nx.Defn.GradTest do
       x = Nx.tensor(0.5, type: :f32)
       assert_all_close(power_via_generator(x), power_via_generator_unroll(x))
       assert_all_close(grad_power_via_generator(x), grad_power_via_generator_unroll(x))
+    end
+
+    defn grad_while_accumulator(a) do
+      grad(a, fn a ->
+        {_i, _a, acc} =
+          while {i = 0, a = a, acc = a}, i < 3 do
+            {i + 1, a, acc + a}
+          end
+
+        acc
+      end)
+    end
+
+    test "computes the gradient of a multi-element carry" do
+      for type <- [f: 8, bf: 16, f: 16, f: 32, f: 64, c: 64, c: 128] do
+        # acc = a + 3a, so the gradient is 4 and keeps the input's type.
+        result = grad_while_accumulator(Nx.tensor(1.0, type: type))
+
+        assert Nx.type(result) == type
+        assert_equal(result, 4)
+      end
+    end
+
+    defn grad_while_carried_series(a, s) do
+      grad(a, fn a ->
+        {_i, acc, _s} =
+          while {i = 0, acc = a, s = s}, i < 3 do
+            {i + 1, acc + Nx.sum(s), s}
+          end
+
+        acc
+      end)
+    end
+
+    test "computes the gradient when a carry has a different type to the input" do
+      for type <- [f: 8, bf: 16, f: 16, f: 32, f: 64, c: 64, c: 128] do
+        # acc = a + 3 * sum(s), so the gradient is 1 whatever s holds. a's
+        # type must absorb whatever the body computes, so widen it to
+        # whatever merges with the series' type: f64 for reals, complex for
+        # complex s (f64 alone doesn't absorb complex; merge always favors it).
+        sink_type = Nx.Type.merge({:f, 64}, type)
+        s = Nx.broadcast(Nx.tensor(2, type: type), {4})
+        result = grad_while_carried_series(Nx.tensor(1, type: sink_type), s)
+
+        assert Nx.type(result) == sink_type
+        assert_equal(result, 1)
+
+        result = grad_while_carried_series(Nx.tensor(1, type: type), Nx.broadcast(2, {4}))
+
+        # a's gradient is floating point; for a float type that's a no-op, for
+        # an integer type it's the same-size float (s64 becomes f64, not f32).
+        assert Nx.type(result) == type
+        assert_equal(result, 1)
+      end
     end
   end
 
@@ -6037,6 +6172,11 @@ defmodule Nx.Defn.GradTest do
       assert grad_y.vectorized_axes == [batch: 2]
     end
 
+    test "finite difference of a vectorized cosine" do
+      x = Nx.tensor([[0.4, -0.7], [1.1, 0.2]], type: :f64) |> Nx.vectorize(:batch)
+      check_grads!(fn x -> Nx.sum(Nx.cos(x)) end, x, step: 1.0e-7, atol: 1.0e-4, rtol: 1.0e-4)
+    end
+
     test "large vectorized batch" do
       x = Nx.iota({64, 4}, type: :f32) |> Nx.divide(256) |> Nx.add(0.1) |> Nx.vectorize(:batch)
 
@@ -6567,6 +6707,42 @@ defmodule Nx.Defn.GradTest do
           Nx.sum(Nx.window_reduce(t, a, {2}, fn x, acc -> Nx.max(x, acc) end))
         end)
       end
+    end
+  end
+
+  describe "finite differences" do
+    test "broadcast" do
+      x = Nx.tensor([0.5, -1.0, 1.5], type: :f64)
+      y = Nx.tensor([[1.0, 2.0, 3.0], [0.5, -0.5, 1.0]], type: :f64)
+
+      check_grads!(
+        fn x ->
+          x |> Nx.reshape({1, 3}) |> Nx.multiply(y) |> Nx.sum()
+        end,
+        x
+      )
+    end
+
+    test "reductions" do
+      x = Nx.tensor([[0.5, 1.5], [0.25, 0.75]], type: :f64)
+      check_grads!(fn x -> Nx.sum(Nx.pow(x, 2)) end, x)
+      check_grads!(fn x -> Nx.product(Nx.add(x, 1)) end, x)
+    end
+
+    test "composition" do
+      x = Nx.tensor([0.2, -0.4, 0.6], type: :f64)
+
+      check_grads!(
+        fn x ->
+          x |> Nx.multiply(0.25) |> Nx.exp() |> Nx.sin() |> Nx.sum()
+        end,
+        x
+      )
+    end
+
+    test "matrix product" do
+      x = Nx.tensor([[0.5, -0.2], [0.3, 0.8]], type: :f64)
+      check_grads!(fn x -> Nx.sum(Nx.dot(x, Nx.transpose(x))) end, x)
     end
   end
 end

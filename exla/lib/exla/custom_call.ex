@@ -39,10 +39,11 @@ defprotocol EXLA.CustomCall do
       is used instead.
 
     * **`{:ok, %EXLA.CustomCall.Spec{}}`** — emit a StableHLO custom call; see
-      `EXLA.CustomCall.Spec` for `call_target_name`, optional `attributes`
-      (`[{name, attr}]` string pairs for the `stablehlo.custom_call` `backend_config` dictionary), and optional
-      `operand_element_types` (operand converts when they differ
-      from the lowered inputs).
+      `EXLA.CustomCall.Spec` for `call_target_name`; optional `attributes`
+      (`[{name, attr}]` string pairs for the `stablehlo.custom_call` `backend_config`
+      dictionary); optional `mlir_attributes` (string pairs emitted directly on
+      `stablehlo.custom_call`); and optional `operand_element_types` (operand converts
+      when they differ from the lowered inputs).
 
   ## Dispatch
 
@@ -53,11 +54,9 @@ defprotocol EXLA.CustomCall do
 
   ## Native handlers
 
-  Emitting a custom call in MLIR is only half of the story: the **target name**
-  must be registered with XLA on the relevant platform (typically via a native
-  library loaded into the process). That registration is **not** configured
-  through `config :exla, ...`; you load or link the native code by the same
-  means you would for any other NIF-backed extension.
+  For a custom call backed by an external native library, load the library that
+  registers the corresponding native handler for the active XLA platform before
+  compiling the block.
 
   ## Example
 

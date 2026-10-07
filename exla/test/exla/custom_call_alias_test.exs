@@ -59,13 +59,7 @@ defmodule EXLA.CustomCallAliasTest do
       """)
     end
 
-    case EXLA.NIF.load_dylib(path) do
-      :ok ->
-        :ok
-
-      other ->
-        flunk("load_dylib(#{path}) expected :ok, got: #{inspect(other)}")
-    end
+    assert EXLA.load_dylib(path) == :ok
   end
 
   test "builtin QR lowering includes qr_cpu_custom_call_f32 in MLIR" do
@@ -103,7 +97,7 @@ defmodule EXLA.CustomCallAliasTest do
     refute mlir =~ "@eigh_cpu_custom_call_s32("
   end
 
-  test "QR alias plugin: MLIR uses alias name and not the builtin target string" do
+  test "QR alias plugin: MLIR uses alias name and MLIR attributes" do
     load_plugin!()
 
     arg = Nx.iota({3, 4}, type: {:f, 32})
@@ -111,6 +105,11 @@ defmodule EXLA.CustomCallAliasTest do
 
     assert mlir =~ "qr_cpu_custom_call_f32_exla_alias"
     refute mlir =~ "@qr_cpu_custom_call_f32("
+    refute mlir =~ "backend_config"
+    assert mlir =~ "operand_layouts = [dense<[1, 0]> : tensor<2xindex>]"
+
+    assert mlir =~
+             "result_layouts = [dense<[1, 0]> : tensor<2xindex>, dense<[1, 0]> : tensor<2xindex>]"
   end
 
   test "QR alias plugin: JIT result matches builtin QR" do
