@@ -380,6 +380,48 @@ explicit inputs, forward lowered as an ordinary block, and C's update-time
 gradient rule with the barrier over `in_args ++ gs`. No capture discovery is
 needed because inputs are explicit.
 
+### Variant E: checkpoint block with explicit inputs + update-time tied gradient
+
+Branch `exp/checkpoint-block-remat` on the fork (off D). D's block and
+`Nx.Defn.Kernel.checkpoint/2`, but the forward is an ordinary block (cached,
+`func.call`), the Evaluator caches the output like any block, and the gradient
+is C's update-time rule on `:block` with `%Nx.Block.Checkpoint{}`: only the
+inputs are registered at parents time; at update time the first input and the
+stop_grad'd incoming gradients go through one `optimization_barrier`, the
+callback is re-invoked on the barriered input plus the other inputs, the fresh
+tree is differentiated in a nested pass with the barrier and the other inputs
+as stops, and the inputs' gradients are exported. No capture discovery.
+Includes the EXLA introspection NIFs and the EXLA checkpoint test file from C
+(call form adapted). Carried-over Nx test file: 402 run, 8 by-design failures
+(closure captures, tuple input, inspect text, Evaluator recompute counter).
+
+Measurements (same 8-layer relu MLP, CUDA):
+
+| variant | peak scratch | gemm fusions after opt |
+|---|---|---|
+| plain | 1.42 GiB | 77 |
+| A barrier on forward input (EXLA) | 1.55 GiB | 107 |
+| B barrier on recompute input (Nx node) | 1.33 GiB | – |
+| C tied barrier, `:checkpoint` node, captures discovered | 1.17 GiB | 111 |
+| D block, recompute at every use | 1.02 GiB | 182 |
+| E block, tied barrier over all inputs | 1.28 GiB | 107 |
+| E block, tied barrier over first input only | 1.17 GiB | 111 |
+
+New rule learned from E: operands of an optimization barrier stay live until
+the barrier fires. Barriering the weight slices pinned 128 MiB from forward to
+backward. Barrier exactly the residual being saved, nothing the scheduler can
+re-derive cheaply. With the single-input `checkpoint(x, fun)` form this is
+automatic; with an explicit input list it needs a rule (E uses "first input").
+
+Where this leaves the design: C and E are the same mechanism; E is the block
+form Pol asked to explore, which forces explicit inputs because block bodies
+cannot see closure captures (D finding 1). D is Pol's literal semantics and
+wins on memory but its compute cascades with chain depth (182 gemms) and its
+Evaluator form retains block outputs inside the next block's thunk. The
+questions for the thread: block + explicit inputs (E) vs node + closure
+captures (C); whether "recompute at every use" (D) is wanted given the cost;
+Evaluator output caching; the barrier node's name.
+
 ### Found 2026-10-06, needs an EXLA fix (token chaining) — not yet filed
 
 **io_call program order on CUDA**: independent io_calls are lowered as
