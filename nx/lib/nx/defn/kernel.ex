@@ -250,6 +250,25 @@ defmodule Nx.Defn.Kernel do
   end
 
   @doc """
+  Recomputes `fun.(input)` wherever its result is used instead of keeping
+  the result in memory. Inside `grad`, the body is recomputed during the
+  backward pass instead of its intermediates being stored.
+  """
+  def checkpoint(inputs, fun)
+      when Kernel.and(is_list(inputs), is_function(fun, length(inputs))) do
+    Nx.block(%Nx.Block.Checkpoint{}, inputs, nil, checkpoint_block_fun(fun, length(inputs)))
+  end
+
+  def checkpoint(input, fun) when is_function(fun, 1) do
+    Nx.block(%Nx.Block.Checkpoint{}, [input], nil, fn %Nx.Block.Checkpoint{}, x -> fun.(x) end)
+  end
+
+  defp checkpoint_block_fun(fun, 1), do: fn _struct, a -> fun.(a) end
+  defp checkpoint_block_fun(fun, 2), do: fn _struct, a, b -> fun.(a, b) end
+  defp checkpoint_block_fun(fun, 3), do: fn _struct, a, b, c -> fun.(a, b, c) end
+  defp checkpoint_block_fun(fun, 4), do: fn _struct, a, b, c, d -> fun.(a, b, c, d) end
+
+  @doc """
   Defines a custom gradient for the given expression.
 
   It also expects a list of inputs of the gradient and a `fun`

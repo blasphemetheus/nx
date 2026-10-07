@@ -81,3 +81,11 @@ end
 defmodule Nx.Block.IRFFT do
   defstruct eps: nil, length: nil, axis: nil
 end
+
+defmodule Nx.Block.Checkpoint do
+  @moduledoc """
+  Marks a block whose output is recomputed from its inputs wherever it is
+  used instead of being kept in memory.
+  """
+  defstruct []
+end
