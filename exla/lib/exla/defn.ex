@@ -772,8 +772,16 @@ defmodule EXLA.Defn do
      ), cache}
   end
 
-  # The barrier makes the forward body read a distinct operand from the
-  # gradient's re-traced copy, so XLA cannot merge the two.
+  defp cached_recur_operator(
+         :optimization_barrier,
+         %T{data: %Expr{args: [tensors]}},
+         state,
+         cache
+       ) do
+    {values, cache} = Enum.map_reduce(tensors, cache, &recur_operator(&1, state, &2))
+    {Value.optimization_barrier(values), cache}
+  end
+
   defp cached_recur_operator(
          :checkpoint,
          %T{data: %Expr{args: [input, body, _fun, param]}},
@@ -781,8 +789,7 @@ defmodule EXLA.Defn do
          cache
        ) do
     {input_value, cache} = recur_operator(input, state, cache)
-    [barrier] = Value.optimization_barrier([input_value])
-    cache = Map.put(cache, param.data.id, barrier)
+    cache = Map.put(cache, param.data.id, input_value)
 
     case body do
       %T{} -> recur_operator(body, state, cache)

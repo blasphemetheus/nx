@@ -312,6 +312,11 @@ defmodule Nx.Defn.Evaluator do
     end
   end
 
+  defp eval_apply(:optimization_barrier, [tensors], _ans, state, caches) do
+    {values, caches} = Enum.map_reduce(tensors, caches, &eval(&1, state, &2))
+    {List.to_tuple(values), caches}
+  end
+
   defp eval_apply(:elem, [tuple, i], _ans, state, caches) do
     {tuple, caches} = composite_eval(tuple, state, caches)
     {elem(tuple, i), caches}

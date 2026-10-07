@@ -230,7 +230,8 @@ defmodule Nx.Defn.Grad do
     # expression tree. The backward pass differentiates this duplicate
     # tree, so gradient expressions do not reference the forward body's
     # intermediates — they are recomputed from the saved input instead.
-    expr = fun.(input)
+    {barriered_input} = Expr.optimization_barrier([input])
+    expr = fun.(barriered_input)
 
     {parents, nodes} =
       Composite.reduce(expr, acc, fn expr, {parents, nodes} ->
@@ -276,6 +277,9 @@ defmodule Nx.Defn.Grad do
 
   defp reduce_args(:io_call, %{data: %{args: [tensor_expr | _]}}, acc, fun),
     do: Composite.reduce(tensor_expr, acc, fun)
+
+  defp reduce_args(:optimization_barrier, %{data: %{args: [tensors]}}, acc, fun),
+    do: Enum.reduce(tensors, acc, fun)
 
   defp reduce_args(:checkpoint, %{data: %{args: [input | _]}}, acc, fun),
     do: fun.(input, acc)
@@ -434,6 +438,12 @@ defmodule Nx.Defn.Grad do
     update_in(grads[tuple.data.id], fn tuple ->
       tuple = tuple || Tuple.duplicate([], size)
       put_elem(tuple, pos, [g | elem(tuple, pos)])
+    end)
+  end
+
+  defp update_grads(:optimization_barrier, [tensors], _ans, gs, _to_grad_ids, grads) do
+    Enum.zip_reduce(tensors, List.wrap(gs), grads, fn child, g, grads ->
+      Map.update(grads, child.data.id, [g], &[g | &1])
     end)
   end
 
@@ -696,6 +706,7 @@ defmodule Nx.Defn.Grad do
   defp tuple_primal(:metadata, [expr | _]), do: expr
   defp tuple_primal(:cond, [_, last]), do: last
   defp tuple_primal(:io_call, [tensor_expr | _]), do: tensor_expr
+  defp tuple_primal(:optimization_barrier, [tensors]), do: List.to_tuple(tensors)
   defp tuple_primal(_, _), do: nil
 
   defp select_composite(pred, left, right) do

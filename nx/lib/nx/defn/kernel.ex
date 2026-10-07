@@ -249,6 +249,11 @@ defmodule Nx.Defn.Kernel do
     Nx.Defn.Expr.metadata(expr, %{stop_grad: true, inspect: :stop_grad})
   end
 
+  @doc false
+  def optimization_barrier(tuple) when is_tuple(tuple) do
+    Nx.Defn.Expr.optimization_barrier(Tuple.to_list(tuple))
+  end
+
   @doc """
   Defines a custom gradient for the given expression.
 
