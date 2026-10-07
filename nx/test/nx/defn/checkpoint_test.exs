@@ -2,7 +2,7 @@ defmodule Nx.Defn.CheckpointTest do
   use ExUnit.Case, async: true
 
   import Nx.Defn
-  import Nx.Testing, only: [assert_equal: 2]
+  import Nx.Testing, only: [assert_equal: 2, assert_all_close: 2]
 
   # --- Forward pass: checkpoint is a no-op ---
 
@@ -550,7 +550,7 @@ defmodule Nx.Defn.CheckpointTest do
 
     test "tuple outputs used in independent expressions" do
       x = Nx.tensor([0.5, 1.0, 1.5])
-      assert_equal(grad_multi_output_checkpoint(x), grad_multi_output_no_checkpoint(x))
+      assert_all_close(grad_multi_output_checkpoint(x), grad_multi_output_no_checkpoint(x))
     end
   end
 

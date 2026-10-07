@@ -225,21 +225,24 @@ defmodule Nx.Defn.Grad do
     {parents, Map.put(nodes, id, updated_node)}
   end
 
-  defp parents_args(:checkpoint, %{data: %{args: [input, _expr, fun, param]}} = t, id, acc) do
-    # Re-trace the body against the original input, producing a fresh
-    # expression tree. The backward pass differentiates this duplicate
-    # tree, so gradient expressions do not reference the forward body's
-    # intermediates — they are recomputed from the saved input instead.
-    {barriered_input} = Expr.optimization_barrier([input])
-    expr = fun.(barriered_input)
+  defp parents_args(:checkpoint, %{data: %{args: [input, body, fun, param]}} = t, id, acc) do
+    # The body is differentiated at update time, once the incoming gradient
+    # is known. Here we register the input and the tensors the body reads
+    # from the outer graph, so the outer traversal processes this node before
+    # it finishes theirs.
+    captured = checkpoint_captured(fun.(input), body, param.data.id)
 
     {parents, nodes} =
-      Composite.reduce(expr, acc, fn expr, {parents, nodes} ->
-        parents = Map.update(parents, expr.data.id, [id], &[id | &1])
-        recur_parents_tree(expr, {parents, nodes})
+      Enum.reduce([input | captured], acc, fn arg, {parents, nodes} ->
+        if arg.data.op in @constants do
+          {parents, nodes}
+        else
+          parents = Map.update(parents, arg.data.id, [id], &[id | &1])
+          recur_parents_tree(arg, {parents, nodes})
+        end
       end)
 
-    updated_node = put_in(t.data.args, [input, expr, fun, param])
+    updated_node = put_in(t.data.args, [input, body, fun, param, captured])
     {parents, Map.put(nodes, id, updated_node)}
   end
 
@@ -292,6 +295,52 @@ defmodule Nx.Defn.Grad do
 
   defp reduce_args(_op, t, acc, fun),
     do: Tree.apply_args(t, acc, &{&1, fun.(&1, &2)}) |> elem(1)
+
+  # Walks a fresh trace of the body and the stored trace side by side. Nodes
+  # built by the trace get new ids each time, while tensors captured from the
+  # outer graph keep theirs, so the first shared id on each path is a capture.
+  defp checkpoint_captured(fresh, body, param_id) do
+    fresh = Composite.flatten_list([fresh])
+    body = Composite.flatten_list([body])
+
+    {_visited, captured} =
+      Enum.zip_reduce(fresh, body, {%{}, %{}}, &checkpoint_lockstep(&1, &2, param_id, &3))
+
+    Map.values(captured)
+  end
+
+  defp checkpoint_lockstep(
+         %T{data: %Expr{id: fresh_id}} = fresh,
+         %T{data: %Expr{id: body_id}} = body,
+         param_id,
+         {visited, captured}
+       ) do
+    cond do
+      body_id == param_id ->
+        {visited, captured}
+
+      fresh_id == body_id ->
+        {visited, Map.put(captured, fresh_id, fresh)}
+
+      Map.has_key?(visited, fresh_id) ->
+        {visited, captured}
+
+      true ->
+        visited = Map.put(visited, fresh_id, true)
+
+        Enum.zip_reduce(
+          tensor_args(fresh),
+          tensor_args(body),
+          {visited, captured},
+          &checkpoint_lockstep(&1, &2, param_id, &3)
+        )
+    end
+  end
+
+  defp tensor_args(tensor) do
+    {_, args} = Tree.apply_args(tensor, [], fn arg, acc -> {arg, [arg | acc]} end)
+    Enum.reverse(args)
+  end
 
   ## Recursion
 
@@ -387,6 +436,8 @@ defmodule Nx.Defn.Grad do
     end
   end
 
+  defp add_grad(grads, %T{data: %Expr{id: id}}, g), do: Map.update(grads, id, [g], &[g | &1])
+
   defp sum_grad([]), do: Expr.tensor(0.0)
   defp sum_grad([g]), do: clear_axis_names(g)
   defp sum_grad(gs), do: gs |> Enum.map(&clear_axis_names/1) |> Enum.reduce(&Nx.add/2)
@@ -458,15 +509,67 @@ defmodule Nx.Defn.Grad do
     grads
   end
 
-  defp update_grads(:checkpoint, [_input, expr, _fun, _param], _ans, gs, _to_grad_ids, grads) do
+  defp update_grads(
+         :checkpoint,
+         [input, _body, fun, _param, captured],
+         _ans,
+         gs,
+         to_grad_ids,
+         grads
+       ) do
     gs = List.wrap(gs)
 
-    {grads, []} =
-      Composite.reduce(expr, {grads, gs}, fn child, {grads, [g | gs]} ->
-        {Map.update(grads, child.data.id, [g], &[g | &1]), gs}
+    # The saved input and the incoming gradients go through one barrier, so
+    # the recomputation can neither be merged with the forward body nor be
+    # scheduled before the backward pass reaches this point.
+    stopped_gs = Enum.map(gs, &Expr.metadata(&1, %{stop_grad: true}))
+
+    [barriered_input | barriered_gs] =
+      [input | stopped_gs] |> Expr.optimization_barrier() |> Tuple.to_list()
+
+    %T{data: %Expr{args: [barrier, 0]}} = barriered_input
+    fresh = barriered_input |> fun.() |> Composite.traverse(&Nx.devectorize/1)
+
+    stops = Map.new([barrier | captured], &{&1.data.id, :stop})
+    {parents, nodes} = parents_tree(fresh, stops)
+
+    {inner_grads, []} =
+      Composite.reduce(fresh, {%{}, barriered_gs}, fn out, {inner, [g | rest]} ->
+        {Map.put(inner, out.data.id, [g]), rest}
       end)
 
-    grads
+    {_nodes, inner_grads} =
+      Enum.reduce([__MODULE__ | Map.keys(stops)], {nodes, inner_grads}, fn id, acc ->
+        traverse_parents(id, to_grad_ids, parents, acc)
+      end)
+
+    # A cond inside the body differentiates its branches down to the top-level
+    # inputs itself and records those directly, so carry them over.
+    {_to_grad, ids, _batch_count} = to_grad_ids
+
+    grads =
+      Enum.reduce(ids, grads, fn {id, _}, grads ->
+        case Map.get(inner_grads, id) do
+          list when is_list(list) and not is_map_key(stops, id) ->
+            Map.update(grads, id, list, &(list ++ &1))
+
+          _ ->
+            grads
+        end
+      end)
+
+    grads =
+      case Map.get(inner_grads, barrier.data.id) do
+        nil -> grads
+        tuple -> add_grad(grads, input, sum_grad(elem(tuple, 0)))
+      end
+
+    Enum.reduce(captured, grads, fn tensor, grads ->
+      case Map.get(inner_grads, tensor.data.id) do
+        nil -> grads
+        list -> add_grad(grads, tensor, sum_grad(list))
+      end
+    end)
   end
 
   defp update_grads(:while, [initial, arg, condition, body], _ans, gs, _to_grad_ids, grads) do
@@ -703,6 +806,7 @@ defmodule Nx.Defn.Grad do
   end
 
   defp tuple_primal(:block, [_, _, expr | _]), do: expr
+  defp tuple_primal(:checkpoint, [_, body | _]), do: body
   defp tuple_primal(:metadata, [expr | _]), do: expr
   defp tuple_primal(:cond, [_, last]), do: last
   defp tuple_primal(:io_call, [tensor_expr | _]), do: tensor_expr
