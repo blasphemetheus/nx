@@ -53,7 +53,9 @@ is affected (cholesky/determinant/eigh/svd/pinv/lu probed clean in f16).
 Fix clamps eps to `Nx.Constants.smallest_positive_normal(type)`, the idiom
 `invert` already uses. Regression test in the existing `qr` describe,
 verified failing-before/passing-after; full nx suite and the CUDA
-`EXLA.MLIR.CustomCallTest` f16 case green. Not reported upstream yet.
+`EXLA.MLIR.CustomCallTest` f16 case green. Opened as draft PR
+https://github.com/elixir-nx/nx/pull/1853 on 2026-10-07 for the user to review
+and edit before marking ready.
 
 ### Small focused PRs — fix direction is unambiguous
 
@@ -211,7 +213,7 @@ Before posting anything to the issue, two things are worth doing locally:
 
 ## Immediate next actions
 
-1. Decide on `fix/qr-f16-eps` → upstream PR (real v1.0 regression, see above).
+1. Review/edit draft PR 1853 (`fix/qr-f16-eps`) and mark it ready.
 2. All suites verified against the v1.0 merge on 2026-10-06: nx, torchx,
    exla-host, 4-device sharding, and the CUDA differential suite (33
    properties, 31 tests, both GPU divergence pins intact).
