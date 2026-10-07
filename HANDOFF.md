@@ -79,7 +79,14 @@ and edit before marking ready.
    **silently dropped** (plausible wrong gradient, no diagnostic); missing
    ones leak the internal `ERROR! grad for metadata returned N entries`.
    Validate length symmetrically and raise the existing friendly message.
-5. **unary non-finite** (HIGH). `floor`/`ceil`/`round`/`atanh` crash on
+5. **unary non-finite** (HIGH) — **Nx half open as draft PR**
+   https://github.com/elixir-nx/nx/pull/1856 (2026-10-07, fork
+   `fix/unary-nonfinite`): floor/ceil/round pass atoms through, sign has
+   atom clauses; doctests run on all three backends (sign doctest uses only
+   ±Inf since libtorch defines sign(NaN)=0). **Complex half NOT started**:
+   tanh(±Inf)→NaN (want ±1), atanh(any non-finite) crashes, log/log1p/acosh
+   on -Inf crash (Complex returns a complex value / raises for a real -Inf).
+   Needs a Complex PR; do not open until the user says. Original note: `floor`/`ceil`/`round`/`atanh` crash on
    NaN/±Inf; `tanh(±Inf)` returns NaN (want ±1); `sign(NaN)` returns 1.0;
    **`sign(-Inf)` returns +1.0**. ~10 missing clauses, patterned on the
    `ieee754_fallback` table in `fork/fix/binary-backend-ieee754`. Minor
