@@ -165,8 +165,12 @@ defmodule Nx.FuzzDarklinesTest do
       mesh = %Nx.Mesh{name: "m", shape: {1}}
 
       assert_raise RuntimeError, ~r/sharding is not supported by Nx.Defn.Evaluator/, fn ->
+        # input_shardings are validated by Nx.Defn.Compiler before the
+        # compiler is dispatched, so an unsharded spec is needed to reach
+        # the Evaluator's own rejection.
         Nx.Defn.shard_jit_apply(fn x -> x end, mesh, [[Nx.tensor(1.0)]],
-          compiler: Nx.Defn.Evaluator
+          compiler: Nx.Defn.Evaluator,
+          input_shardings: [%{}]
         )
       end
     end

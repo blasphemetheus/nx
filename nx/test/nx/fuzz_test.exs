@@ -1044,7 +1044,7 @@ defmodule Nx.FuzzTest do
             ) do
         t = Nx.iota({len}, type: type)
         pad = min(:rand.uniform(len - 1), len - 1)
-        result = Nx.reflect(t, padding_config: [{pad, pad}])
+        result = Nx.pad_outer(t, :reflect, [{pad, pad}])
         assert Nx.shape(result) == {len + 2 * pad}
       end
     end

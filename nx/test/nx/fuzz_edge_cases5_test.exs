@@ -14,7 +14,7 @@ defmodule Nx.FuzzEdgeCases5Test do
 
   describe "hook edge cases" do
     defn hook_passthrough(x) do
-      hook(x, :inspect_x)
+      io_call(x, :inspect_x)
     end
 
     test "hook returns the expression unchanged" do
@@ -39,7 +39,7 @@ defmodule Nx.FuzzEdgeCases5Test do
     defn hook_in_chain(x) do
       x
       |> Nx.multiply(2)
-      |> hook(:after_mul)
+      |> io_call(:after_mul)
       |> Nx.add(1)
     end
 
@@ -58,7 +58,7 @@ defmodule Nx.FuzzEdgeCases5Test do
     end
 
     defn hook_with_default(x) do
-      hook(Nx.add(x, 1), :add_hook, fn _val -> :ok end)
+      io_call(Nx.add(x, 1), :add_hook, fn _val -> :ok end)
     end
 
     test "hook with default callback (no override)" do
@@ -81,7 +81,7 @@ defmodule Nx.FuzzEdgeCases5Test do
     end
 
     defn hook_container(a, b) do
-      hook({a, b}, :pair)
+      io_call({a, b}, :pair)
     end
 
     test "hook with tuple container" do
@@ -217,7 +217,7 @@ defmodule Nx.FuzzEdgeCases5Test do
   describe "hooks in while loops" do
     defn hook_in_while(x) do
       while x, Nx.less(x, 5) do
-        hook(x + 1, :step)
+        io_call(x + 1, :step)
       end
     end
 
@@ -242,7 +242,7 @@ defmodule Nx.FuzzEdgeCases5Test do
 
     defn hook_in_while_zero_iters(x) do
       while x, Nx.less(x, 0) do
-        hook(x + 1, :step)
+        io_call(x + 1, :step)
       end
     end
 
@@ -265,9 +265,9 @@ defmodule Nx.FuzzEdgeCases5Test do
   describe "hooks in cond" do
     defn hook_in_cond(x) do
       if Nx.greater(x, 0) do
-        hook(x, :positive)
+        io_call(x, :positive)
       else
-        hook(Nx.negate(x), :negative)
+        io_call(Nx.negate(x), :negative)
       end
     end
 

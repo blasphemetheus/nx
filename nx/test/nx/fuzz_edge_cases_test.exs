@@ -108,7 +108,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     test "slice raises on rank mismatch in start_indices" do
       t = Nx.iota({3, 4})
 
-      assert_raise ArgumentError, ~r/invalid start indices rank/, fn ->
+      assert_raise ArgumentError, ~r/invalid start indices for slice of shape \{3, 4\}, expected 2 start indices/, fn ->
         Nx.slice(t, [0], [3, 4])
       end
     end
@@ -116,7 +116,7 @@ defmodule Nx.FuzzEdgeCasesTest do
     test "slice raises on rank mismatch in lengths" do
       t = Nx.iota({3, 4})
 
-      assert_raise ArgumentError, ~r/invalid limit indices rank/, fn ->
+      assert_raise ArgumentError, ~r/invalid lengths for slice of shape \{3, 4\}, expected 2 lengths/, fn ->
         Nx.slice(t, [0, 0], [3])
       end
     end

@@ -1,4 +1,4 @@
-# Nx fork — handoff (2026-08-28)
+# Nx fork — handoff (2026-10-06)
 
 State of this fork's contribution work to elixir-nx/nx. Companion docs:
 `WORKPLAN.md` (PR sequencing), `nx/FUZZ_ROADMAP.md` (test-coverage map),
@@ -8,7 +8,7 @@ State of this fork's contribution work to elixir-nx/nx. Companion docs:
 
 Eight PRs merged upstream this cycle, all originating from a property-fuzz
 campaign run on this fork. Nothing is currently in flight upstream. The
-`integration` branch (74 commits ahead of `origin/main`) holds the fuzz
+`integration` branch (synced with `origin/main` at v1.0, 2026-10-06) holds the fuzz
 corpus — 36 files, ~16k lines, 698 properties + 668 tests, all green
 against current main. Seven documented bugs remain unfiled, one of which
 already has a tested fix branch waiting for a go-ahead.
@@ -153,6 +153,11 @@ Before posting anything to the issue, two things are worth doing locally:
 - `mix` must run from `nx/`, `exla/`, or `torchx/` — from the repo root it
   picks up the wrong project. Compound `cd nx && ... && git ...` breaks
   because git paths are repo-root-relative; keep them in separate calls.
+- `devenv shell` in this repo is BROKEN as of 2026-10-06: CLI 2.3.0 vs an
+  older `devenv.lock` → "option `dotenv.resolved` ... has no value". Fix is
+  `devenv update` (rewrites the untracked lock); not run yet because the
+  exphil trainer was live. Workaround used for pure-Elixir tests: borrow
+  PATH/MIX_HOME/HEX_HOME from a working devenv process.
 - CUDA/EXLA work needs `devenv shell` (a bare shell lacks `make`, CUDA libs,
   and `python3`). `XLA_TARGET=cuda12`, not `cuda` — the bare name is no
   longer a valid target in xla 0.10.
@@ -180,7 +185,10 @@ Before posting anything to the issue, two things are worth doing locally:
 
 ## Immediate next actions
 
-1. Push `integration` (2 local commits: main merge + pin flip).
-2. Decide on `fix/pinv-zero-shape-batch` → upstream PR.
+1. Re-run the EXLA and Torchx fuzz suites against the v1.0 merge (only
+   `nx/` was run on 2026-10-06; the GPU was busy training). Watch the
+   two pinned EXLA divergences and the sharding suite in particular.
+2. Decide on `fix/pinv-zero-shape-batch` → upstream PR (rebase onto v1.0).
 3. Build the clip fix, preview on fork, then submit.
 4. Draft the f64-overflow issue on the fork for review before filing.
+5. `devenv update` once no trainer depends on this checkout.
