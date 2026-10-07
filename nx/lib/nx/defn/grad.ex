@@ -465,15 +465,17 @@ defmodule Nx.Defn.Grad do
     # The inputs and the incoming gradients go through one barrier, so the
     # recomputation can neither be merged with the forward body nor be
     # scheduled before the backward pass reaches this point.
-    barriered = (tensors ++ stopped_gs) |> Expr.optimization_barrier() |> Tuple.to_list()
-    {barriered_inputs, barriered_gs} = Enum.split(barriered, length(tensors))
+    [first | rest] = tensors
+    barriered = ([first] ++ stopped_gs) |> Expr.optimization_barrier() |> Tuple.to_list()
+    {[barriered_first], barriered_gs} = Enum.split(barriered, 1)
+    barriered_inputs = [barriered_first | rest]
     %T{data: %Expr{args: [barrier, 0]}} = hd(barriered_inputs)
 
     fresh =
       apply(callback, [struct | barriered_inputs ++ opts])
       |> Composite.traverse(&Nx.devectorize/1)
 
-    stops = %{barrier.data.id => :stop}
+    stops = Map.new([barrier | rest], &{&1.data.id, :stop})
     {parents, nodes} = parents_tree(fresh, stops)
 
     {inner_grads, []} =
@@ -488,19 +490,17 @@ defmodule Nx.Defn.Grad do
 
     grads =
       case Map.get(inner_grads, barrier.data.id) do
-        nil ->
-          grads
-
-        tuple ->
-          tensors
-          |> Enum.with_index()
-          |> Enum.reduce(grads, fn {tensor, index}, grads ->
-            case elem(tuple, index) do
-              [] -> grads
-              list -> add_grad(grads, tensor, sum_grad(list))
-            end
-          end)
+        nil -> grads
+        tuple -> add_grad(grads, first, sum_grad(elem(tuple, 0)))
       end
+
+    grads =
+      Enum.reduce(rest, grads, fn tensor, grads ->
+        case Map.get(inner_grads, tensor.data.id) do
+          nil -> grads
+          list -> add_grad(grads, tensor, sum_grad(list))
+        end
+      end)
 
     # A cond inside the body differentiates its branches down to the
     # top-level inputs itself and records those directly, so carry them over.
@@ -508,8 +508,11 @@ defmodule Nx.Defn.Grad do
 
     Enum.reduce(ids, grads, fn {id, _}, grads ->
       case Map.get(inner_grads, id) do
-        list when is_list(list) -> Map.update(grads, id, list, &(list ++ &1))
-        _ -> grads
+        list when is_list(list) and not is_map_key(stops, id) ->
+          Map.update(grads, id, list, &(list ++ &1))
+
+        _ ->
+          grads
       end
     end)
   end
