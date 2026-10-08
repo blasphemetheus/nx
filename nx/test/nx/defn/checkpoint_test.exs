@@ -2,7 +2,7 @@ defmodule Nx.Defn.CheckpointTest do
   use ExUnit.Case, async: true
 
   import Nx.Defn
-  import Nx.Defn.Kernel, only: [checkpoint: 2]
+  import Nx.Defn.Kernel, only: [checkpoint: 1, checkpoint: 2]
   import Nx.Testing, only: [assert_equal: 2, assert_all_close: 2]
 
   # --- Forward pass: checkpoint is a no-op ---
@@ -330,6 +330,35 @@ defmodule Nx.Defn.CheckpointTest do
       assert_equal(grad_checkpoint_no_grad_path(x, y), y)
     end
 
+    defn grad_checkpoint_captured_opts(x, opts \\ []) do
+      opts = keyword!(opts, scale: 2.0)
+      offset = 1.0
+
+      grad(x, fn x ->
+        checkpoint(x, fn x -> Nx.sum(Nx.multiply(x, opts[:scale]) + offset) end)
+      end)
+    end
+
+    test "captured non-tensor values stay closed over" do
+      x = Nx.tensor([1.0, 2.0, 3.0])
+      assert_equal(grad_checkpoint_captured_opts(x, scale: 3.0), Nx.tensor([3.0, 3.0, 3.0]))
+    end
+
+    defn grad_checkpoint_shadowed_name(x, y) do
+      grad(x, fn x ->
+        checkpoint(x, fn x ->
+          y = Nx.multiply(x, 2.0)
+          Nx.sum(Nx.multiply(y, y))
+        end)
+      end)
+    end
+
+    test "body rebinding a name from the enclosing scope" do
+      x = Nx.tensor([1.0, 2.0])
+      y = Nx.tensor([100.0, 100.0])
+      assert_equal(grad_checkpoint_shadowed_name(x, y), Nx.tensor([8.0, 16.0]))
+    end
+
     defn grad_checkpoint_high_rank(x) do
       grad(x, fn x ->
         checkpoint(x, fn x ->
@@ -375,8 +404,7 @@ defmodule Nx.Defn.CheckpointTest do
       w2 = Nx.tensor([[0.1, 0.4], [-0.2, 0.3]])
       x = Nx.tensor([1.0, 2.0])
 
-      assert grad_weights_with_checkpoint(w1, w2, x) ==
-               grad_weights_no_checkpoint(w1, w2, x)
+      assert_equal(grad_weights_with_checkpoint(w1, w2, x), grad_weights_no_checkpoint(w1, w2, x))
     end
 
     defn vag_params_with_checkpoint(params, x) do
@@ -406,6 +434,21 @@ defmodule Nx.Defn.CheckpointTest do
       {val_no, grad_no} = vag_params_no_checkpoint(params, x)
       assert_equal(val_cp, val_no)
       assert_equal(grad_cp, grad_no)
+    end
+
+    defn grad_weights_zero_arity(w1, w2, x) do
+      grad({w1, w2}, fn {w1, w2} ->
+        hidden = checkpoint(fn -> dense_layer(x, w1) end)
+        checkpoint(fn -> dense_layer(hidden, w2) end) |> Nx.sum()
+      end)
+    end
+
+    test "zero-arity checkpoint takes every tensor from the enclosing scope" do
+      w1 = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+      w2 = Nx.tensor([[0.1, 0.4], [-0.2, 0.3]])
+      x = Nx.tensor([1.0, 2.0])
+
+      assert_equal(grad_weights_zero_arity(w1, w2, x), grad_weights_no_checkpoint(w1, w2, x))
     end
   end
 
@@ -754,8 +797,7 @@ defmodule Nx.Defn.CheckpointTest do
       b = Nx.tensor([0.1, -0.1])
       x = Nx.tensor([1.0, 2.0])
 
-      assert grad_multi_capture(w1, w2, b, x) ==
-               grad_multi_capture_plain(w1, w2, b, x)
+      assert_equal(grad_multi_capture(w1, w2, b, x), grad_multi_capture_plain(w1, w2, b, x))
     end
   end
 
