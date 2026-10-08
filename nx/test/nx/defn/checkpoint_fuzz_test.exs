@@ -400,17 +400,24 @@ defmodule Nx.Defn.CheckpointFuzzTest do
             ) do
         {value, grad} = Nx.Defn.value_and_grad(x, loss(&run(steps, &1)))
         {expected_value, expected_grad} = Nx.Defn.value_and_grad(x, loss(&run(strip(steps), &1)))
+        assert Nx.type(value) == Nx.type(expected_value)
         assert Nx.type(grad) == Nx.type(expected_grad)
-        assert_equal(value, expected_value)
 
-        # The two paths accumulate in a different order. The half types
-        # cancel catastrophically in these chains, so only an absolute
-        # bound is meaningful for them.
-        case type do
-          {_, 16} -> assert_all_close(grad, expected_grad, atol: 1.0e-2, rtol: 0)
-          {_, 32} -> assert_all_close(grad, expected_grad, atol: 0, rtol: 1.0e-6)
-          {_, 64} -> assert_all_close(grad, expected_grad, atol: 0, rtol: 1.0e-14)
+        # A block body runs eagerly under the Evaluator, so constant folding
+        # differs by a few units in the last place. The two gradient paths
+        # also accumulate in a different order, and `x - sin x` chains
+        # cancel catastrophically in `1 - cos`, which amplifies that. The
+        # half types only admit an absolute bound.
+        close = fn left, right ->
+          case type do
+            {_, 16} -> assert_all_close(left, right, atol: 1.0e-2, rtol: 0)
+            {_, 32} -> assert_all_close(left, right, atol: 1.0e-7, rtol: 1.0e-5)
+            {_, 64} -> assert_all_close(left, right, atol: 1.0e-15, rtol: 1.0e-13)
+          end
         end
+
+        close.(value, expected_value)
+        close.(grad, expected_grad)
       end
     end
   end
