@@ -452,58 +452,46 @@ defmodule Nx.Defn.Grad do
 
   defp update_grads(
          :block,
-         [%Nx.Block.Checkpoint{} = struct, in_args, _expr, callback],
+         [%Nx.Block.Checkpoint{saved: saved} = struct, in_args, _expr, callback],
          _ans,
          gs,
          to_grad_ids,
          grads
        ) do
-    gs = List.wrap(gs)
     {tensors, opts} = Enum.split_while(in_args, &(not is_list(&1)))
-    stopped_gs = Enum.map(gs, &Expr.metadata(&1, %{stop_grad: true}))
+    stopped_gs = gs |> List.wrap() |> Enum.map(&Expr.metadata(&1, %{stop_grad: true}))
 
-    # The inputs and the incoming gradients go through one barrier, so the
-    # recomputation can neither be merged with the forward body nor be
+    # The saved inputs and the incoming gradients go through one barrier, so
+    # the recomputation can neither be merged with the forward body nor be
     # scheduled before the backward pass reaches this point.
-    [first | rest] = tensors
-    {barriered_first, barriered_gs} = Expr.barrier({first, List.to_tuple(stopped_gs)})
-    barriered_gs = Tuple.to_list(barriered_gs)
-    barriered_inputs = [barriered_first | rest]
-    %T{data: %Expr{args: [barrier, 0]}} = barriered_first
+    saved = if saved == [], do: Enum.to_list(0..(length(tensors) - 1)), else: saved
+
+    {tied, barriered_gs} =
+      Expr.barrier(
+        {List.to_tuple(Enum.map(saved, &Enum.fetch!(tensors, &1))), List.to_tuple(stopped_gs)}
+      )
+
+    tied = Map.new(Enum.zip(saved, Tuple.to_list(tied)))
+    inputs = Enum.with_index(tensors, fn tensor, pos -> Map.get(tied, pos, tensor) end)
 
     fresh =
-      apply(callback, [struct | barriered_inputs ++ opts])
+      apply(callback, [struct | inputs ++ opts])
       |> Composite.traverse(&Nx.devectorize/1)
 
-    stops = Map.new([barrier | rest], &{&1.data.id, :stop})
+    stops = Map.new(inputs, &{&1.data.id, :stop})
     {parents, nodes} = parents_tree(fresh, stops)
 
     {inner_grads, []} =
-      Composite.reduce(fresh, {%{}, barriered_gs}, fn out, {inner, [g | rest]} ->
+      Composite.reduce(fresh, {%{}, Tuple.to_list(barriered_gs)}, fn out, {inner, [g | rest]} ->
         {Map.put(inner, out.data.id, [g]), rest}
       end)
 
-    {_nodes, inner_grads} =
-      Enum.reduce(
-        [__MODULE__, barrier.data.id | Enum.map(rest, & &1.data.id)],
-        {nodes, inner_grads},
-        fn id, acc ->
-          traverse_parents(id, to_grad_ids, parents, acc)
-        end
-      )
+    {input_grads, {_nodes, inner_grads}} =
+      Enum.map_reduce(inputs, {nodes, inner_grads}, &to_grad(&1, to_grad_ids, parents, &2, []))
 
     grads =
-      case Map.get(inner_grads, barrier.data.id) do
-        nil -> grads
-        tuple -> add_grad(grads, first, sum_grad(elem(tuple, 0)))
-      end
-
-    grads =
-      Enum.reduce(rest, grads, fn tensor, grads ->
-        case Map.get(inner_grads, tensor.data.id) do
-          nil -> grads
-          list -> add_grad(grads, tensor, sum_grad(list))
-        end
+      Enum.zip_reduce([tensors, inputs, input_grads], grads, fn [tensor, input, g], grads ->
+        if Map.has_key?(inner_grads, input.data.id), do: add_grad(grads, tensor, g), else: grads
       end)
 
     # A cond inside the body differentiates its branches down to the

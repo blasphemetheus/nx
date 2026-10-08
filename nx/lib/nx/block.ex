@@ -84,8 +84,15 @@ end
 
 defmodule Nx.Block.Checkpoint do
   @moduledoc """
-  Marks a block whose output is recomputed from its inputs wherever it is
-  used instead of being kept in memory.
+  Marks a block whose intermediate results are not kept for the backward
+  pass. The gradient recomputes the body from the inputs when it reaches
+  the block.
+
+  `saved` lists the positions of the inputs that are activations the
+  checkpoint stands in for. Those inputs are tied to the incoming gradient
+  so the recomputation cannot run before the backward pass needs it. The
+  other inputs, typically weights, are already alive for the whole program
+  and are read directly.
   """
-  defstruct []
+  defstruct saved: [0]
 end

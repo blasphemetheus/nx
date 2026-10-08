@@ -16,6 +16,22 @@ defmodule MLPCapture do
     Nx.sum(x)
   end
 
+  defn plain(ws, x) do
+    x = pair(x, ws[0], ws[1])
+    x = pair(x, ws[2], ws[3])
+    x = pair(x, ws[4], ws[5])
+    x = pair(x, ws[6], ws[7])
+    Nx.sum(x)
+  end
+
+  defn capture_all(ws, x) do
+    x = checkpoint(fn -> pair(x, ws[0], ws[1]) end)
+    x = checkpoint(fn -> pair(x, ws[2], ws[3]) end)
+    x = checkpoint(fn -> pair(x, ws[4], ws[5]) end)
+    x = checkpoint(fn -> pair(x, ws[6], ws[7]) end)
+    Nx.sum(x)
+  end
+
   defn ckpt(ws, x) do
     x = checkpoint(x, fn x -> pair(x, ws[0], ws[1]) end)
     x = checkpoint(x, fn x -> pair(x, ws[2], ws[3]) end)
@@ -32,7 +48,12 @@ key = Nx.Random.key(0)
 ws = Nx.multiply(ws, 0.02)
 x = Nx.iota({batch, n}, type: :f32) |> Nx.divide(batch * n)
 
-for {name, fun} <- [explicit: &MLPCapture.explicit/2, capture: &MLPCapture.ckpt/2] do
+for {name, fun} <- [
+      plain: &MLPCapture.plain/2,
+      explicit: &MLPCapture.explicit/2,
+      capture: &MLPCapture.ckpt/2,
+      capture_all: &MLPCapture.capture_all/2
+    ] do
   exec = EXLA.to_executable(fn ws, x -> Nx.Defn.grad(ws, &fun.(&1, x)) end, [ws, x], client: :cuda)
   %{temp_size_in_bytes: temp} = EXLA.Executable.memory_stats(exec)
   hlo = EXLA.Executable.optimized_hlo(exec)

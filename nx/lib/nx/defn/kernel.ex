@@ -266,6 +266,14 @@ defmodule Nx.Defn.Kernel do
   The gradient of such captured tensors flows through the checkpoint like
   the gradient of any other input.
 
+  Pass the activations in `inputs` and read weights from the enclosing
+  scope. The compiler keeps the explicit inputs until the backward pass
+  recomputes the body from them, so every tensor in `inputs` stays in
+  memory for that long. Captured tensors are read as they are, which is
+  what weights want, since they are alive for the whole program anyway.
+  A captured variable is passed whole: `ws[0]` in the body makes all of
+  `ws` an input. Bind the slice outside the checkpoint when that matters.
+
   When `fun` is a captured function such as `&layer/3`, nothing is read
   from the enclosing scope and every tensor must be passed in `inputs`.
   """
@@ -278,6 +286,10 @@ defmodule Nx.Defn.Kernel do
       defn layer(x, w, b) do
         checkpoint(fn -> Nx.dot(x, w) + b end)
       end
+
+  With no explicit inputs, every captured tensor is kept until the
+  backward pass recomputes the body. Pass the activation to `checkpoint/2`
+  instead when the captured tensors include large weights.
 
   """
   defmacro checkpoint(fun), do: checkpoint_macro([], fun, __CALLER__)
@@ -362,7 +374,8 @@ defmodule Nx.Defn.Kernel do
       )
     end
 
-    leaves = Enum.reverse(Enum.reduce(values, [], &checkpoint_leaves/2))
+    input_leaves = Enum.reverse(Enum.reduce(args, [], &checkpoint_leaves/2))
+    leaves = input_leaves ++ Enum.reverse(Enum.reduce(captures, [], &checkpoint_leaves/2))
 
     case leaves do
       [] ->
@@ -375,7 +388,7 @@ defmodule Nx.Defn.Kernel do
         end
 
         Nx.block(
-          %Nx.Block.Checkpoint{},
+          %Nx.Block.Checkpoint{saved: Enum.with_index(input_leaves, fn _, pos -> pos end)},
           leaves,
           nil,
           checkpoint_block_fun(length(leaves), rebuild)
