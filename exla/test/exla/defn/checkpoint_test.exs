@@ -27,14 +27,6 @@ defmodule EXLA.Defn.CheckpointTest do
     Nx.sum(x)
   end
 
-  defn mlp_with_checkpoint(ws, x) do
-    x = checkpoint([x, ws[0], ws[1]], &pair/3)
-    x = checkpoint([x, ws[2], ws[3]], &pair/3)
-    x = checkpoint([x, ws[4], ws[5]], &pair/3)
-    x = checkpoint([x, ws[6], ws[7]], &pair/3)
-    Nx.sum(x)
-  end
-
   defn mlp_with_captured_weights(ws, x) do
     x = checkpoint(x, fn x -> pair(x, ws[0], ws[1]) end)
     x = checkpoint(x, fn x -> pair(x, ws[2], ws[3]) end)

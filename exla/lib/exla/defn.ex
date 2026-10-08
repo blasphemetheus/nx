@@ -789,24 +789,6 @@ defmodule EXLA.Defn do
     {Value.optimization_barrier(values), cache}
   end
 
-  defp cached_recur_operator(
-         :checkpoint,
-         %T{data: %Expr{args: [input, body, _fun, param]}},
-         state,
-         cache
-       ) do
-    {input_value, cache} = recur_operator(input, state, cache)
-    cache = Map.put(cache, param.data.id, input_value)
-
-    case body do
-      %T{} ->
-        recur_operator(body, state, cache)
-
-      tuple when is_tuple(tuple) ->
-        tuple |> Tuple.to_list() |> Enum.map_reduce(cache, &recur_operator(&1, state, &2))
-    end
-  end
-
   # C-backed custom_call blocks (QR, Eigh, …): `EXLA.CustomCall`; else compile default callback.
   defp cached_recur_operator(
          :block,
