@@ -43,7 +43,7 @@ defmodule MLPDump do
   end
 end
 
-n = 2048
+n = String.to_integer(System.get_env("N", "2048"))
 batch = String.to_integer(System.get_env("BATCH", "16384"))
 key = Nx.Random.key(0)
 {ws, _} = Nx.Random.normal(key, shape: {8, n, n}, type: :f32)
