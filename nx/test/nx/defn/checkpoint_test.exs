@@ -191,6 +191,28 @@ defmodule Nx.Defn.CheckpointTest do
       x = Nx.tensor([-1.0, -2.0, -3.0])
       assert_equal(grad_checkpoint_with_cond(x), grad_cond_no_checkpoint(x))
     end
+
+    defn grad_cond_with_checkpoint(x) do
+      grad(x, fn x ->
+        if Nx.greater(Nx.sum(x), 0) do
+          checkpoint(x, fn x -> Nx.sum(Nx.sin(x)) end)
+        else
+          Nx.sum(Nx.cos(x))
+        end
+      end)
+    end
+
+    test "checkpoint inside a cond branch" do
+      assert_equal(
+        grad_cond_with_checkpoint(Nx.tensor([1.0, 2.0, 3.0])),
+        grad_cond_no_checkpoint(Nx.tensor([1.0, 2.0, 3.0]))
+      )
+
+      assert_equal(
+        grad_cond_with_checkpoint(Nx.tensor([-1.0, -2.0, -3.0])),
+        grad_cond_no_checkpoint(Nx.tensor([-1.0, -2.0, -3.0]))
+      )
+    end
   end
 
   describe "interaction with while" do

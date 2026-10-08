@@ -45,6 +45,58 @@ defmodule EXLA.Defn.CheckpointTest do
 
   defp count(hlo, needle), do: hlo |> String.split(needle) |> length() |> Kernel.-(1)
 
+  defn nested(x) do
+    out =
+      checkpoint(x, fn x ->
+        y = x * x
+        z = checkpoint(y, fn y -> Nx.exp(y) end)
+        Nx.sin(z)
+      end)
+
+    Nx.sum(out * out)
+  end
+
+  defn nested_plain(x) do
+    out = Nx.sin(Nx.exp(x * x))
+    Nx.sum(out * out)
+  end
+
+  defn cond_inside(x) do
+    checkpoint(x, fn x ->
+      if Nx.sum(x) > 0, do: Nx.sum(Nx.sin(x)), else: Nx.sum(Nx.cos(x))
+    end)
+  end
+
+  defn cond_outside(x) do
+    if Nx.sum(x) > 0 do
+      checkpoint(x, fn x -> Nx.sum(Nx.sin(x)) end)
+    else
+      Nx.sum(Nx.cos(x))
+    end
+  end
+
+  defn cond_plain(x) do
+    if Nx.sum(x) > 0, do: Nx.sum(Nx.sin(x)), else: Nx.sum(Nx.cos(x))
+  end
+
+  defn while_inside(x) do
+    {_, acc} =
+      while {i = 0, acc = x}, i < 3 do
+        {i + 1, checkpoint(acc, fn acc -> Nx.sin(acc) * acc end)}
+      end
+
+    Nx.sum(acc)
+  end
+
+  defn while_plain(x) do
+    {_, acc} =
+      while {i = 0, acc = x}, i < 3 do
+        {i + 1, Nx.sin(acc) * acc}
+      end
+
+    Nx.sum(acc)
+  end
+
   test "computes the same gradient as the plain function" do
     x = Nx.iota({16}, type: :f32) |> Nx.divide(16)
 
@@ -98,5 +150,34 @@ defmodule EXLA.Defn.CheckpointTest do
     %{temp_size_in_bytes: without_temp} = EXLA.Executable.memory_stats(without_checkpoint)
 
     assert with_temp < without_temp
+  end
+
+  test "nested checkpoints compute the same gradient as the plain function" do
+    x = Nx.tensor([0.5, 1.0, 1.5])
+    assert_all_close(Nx.Defn.grad(x, &nested/1), Nx.Defn.grad(x, &nested_plain/1))
+  end
+
+  test "a cond inside or around a checkpoint computes the same gradient" do
+    for x <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([-1.0, -2.0, -3.0])] do
+      plain = Nx.Defn.grad(x, &cond_plain/1)
+      assert_all_close(Nx.Defn.grad(x, &cond_inside/1), plain)
+      assert_all_close(Nx.Defn.grad(x, &cond_outside/1), plain)
+    end
+  end
+
+  test "a checkpoint inside a while body computes the same gradient" do
+    x = Nx.tensor([0.5, 1.0])
+    assert_all_close(Nx.Defn.grad(x, &while_inside/1), Nx.Defn.grad(x, &while_plain/1))
+  end
+
+  @tag :rematerialization
+  test "a nested checkpoint recomputes its body once per enclosing recomputation" do
+    x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+
+    nested = EXLA.to_executable(fn x -> Nx.Defn.grad(x, &nested/1) end, [x])
+    plain = EXLA.to_executable(fn x -> Nx.Defn.grad(x, &nested_plain/1) end, [x])
+
+    assert count(EXLA.Executable.optimized_hlo(plain), "exponential(") == 1
+    assert count(EXLA.Executable.optimized_hlo(nested), "exponential(") == 3
   end
 end
