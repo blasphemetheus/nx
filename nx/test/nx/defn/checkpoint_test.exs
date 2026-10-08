@@ -1256,7 +1256,7 @@ defmodule Nx.Defn.CheckpointTest do
       refute_received :body_ran
     end
 
-    test "eager: checkpoint output is re-evaluated per downstream consumer, never cached" do
+    test "the forward pass runs the body once however many times the output is used" do
       parent = self()
 
       fun = fn x ->
@@ -1266,7 +1266,6 @@ defmodule Nx.Defn.CheckpointTest do
 
       Nx.Defn.jit_apply(fun, [Nx.tensor([1.0, 2.0])])
 
-      assert_received :body_ran
       assert_received :body_ran
       refute_received :body_ran
     end

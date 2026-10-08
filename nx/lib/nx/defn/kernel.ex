@@ -250,9 +250,20 @@ defmodule Nx.Defn.Kernel do
   end
 
   @doc """
-  Runs `fun` on `inputs` without keeping its intermediate results in memory.
-  Inside `grad`, the body is recomputed during the backward pass from the
-  first input instead of its intermediates being stored.
+  Runs `fun` on `inputs` and marks its intermediate results as not worth
+  keeping for the backward pass.
+
+  Reverse-mode differentiation stores every intermediate result of the
+  forward pass until the backward pass has used it, so the memory of
+  `grad` grows with the depth of the function. A checkpoint trades compute
+  for that memory: the forward pass keeps only the inputs of `fun`, and the
+  backward pass runs `fun` again from them when it needs the intermediates.
+  Each checkpoint costs one extra evaluation of its body. Wrapping each
+  layer of a deep model is the usual pattern, and nothing changes in the
+  values computed.
+
+  Outside `grad` a checkpoint is the same as calling `fun`. Whether the
+  compiler honors the hint depends on the backend; EXLA does on GPU.
 
   `inputs` is a single tensor or container, or a list of them when `fun`
   takes several arguments. When `fun` is written inline, tensors it reads
