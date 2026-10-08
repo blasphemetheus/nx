@@ -131,14 +131,17 @@ defmodule EXLA.Defn.CheckpointTest do
   end
 
   @tag :rematerialization
-  test "lowers the peak scratch memory of the gradient" do
+  test "lowers the peak scratch memory of the gradient by at least one activation" do
     n = 512
     batch = 4096
     ws = Nx.broadcast(Nx.tensor(0.01, type: :f32), {8, n, n})
     x = Nx.broadcast(Nx.tensor(0.5, type: :f32), {batch, n})
 
     with_checkpoint =
-      EXLA.to_executable(fn ws, x -> Nx.Defn.grad(ws, &mlp_with_checkpoint(&1, x)) end, [ws, x])
+      EXLA.to_executable(
+        fn ws, x -> Nx.Defn.grad(ws, &mlp_with_captured_weights(&1, x)) end,
+        [ws, x]
+      )
 
     without_checkpoint =
       EXLA.to_executable(fn ws, x -> Nx.Defn.grad(ws, &mlp_without_checkpoint(&1, x)) end, [
@@ -149,7 +152,10 @@ defmodule EXLA.Defn.CheckpointTest do
     %{temp_size_in_bytes: with_temp} = EXLA.Executable.memory_stats(with_checkpoint)
     %{temp_size_in_bytes: without_temp} = EXLA.Executable.memory_stats(without_checkpoint)
 
-    assert with_temp < without_temp
+    # Each checkpointed pair of layers drops one f32 activation of {batch, n}
+    # from the saved set; the measured saving is about two of them.
+    activation_bytes = batch * n * 4
+    assert without_temp - with_temp >= activation_bytes
   end
 
   test "nested checkpoints compute the same gradient as the plain function" do
