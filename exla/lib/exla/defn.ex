@@ -1022,7 +1022,7 @@ defmodule EXLA.Defn do
     # signature includes those axes, just like its input operands.
     expr = Composite.traverse(expr, &Nx.devectorize/1)
     %module{} = struct
-    key = computation_key(module, [struct | call_args])
+    key = computation_key(module, [struct, block_body_key(struct, expr) | call_args])
 
     {call_body, cache} =
       case cache do
@@ -1052,6 +1052,13 @@ defmodule EXLA.Defn do
       {wrap_tuple_result(result, expr), cache}
     end
   end
+
+  # A checkpoint body is user code, so two checkpoints with the same struct
+  # and argument shapes can compute different things. Key on the body too.
+  defp block_body_key(%Nx.Block.Checkpoint{}, expr),
+    do: Composite.reduce(expr, [], &[&1.data.id | &2])
+
+  defp block_body_key(_struct, _expr), do: nil
 
   ## to_operator creation
 

@@ -35,6 +35,14 @@ defmodule EXLA.Defn.CheckpointTest do
     Nx.sum(x)
   end
 
+  defn mlp_with_captured_weights(ws, x) do
+    x = checkpoint(x, fn x -> pair(x, ws[0], ws[1]) end)
+    x = checkpoint(x, fn x -> pair(x, ws[2], ws[3]) end)
+    x = checkpoint(x, fn x -> pair(x, ws[4], ws[5]) end)
+    x = checkpoint(x, fn x -> pair(x, ws[6], ws[7]) end)
+    Nx.sum(x)
+  end
+
   defp count(hlo, needle), do: hlo |> String.split(needle) |> length() |> Kernel.-(1)
 
   test "computes the same gradient as the plain function" do
@@ -43,6 +51,16 @@ defmodule EXLA.Defn.CheckpointTest do
     assert_all_close(
       Nx.Defn.grad(x, &loss_with_checkpoint/1),
       Nx.Defn.grad(x, &loss_without_checkpoint/1)
+    )
+  end
+
+  test "checkpoints with equal shapes and different bodies keep their own body" do
+    {ws, _} = Nx.Random.normal(Nx.Random.key(0), shape: {8, 16, 16}, type: :f32)
+    x = Nx.iota({8, 16}, type: :f32) |> Nx.divide(128)
+
+    assert_equal(
+      Nx.Defn.grad(ws, &mlp_with_captured_weights(&1, x)),
+      Nx.Defn.grad(ws, &mlp_without_checkpoint(&1, x))
     )
   end
 
