@@ -569,6 +569,25 @@ defmodule Nx.Defn.CheckpointTest do
       x = Nx.tensor([1.0, 2.0, 3.0])
       assert_equal(grad_of_grad_checkpoint(x), grad_of_grad_no_checkpoint(x))
     end
+
+    defn grad_of_grad_outer_loss(x) do
+      grad(x, fn x ->
+        grad(x, fn x -> Nx.sum(Nx.sin(checkpoint(x, fn x -> Nx.sin(x) end))) end)
+        |> Nx.sum()
+      end)
+    end
+
+    defn grad_of_grad_outer_loss_plain(x) do
+      grad(x, fn x ->
+        grad(x, fn x -> Nx.sum(Nx.sin(Nx.sin(x))) end)
+        |> Nx.sum()
+      end)
+    end
+
+    test "second-order gradient when the loss depends on the checkpoint output" do
+      x = Nx.tensor([1.0, 2.0, 3.0])
+      assert_all_close(grad_of_grad_outer_loss(x), grad_of_grad_outer_loss_plain(x))
+    end
   end
 
   # --- Numerical precision ---

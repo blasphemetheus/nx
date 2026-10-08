@@ -459,7 +459,7 @@ defmodule Nx.Defn.Grad do
          grads
        ) do
     {tensors, opts} = Enum.split_while(in_args, &(not is_list(&1)))
-    stopped_gs = gs |> List.wrap() |> Enum.map(&Expr.metadata(&1, %{stop_grad: true}))
+    gs = List.wrap(gs)
 
     # The saved inputs and the incoming gradients go through one barrier, so
     # the recomputation can neither be merged with the forward body nor be
@@ -467,9 +467,7 @@ defmodule Nx.Defn.Grad do
     saved = if saved == [], do: Enum.to_list(0..(length(tensors) - 1)), else: saved
 
     {tied, barriered_gs} =
-      Expr.barrier(
-        {List.to_tuple(Enum.map(saved, &Enum.fetch!(tensors, &1))), List.to_tuple(stopped_gs)}
-      )
+      Expr.barrier({List.to_tuple(Enum.map(saved, &Enum.fetch!(tensors, &1))), List.to_tuple(gs)})
 
     tied = Map.new(Enum.zip(saved, Tuple.to_list(tied)))
     inputs = Enum.with_index(tensors, fn tensor, pos -> Map.get(tied, pos, tensor) end)
@@ -486,12 +484,21 @@ defmodule Nx.Defn.Grad do
         {Map.put(inner, out.data.id, [g]), rest}
       end)
 
-    {input_grads, {_nodes, inner_grads}} =
-      Enum.map_reduce(inputs, {nodes, inner_grads}, &to_grad(&1, to_grad_ids, parents, &2, []))
+    # The body was devectorized above, so its gradients already have the
+    # layout the outer traversal expects.
+    {_nodes, inner_grads} =
+      Enum.reduce(
+        [__MODULE__ | Enum.map(inputs, & &1.data.id)],
+        {nodes, inner_grads},
+        &traverse_parents(&1, to_grad_ids, parents, &2)
+      )
 
     grads =
-      Enum.zip_reduce([tensors, inputs, input_grads], grads, fn [tensor, input, g], grads ->
-        if Map.has_key?(inner_grads, input.data.id), do: add_grad(grads, tensor, g), else: grads
+      Enum.zip_reduce(tensors, inputs, grads, fn tensor, input, grads ->
+        case Map.fetch(inner_grads, input.data.id) do
+          {:ok, list} -> add_grad(grads, tensor, sum_grad(list))
+          :error -> grads
+        end
       end)
 
     # A cond inside the body differentiates its branches down to the
