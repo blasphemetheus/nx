@@ -996,7 +996,12 @@ defmodule EXLA.Defn do
     {to_operator(op, args, expr, state), cache}
   end
 
-  defp lower_checkpoint_args(%T{} = arg, state, cache), do: recur_operator(arg, state, cache)
+  defp lower_checkpoint_args(
+         %T{data: %Expr{op: :block, args: [%Nx.Block.Checkpoint{} | _]}} = arg,
+         state,
+         cache
+       ),
+       do: recur_operator(arg, state, cache)
 
   defp lower_checkpoint_args(list, state, cache) when is_list(list),
     do: Enum.map_reduce(list, cache, &lower_checkpoint_args(&1, state, &2))
