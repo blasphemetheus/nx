@@ -279,7 +279,7 @@ defmodule Nx.Defn.Grad do
   defp reduce_args(:gather, %{data: %{args: [arg | _]}}, acc, fun),
     do: fun.(arg, acc)
 
-  defp reduce_args(:optimization_barrier, %{data: %{args: [tensors]}}, acc, fun),
+  defp reduce_args(:barrier, %{data: %{args: [tensors]}}, acc, fun),
     do: Enum.reduce(tensors, acc, fun)
 
   defp reduce_args(:io_call, %{data: %{args: [tensor_expr | _]}}, acc, fun),
@@ -437,7 +437,7 @@ defmodule Nx.Defn.Grad do
     end
   end
 
-  defp update_grads(:optimization_barrier, [tensors], _ans, gs, _to_grad_ids, grads) do
+  defp update_grads(:barrier, [tensors], _ans, gs, _to_grad_ids, grads) do
     Enum.zip_reduce(tensors, List.wrap(gs), grads, fn child, g, grads ->
       Map.update(grads, child.data.id, [g], &[g | &1])
     end)
@@ -466,10 +466,10 @@ defmodule Nx.Defn.Grad do
     # recomputation can neither be merged with the forward body nor be
     # scheduled before the backward pass reaches this point.
     [first | rest] = tensors
-    barriered = ([first] ++ stopped_gs) |> Expr.optimization_barrier() |> Tuple.to_list()
-    {[barriered_first], barriered_gs} = Enum.split(barriered, 1)
+    {barriered_first, barriered_gs} = Expr.barrier({first, List.to_tuple(stopped_gs)})
+    barriered_gs = Tuple.to_list(barriered_gs)
     barriered_inputs = [barriered_first | rest]
-    %T{data: %Expr{args: [barrier, 0]}} = hd(barriered_inputs)
+    %T{data: %Expr{args: [barrier, 0]}} = barriered_first
 
     fresh =
       apply(callback, [struct | barriered_inputs ++ opts])
@@ -769,7 +769,7 @@ defmodule Nx.Defn.Grad do
   defp tuple_primal(:metadata, [expr | _]), do: expr
   defp tuple_primal(:cond, [_, last]), do: last
   defp tuple_primal(:io_call, [tensor_expr | _]), do: tensor_expr
-  defp tuple_primal(:optimization_barrier, [tensors]), do: List.to_tuple(tensors)
+  defp tuple_primal(:barrier, [tensors]), do: List.to_tuple(tensors)
   defp tuple_primal(_, _), do: nil
 
   defp select_composite(pred, left, right) do

@@ -847,10 +847,12 @@ defmodule Nx.Defn.Expr do
   end
 
   @doc false
-  def optimization_barrier(tensors) when is_list(tensors) do
-    {tensors, context} = to_exprs(tensors)
-    out = expr(tuple_out(length(tensors)), context || :root, :optimization_barrier, [tensors])
-    tuple(out, tensors)
+  def barrier(container) do
+    {tensors, context} = to_exprs(Composite.flatten_list([container]))
+    out = expr(tuple_out(length(tensors)), context || :root, :barrier, [tensors])
+    elems = Tuple.to_list(tuple(out, tensors))
+    {result, []} = Composite.traverse(container, elems, fn _, [elem | rest] -> {elem, rest} end)
+    result
   end
 
   @impl true

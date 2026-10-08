@@ -780,7 +780,7 @@ defmodule EXLA.Defn do
   end
 
   defp cached_recur_operator(
-         :optimization_barrier,
+         :barrier,
          %T{data: %Expr{args: [tensors]}},
          state,
          cache
