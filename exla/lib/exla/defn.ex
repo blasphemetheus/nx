@@ -578,7 +578,8 @@ defmodule EXLA.Defn do
          %T{data: %Expr{op: :block, args: [%Nx.Block.Checkpoint{} | _]}} = expr,
          state,
          cache
-       ) do
+       )
+       when not is_map_key(state, :materialize_checkpoints) do
     cached_recur_operator(:block, Nx.devectorize(expr), state, cache)
   end
 
@@ -788,7 +789,11 @@ defmodule EXLA.Defn do
          %{builder: %Function{}} = state,
          cache
        ) do
-    {call_args, cache} = Enum.map_reduce(in_args, cache, &recur_operator(&1, state, &2))
+    # Inputs that are themselves checkpoints are read from the forward pass
+    # instead of being recomputed, so a chain of checkpoints recomputes one
+    # block per use rather than every block before it.
+    input_state = Map.put(state, :materialize_checkpoints, true)
+    {call_args, cache} = Enum.map_reduce(in_args, cache, &recur_operator(&1, input_state, &2))
     ties = Map.get(state, :checkpoint_ties, [])
     barriered = Value.optimization_barrier(call_args ++ ties)
     call_args = Enum.take(barriered, length(call_args))
