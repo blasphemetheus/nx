@@ -484,9 +484,13 @@ defmodule Nx.Defn.Grad do
       end)
 
     {_nodes, inner_grads} =
-      Enum.reduce([__MODULE__, barrier.data.id], {nodes, inner_grads}, fn id, acc ->
-        traverse_parents(id, to_grad_ids, parents, acc)
-      end)
+      Enum.reduce(
+        [__MODULE__, barrier.data.id | Enum.map(rest, & &1.data.id)],
+        {nodes, inner_grads},
+        fn id, acc ->
+          traverse_parents(id, to_grad_ids, parents, acc)
+        end
+      )
 
     grads =
       case Map.get(inner_grads, barrier.data.id) do
