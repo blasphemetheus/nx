@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Enhancements
+
+  * Lower barrier expression nodes to optimization barriers
+
 ### Bug fixes
 
   * Compile every `Nx.block/4` body on its own instead of sharing one compiled body between blocks with the same struct and argument shapes
