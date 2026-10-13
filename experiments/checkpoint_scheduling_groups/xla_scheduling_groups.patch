@@ -1,0 +1,98 @@
+diff --git a/xla/service/gpu/gpu_hlo_schedule.cc b/xla/service/gpu/gpu_hlo_schedule.cc
+index 5a80706..1444176 100644
+--- a/xla/service/gpu/gpu_hlo_schedule.cc
++++ b/xla/service/gpu/gpu_hlo_schedule.cc
+@@ -548,11 +548,11 @@ LegalizeSchedulingAnnotations::Config SchedulingAnnotationsConfig() {
+     if (hlo->IsCustomCall("__cublas$gemm")) {
+       return true;
+     }
+-    if (hlo->opcode() == HloOpcode::kFusion) {
+-      return IsGpuFusionKind(*hlo, kTritonGemmFusionKind);
+-    }
+-    return false;
++    // Experiment: keep scheduling groups on every instruction, not only on
++    // GEMMs, and fill gaps so a user-tagged recompute region stays one group.
++    return true;
+   };
++  annotation_config.propagate_annotation = true;
+   return annotation_config;
+ }
+ 
+@@ -571,6 +571,9 @@ absl::Status RunLatencyHidingSchedulerPasses(
+   SchedulerConfig config = MakeGPUSchedulerConfig(
+       memory_limit,
+       options.xla_gpu_experimental_parallel_collective_overlap_limit());
++  // Experiment: drop a user scheduling group that blocks the scheduler
++  // instead of failing compilation.
++  config.deannotate_group_if_blocked = true;
+ 
+   auto shape_size_in_bytes = ShapeSizeBytesFunction(pointer_size);
+ 
+diff --git a/xla/service/latency_hiding_scheduler.cc b/xla/service/latency_hiding_scheduler.cc
+index f661a7e..25f8c90 100644
+--- a/xla/service/latency_hiding_scheduler.cc
++++ b/xla/service/latency_hiding_scheduler.cc
+@@ -3663,7 +3663,11 @@ absl::StatusOr<bool> LatencyHidingScheduler::RunImpl(
+               *instr) ||
+           scheduling_context_->GetAsyncTracker()->IsSupportedAsyncDone(
+               *instr) ||
+-          IsCustomCallWithForceDelayAttribute(instr)) {
++          IsCustomCallWithForceDelayAttribute(instr) ||
++          // Experiment: computations holding user scheduling groups need this
++          // scheduler even without async ops.
++          instr->frontend_attributes().map().contains(
++              kXlaSchedulingGroupIdAttr)) {
+         computations_to_schedule_.push_back(computation);
+         break;
+       }
+diff --git a/xla/service/legalize_scheduling_annotations.cc b/xla/service/legalize_scheduling_annotations.cc
+index 37167e3..bc1f454 100644
+--- a/xla/service/legalize_scheduling_annotations.cc
++++ b/xla/service/legalize_scheduling_annotations.cc
+@@ -109,11 +109,13 @@ absl::Status AttachAnnotation(
+     TF_ASSIGN_OR_RETURN(std::optional<Annotation> instr_annotation,
+                         GetSchedulingAnnotation(instr));
+     if (instr_annotation) {
+-      return absl::InternalError("Trying to propagate scheduling annotation " +
+-                                 annotation.ToString() + " to " +
+-                                 std::string(instr->name()) +
+-                                 " but it has an existing annotation: " +
+-                                 instr_annotation->ToString());
++      // Experiment: an instruction already in another group keeps it; the
++      // gap stays open rather than failing compilation.
++      LOG(INFO) << "Not propagating scheduling annotation "
++                << annotation.ToString() << " to " << instr->name()
++                << ": it has an existing annotation "
++                << instr_annotation->ToString();
++      continue;
+     }
+     LOG(INFO) << "Propagating annotation " << annotation.ToString() << " to "
+               << instr->name();
+@@ -310,11 +312,22 @@ absl::StatusOr<bool> HaulAnnotationToFusionInstruction(
+         continue;
+       }
+       if (seen_annotation != annotation) {
+-        return absl::InternalError(absl::StrCat(
+-            "Found a fusion with multiple annotations in the fused "
+-            "computation. fusion: ",
+-            computation->FusionInstruction()->name(), ", annotations: ",
+-            seen_annotation->ToString(), " and ", annotation->ToString()));
++        // Experiment: fusion pulled instructions from two scheduling groups
++        // together. The fusion joins the group of its root, which is the
++        // consumer side, instead of failing compilation.
++        TF_ASSIGN_OR_RETURN(std::optional<Annotation> root_annotation,
++                            GetSchedulingAnnotation(
++                                computation->root_instruction()));
++        LOG(INFO) << "Fusion " << computation->FusionInstruction()->name()
++                  << " mixes scheduling annotations "
++                  << seen_annotation->ToString() << " and "
++                  << annotation->ToString() << "; using "
++                  << (root_annotation ? root_annotation->ToString()
++                                      : seen_annotation->ToString());
++        if (root_annotation) {
++          seen_annotation = root_annotation;
++        }
++        break;
+       }
+     }
+     // No fused instructions are annotated, nothing to do.

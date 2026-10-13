@@ -450,11 +450,16 @@ defmodule Nx.Defn.Grad do
     {inputs, opts} = Enum.split_while(in_args, &(not is_list(&1)))
     gs = List.wrap(gs)
 
-    # The inputs and the incoming gradients go through one barrier, so the
-    # recomputation cannot be merged with the forward body and cannot run
-    # before the backward pass reaches this point.
-    {tied_inputs, tied_gs} = Expr.barrier({List.to_tuple(inputs), List.to_tuple(gs)})
-    tied_inputs = Tuple.to_list(tied_inputs)
+    # Experiment: only the inputs go through the barrier, which stops the
+    # recomputation from being merged with the forward body but lets XLA
+    # schedule it right after the forward pass. The whole backward body of
+    # this checkpoint is tagged with one scheduling group instead, so a
+    # patched XLA scheduler can place it as a unit right before its first
+    # consumer. The forward values feeding the barrier are untagged.
+    group = System.unique_integer([:positive])
+    tied_inputs = Expr.barrier(List.to_tuple(inputs))
+    tied_inputs = Expr.metadata(tied_inputs, %{scheduling_group: nil}) |> Tuple.to_list()
+    tied_gs = List.to_tuple(gs)
 
     recomputed =
       apply(callback, [struct | tied_inputs ++ opts]) |> Composite.traverse(&Nx.devectorize/1)
@@ -476,16 +481,33 @@ defmodule Nx.Defn.Grad do
         &traverse_parents(&1, to_grad_ids, parents, &2)
       )
 
-    grads =
-      Enum.zip_reduce(inputs, tied_inputs, grads, fn input, tied_input, acc ->
+    input_grads =
+      Enum.zip_with(inputs, tied_inputs, fn input, tied_input ->
         case Map.fetch(body_grads, tied_input.data.id) do
-          {:ok, list} ->
-            input_grad = sum_grad(list)
-            Map.update(acc, input.data.id, [input_grad], &[input_grad | &1])
-
-          :error ->
-            acc
+          {:ok, list} -> {input, sum_grad(list)}
+          :error -> nil
         end
+      end)
+      |> Enum.reject(&is_nil/1)
+
+    # One scheduling group for everything computed from the barrier outputs
+    # up to this checkpoint's input gradients.
+    tagged =
+      case input_grads do
+        [] ->
+          []
+
+        _ ->
+          input_grads
+          |> Enum.map(&elem(&1, 1))
+          |> List.to_tuple()
+          |> Expr.metadata(%{scheduling_group: group})
+          |> Tuple.to_list()
+      end
+
+    grads =
+      Enum.zip_reduce(input_grads, tagged, grads, fn {input, _}, input_grad, acc ->
+        Map.update(acc, input.data.id, [input_grad], &[input_grad | &1])
       end)
 
     # A cond inside the body differentiates its branches down to the

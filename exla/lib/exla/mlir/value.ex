@@ -938,6 +938,15 @@ defmodule EXLA.MLIR.Value do
 
     attributes = Enum.map(opts[:attributes], fn {name, value} -> {to_string(name), value} end)
 
+    attributes =
+      case Process.get(:exla_scheduling_group) do
+        nil ->
+          attributes
+
+        group ->
+          [{"mhlo.frontend_attributes", ~s({_scheduling_group_id = "#{group}"})} | attributes]
+      end
+
     refs =
       EXLA.NIF.mlir_op(
         function.ref,

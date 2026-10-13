@@ -958,6 +958,26 @@ defmodule EXLA.Defn do
     {[p, l, u], cache}
   end
 
+  # Experiment: tag every op lowered inside the metadata region with an XLA
+  # scheduling group so the latency hiding scheduler places the region as a
+  # unit right before its first consumer.
+  defp cached_recur_operator(
+         :metadata,
+         %T{data: %Expr{args: [_expr, %{scheduling_group: group}]}} = t,
+         state,
+         cache
+       ) do
+    previous = Process.put(:exla_scheduling_group, group)
+    {args, cache} = Tree.apply_args(t, cache, &recur_operator(&1, state, &2))
+
+    case previous do
+      nil -> Process.delete(:exla_scheduling_group)
+      _ -> Process.put(:exla_scheduling_group, previous)
+    end
+
+    {to_operator(:metadata, args, t, state), cache}
+  end
+
   defp cached_recur_operator(op, expr, state, cache) do
     {args, cache} = Tree.apply_args(expr, cache, &recur_operator(&1, state, &2))
     {to_operator(op, args, expr, state), cache}
