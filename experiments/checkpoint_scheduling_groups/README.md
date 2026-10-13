@@ -102,6 +102,38 @@ entry point then tries to schedule the fusion body. The stock XLA ran the
 suite with one failure, the memory test, as expected for an inputs-only
 barrier.
 
+
+### The scheduler's memory limit does not rescue the recompute-only group
+
+The latency hiding scheduler already tracks live memory, but only as a ceiling:
+a candidate that would push live bytes over `memory_limit` is skipped, and
+below the limit the ordering ignores memory. On the GPU the limit is device
+memory times `xla_gpu_memory_limit_slop_factor` percent, 95 by default, minus
+the program's inputs and outputs. On a 32 GiB card factors of 3, 2 and 1 put
+the limit near 980, 650 and 330 MiB, which brackets the programs above.
+Probe at 2048 wide, batch 8192, patched XLA:
+
+| probe variant | default | 3% | 2% | 1% |
+|---|---|---|---|---|
+| no barrier | 528 | 560 | 528 | 528 |
+| barrier on the activation only | 560 | 624 | 672 | 560 |
+| tied barrier | 336 | 368 | 336 | 608 |
+| activation-only barrier, recomputation grouped | 912 | 912 | 944 | 912 |
+| activation-only barrier, whole body grouped | 336 | 336 | 336 | 608 |
+
+The recompute-only group stays at about 912 MiB whatever the limit. Once the
+limit drops below what the program needs, at 1%, the good variants get worse
+instead, because skipping over-limit candidates reorders the rest without any
+notion of what to prefer. A limit tells the scheduler what to avoid, not what
+to want; making this work would need a new priority rule in the candidate
+comparison, which is the level above this experiment.
+
+The gradient-rule numbers in the table above are not stable across
+processes. The n=256 checkpoint case measured 800, 504 and 584 MiB in three
+runs with identical flags, the last value twice in a row within one build.
+Autotuning picks different GEMM kernels and fusions per process, and the
+scheduler's result follows. Treat single gradient-rule numbers as indicative
+only; the probe numbers repeated exactly across runs.
 ## Why the tied barrier stays
 
 * The scheduling group is a preference for the scheduler, not a dependency
