@@ -49,7 +49,58 @@ gradient together. This branch tries the first form plus a scheduling hint.
 
 ## Results
 
-RESULTS_PLACEHOLDER
+Two sets of numbers. The first comes from `probe.exs`, a hand-written
+forward and backward for four dense-relu pairs, 2048 wide, batch 8192, where
+only the activation goes through the barrier and the weights are read
+directly. Peak scratch is XLA's `preallocated-temp` from the memory usage
+report, latency hiding scheduler on, patched XLA where groups are used.
+
+| probe variant | peak scratch |
+|---|---|
+| no barrier | 528 MiB |
+| barrier on the activation only | 560 MiB |
+| barrier on activation and incoming gradient (what the checkpoint PR does) | 336 MiB |
+| activation-only barrier, recomputation grouped | 912 MiB |
+| activation-only barrier, whole backward body grouped | 336 MiB |
+
+The recompute-only group placed the recomputation correctly but moved every
+weight-gradient GEMM to the end of the program, because running the latency
+hiding scheduler replaces the default memory-aware ordering and nothing in a
+recompute-only group constrains the rest. Grouping the whole body put the
+weight gradients back next to their layer. That is the one configuration
+that matched the tied barrier, and it never beat it.
+
+The second set comes from this branch's gradient rule, through
+`checkpoint/2` itself, with `EXLA.Executable.memory_stats/1` on the gradient
+of the four-layer MLP from the EXLA checkpoint tests. Here every checkpoint
+input goes through the barrier, the weights included, which is how the
+checkpoint PR is written and differs from the probe. The small-width case is
+the one the memory test uses: the activation is much larger than any GEMM
+workspace, so the numbers isolate activations.
+
+| gradient rule variant | n=256, batch 65536 | n=2048, batch 8192 |
+|---|---|---|
+| no checkpoint | 576 MiB | 528 to 560 MiB |
+| tied barrier (checkpoint PR) | 449 MiB | 448 MiB |
+| this branch, stock XLA | 704 MiB | 384 MiB |
+| this branch, patched XLA, whole-body groups | 800 MiB | 384 MiB |
+
+At the activation-dominated size this branch uses more memory than no
+checkpoint at all, patched or not, while the tied barrier saves two
+activations. The wide case is dominated by GEMM workspaces, which vary with
+autotuning between runs, and is not a reliable signal at this scale. The
+scheduled HLO for the patched wide case shows the groups in place and the
+weight gradients interleaved per layer, so the placement worked and the
+memory did not follow; the cause was not isolated. The difference from the
+probe that stands out is the weights passing through the barrier.
+
+The patched XLA also crashed the compiler on one test of the EXLA checkpoint
+suite, a `CHECK` failure in `latency_hiding_scheduler.h` with "No state for
+fused_computation". The patch's handling of a fusion that mixes two groups
+leaves annotations inside the fused computation, and the patched scheduler
+entry point then tries to schedule the fusion body. The stock XLA ran the
+suite with one failure, the memory test, as expected for an inputs-only
+barrier.
 
 ## Why the tied barrier stays
 
