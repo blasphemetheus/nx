@@ -3701,6 +3701,71 @@ defmodule Nx.Defn.GradTest do
   end
 
   describe "if" do
+    defn conditional_power(input) do
+      if input > 0, do: input * input, else: input * input * input
+    end
+
+    defn squared_conditional(input) do
+      value = conditional_power(input)
+      value * value
+    end
+
+    defn squared_conditional_with_sibling(input) do
+      squared_conditional(input) + input * input
+    end
+
+    defn sibling_conditionals(input) do
+      first = conditional_power(input)
+      second = if input > 0, do: input * input * input, else: input * input
+      first + second
+    end
+
+    defn squared_conditional_of_square(input) do
+      squared_conditional(input * input)
+    end
+
+    test "first-order gradient of a squared conditional" do
+      assert_equal(grad(&squared_conditional/1).(Nx.tensor(2.0)), Nx.tensor(32.0))
+      assert_equal(grad(&squared_conditional/1).(Nx.tensor(-2.0)), Nx.tensor(-192.0))
+    end
+
+    test "second-order gradient of a conditional without downstream nonlinear operations" do
+      second_derivative = grad(grad(&conditional_power/1))
+      assert_equal(second_derivative.(Nx.tensor(2.0)), Nx.tensor(2.0))
+      assert_equal(second_derivative.(Nx.tensor(-2.0)), Nx.tensor(-12.0))
+    end
+
+    for {input, expected} <- [{2.0, 48.0}, {-2.0, 480.0}] do
+      test "second-order gradient of a squared conditional at #{input}" do
+        # The branches are x^4 and x^6, with second derivatives 12*x^2 and 30*x^4.
+        second_derivative = grad(grad(&squared_conditional/1))
+        assert_equal(second_derivative.(Nx.tensor(unquote(input))), Nx.tensor(unquote(expected)))
+      end
+    end
+
+    test "second-order gradient includes the path outside the conditional once" do
+      second_derivative = grad(grad(&squared_conditional_with_sibling/1))
+      assert_equal(second_derivative.(Nx.tensor(2.0)), Nx.tensor(50.0))
+      assert_equal(second_derivative.(Nx.tensor(-2.0)), Nx.tensor(482.0))
+    end
+
+    test "sibling conditionals accumulate independent gradient contributions" do
+      first_derivative = grad(&sibling_conditionals/1)
+      second_derivative = grad(first_derivative)
+
+      assert_equal(first_derivative.(Nx.tensor(2.0)), Nx.tensor(16.0))
+      assert_equal(first_derivative.(Nx.tensor(-2.0)), Nx.tensor(8.0))
+      assert_equal(second_derivative.(Nx.tensor(2.0)), Nx.tensor(14.0))
+      assert_equal(second_derivative.(Nx.tensor(-2.0)), Nx.tensor(-10.0))
+    end
+
+    test "second-order gradient through a nonlinear conditional input" do
+      # Both inputs select x^8, whose second derivative is 56*x^6.
+      second_derivative = grad(grad(&squared_conditional_of_square/1))
+      assert_equal(second_derivative.(Nx.tensor(2.0)), Nx.tensor(3584.0))
+      assert_equal(second_derivative.(Nx.tensor(-2.0)), Nx.tensor(3584.0))
+    end
+
     defn grad_if(t), do: grad(t, fn t -> if(t + 1, do: Nx.pow(t, 2), else: Nx.pow(t, 3)) end)
 
     defn grad_sum_if(t) do
