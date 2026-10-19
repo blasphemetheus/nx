@@ -199,6 +199,10 @@ defmodule Nx.Defn.Grad do
     acc
   end
 
+  defp parents_args(op, _expr, _id, acc) when op in @constants do
+    acc
+  end
+
   defp parents_args(:io_call, t, id, acc) do
     reduce_args(:io_call, t, acc, fn arg, {parents, nodes} ->
       if arg.data.op in @constants do
@@ -278,7 +282,6 @@ defmodule Nx.Defn.Grad do
     {nodes, grads} = acc
 
     res = sum_grad(Map.get(grads, id, []))
-    res = normalize_vectorized_shape(res)
 
     res =
       if res.vectorized_axes == [] and arg.vectorized_axes != [] do
@@ -330,22 +333,6 @@ defmodule Nx.Defn.Grad do
 
   defp clear_axis_names(%T{shape: shape} = t) do
     %{t | names: List.duplicate(nil, tuple_size(shape))}
-  end
-
-  # In the cond grad path, we may end up with tensors whose vectorized axes are
-  # present both in `vectorized_axes` and in the leading `shape` dims.
-  # Normalize those tensors back to the canonical vectorized representation.
-  defp normalize_vectorized_shape(%T{vectorized_axes: []} = t), do: t
-
-  defp normalize_vectorized_shape(%T{shape: shape, names: names, vectorized_axes: vec_axes} = t) do
-    vec_count = length(vec_axes)
-    {leading, rest} = shape |> Tuple.to_list() |> Enum.split(vec_count)
-
-    if leading == Enum.map(vec_axes, &elem(&1, 1)) do
-      %{t | shape: List.to_tuple(rest), names: Enum.drop(names, vec_count)}
-    else
-      t
-    end
   end
 
   defp squeeze_to_shape(%T{shape: shape} = t, target_shape) when shape == target_shape, do: t
@@ -566,7 +553,7 @@ defmodule Nx.Defn.Grad do
         {parents, nodes} = parents_tree(body, ids, keep_names: false)
 
         {grads, []} =
-          Composite.reduce(body, {grads, gs}, fn arg, {grads, [g | gs]} ->
+          Composite.reduce(body, {%{}, gs}, fn arg, {grads, [g | gs]} ->
             {Map.put(grads, arg.data.id, [g]), gs}
           end)
 
@@ -611,12 +598,11 @@ defmodule Nx.Defn.Grad do
 
           elem =
             elem
-            |> normalize_vectorized_shape()
             |> Nx.devectorize(keep_names: false)
             |> clear_axis_names()
             |> squeeze_to_shape(target_shape)
 
-          {Map.put(grads, to_grad.data.id, [elem]), rest}
+          {Map.update(grads, to_grad.data.id, [elem], &[elem | &1]), rest}
         end)
 
       # We don't replace nodes for cond because the checks are cheap (scalar values)

@@ -3701,6 +3701,340 @@ defmodule Nx.Defn.GradTest do
   end
 
   describe "if" do
+    defn conditional_vector_power(input) do
+      if Nx.sum(input) > 0, do: input * input, else: input * input * input
+    end
+
+    defn conditional_vector_loss(input), do: Nx.sum(conditional_vector_power(input))
+
+    defn scaled_conditional_vector_loss(input, scale) do
+      Nx.sum(conditional_vector_power(input) * scale)
+    end
+
+    defn fourth_power_vector_loss(input), do: Nx.sum(input * input * input * input)
+
+    test "conditional gradient keeps a tensor dimension equal to the batch size" do
+      input = Nx.tensor([[1.0, 2.0], [-1.0, -2.0]]) |> Nx.vectorize(:batch)
+      gradient = grad(&conditional_vector_loss/1).(input)
+
+      assert gradient.shape == input.shape
+      assert gradient.vectorized_axes == input.vectorized_axes
+      assert_equal(gradient, Nx.tensor([[2.0, 4.0], [3.0, 12.0]]) |> Nx.vectorize(:batch))
+    end
+
+    test "second-order conditional gradient keeps a tensor dimension equal to the batch size" do
+      input = Nx.tensor([[1.0, 2.0], [-1.0, -2.0]]) |> Nx.vectorize(:batch)
+
+      second_derivative =
+        grad(fn argument -> Nx.sum(grad(&conditional_vector_loss/1).(argument)) end)
+
+      gradient = second_derivative.(input)
+      assert gradient.shape == input.shape
+      assert gradient.vectorized_axes == input.vectorized_axes
+      assert_equal(gradient, Nx.tensor([[2.0, 2.0], [-6.0, -12.0]]) |> Nx.vectorize(:batch))
+    end
+
+    test "conditional gradients work when tensor and batch dimensions differ" do
+      input = Nx.tensor([[1.0, 2.0], [-1.0, -2.0], [3.0, 4.0]]) |> Nx.vectorize(:batch)
+      first_derivative = grad(&conditional_vector_loss/1)
+      second_derivative = grad(fn argument -> Nx.sum(first_derivative.(argument)) end)
+
+      assert_equal(
+        first_derivative.(input),
+        Nx.tensor([[2.0, 4.0], [3.0, 12.0], [6.0, 8.0]]) |> Nx.vectorize(:batch)
+      )
+
+      assert_equal(
+        second_derivative.(input),
+        Nx.tensor([[2.0, 2.0], [-6.0, -12.0], [2.0, 2.0]]) |> Nx.vectorize(:batch)
+      )
+    end
+
+    test "conditional gradients keep tensor dimensions matching multiple vectorized axes" do
+      input =
+        Nx.iota({2, 3, 2, 3}, type: :f32)
+        |> Nx.add(1)
+        |> Nx.multiply(Nx.reshape(Nx.tensor([1.0, -1.0]), {2, 1, 1, 1}))
+        |> Nx.vectorize(group: 2, batch: 3)
+
+      positive = Nx.greater(Nx.sum(input), 0)
+      first_derivative = grad(&conditional_vector_loss/1)
+      second_derivative = grad(fn argument -> Nx.sum(first_derivative.(argument)) end)
+
+      assert_equal(
+        first_derivative.(input),
+        Nx.select(positive, Nx.multiply(2, input), Nx.multiply(3, Nx.pow(input, 2)))
+      )
+
+      assert_equal(second_derivative.(input), Nx.select(positive, 2, Nx.multiply(6, input)))
+    end
+
+    test "conditional gradients preserve tensor dimensions with mixed vectorized inputs" do
+      input =
+        Nx.iota({2, 2, 3}, type: :f32)
+        |> Nx.add(1)
+        |> Nx.multiply(Nx.reshape(Nx.tensor([1.0, -1.0]), {2, 1, 1}))
+        |> Nx.vectorize(:batch)
+
+      scale = Nx.tensor([2.0, 3.0, 4.0]) |> Nx.vectorize(:sample)
+
+      {input_gradient, scale_gradient} =
+        grad({input, scale}, fn {argument, factor} ->
+          scaled_conditional_vector_loss(argument, factor)
+        end)
+
+      positive = Nx.greater(Nx.sum(input), 0)
+
+      expected_input =
+        Nx.multiply(
+          Nx.select(positive, Nx.multiply(2, input), Nx.multiply(3, Nx.pow(input, 2))),
+          scale
+        )
+
+      expected_scale = Nx.sum(Nx.select(positive, Nx.pow(input, 2), Nx.pow(input, 3)))
+      [expected_input, expected_scale] = Nx.broadcast_vectors([expected_input, expected_scale])
+
+      assert_equal(input_gradient, expected_input)
+      assert_equal(scale_gradient, expected_scale)
+    end
+
+    test "conditional gradients work for vectorized scalar entries" do
+      input = Nx.tensor([1.0, -2.0]) |> Nx.vectorize(:batch)
+      first_derivative = grad(&conditional_vector_loss/1)
+      second_derivative = grad(fn argument -> Nx.sum(first_derivative.(argument)) end)
+
+      assert_equal(first_derivative.(input), Nx.tensor([2.0, 12.0]) |> Nx.vectorize(:batch))
+      assert_equal(second_derivative.(input), Nx.tensor([2.0, -12.0]) |> Nx.vectorize(:batch))
+    end
+
+    test "nonconditional gradients keep tensor dimensions equal to the batch size" do
+      input = Nx.tensor([[1.0, 2.0], [-1.0, -2.0]]) |> Nx.vectorize(:batch)
+      first_derivative = grad(&fourth_power_vector_loss/1)
+      second_derivative = grad(fn argument -> Nx.sum(first_derivative.(argument)) end)
+
+      assert_equal(
+        first_derivative.(input),
+        Nx.tensor([[4.0, 32.0], [-4.0, -32.0]]) |> Nx.vectorize(:batch)
+      )
+
+      assert_equal(
+        second_derivative.(input),
+        Nx.tensor([[12.0, 48.0], [12.0, 48.0]]) |> Nx.vectorize(:batch)
+      )
+    end
+
+    defn conditional_power(input) do
+      if input > 0, do: input * input, else: input * input * input
+    end
+
+    defn squared_conditional(input) do
+      value = conditional_power(input)
+      value * value
+    end
+
+    defn squared_conditional_with_sibling(input) do
+      squared_conditional(input) + input * input
+    end
+
+    defn sibling_conditionals(input) do
+      first = conditional_power(input)
+      second = if input > 0, do: input * input * input, else: input * input
+      first + second
+    end
+
+    defn squared_conditional_of_square(input) do
+      squared_conditional(input * input)
+    end
+
+    test "first-order gradient of a squared conditional" do
+      assert_equal(grad(&squared_conditional/1).(Nx.tensor(2.0)), Nx.tensor(32.0))
+      assert_equal(grad(&squared_conditional/1).(Nx.tensor(-2.0)), Nx.tensor(-192.0))
+    end
+
+    test "second-order gradient of a conditional without downstream nonlinear operations" do
+      second_derivative = grad(grad(&conditional_power/1))
+      assert_equal(second_derivative.(Nx.tensor(2.0)), Nx.tensor(2.0))
+      assert_equal(second_derivative.(Nx.tensor(-2.0)), Nx.tensor(-12.0))
+    end
+
+    for {input, expected} <- [{2.0, 48.0}, {-2.0, 480.0}] do
+      test "second-order gradient of a squared conditional at #{input}" do
+        # The branches are x^4 and x^6, with second derivatives 12*x^2 and 30*x^4.
+        second_derivative = grad(grad(&squared_conditional/1))
+        assert_equal(second_derivative.(Nx.tensor(unquote(input))), Nx.tensor(unquote(expected)))
+      end
+    end
+
+    test "second-order gradient includes the path outside the conditional once" do
+      second_derivative = grad(grad(&squared_conditional_with_sibling/1))
+      assert_equal(second_derivative.(Nx.tensor(2.0)), Nx.tensor(50.0))
+      assert_equal(second_derivative.(Nx.tensor(-2.0)), Nx.tensor(482.0))
+    end
+
+    test "sibling conditionals accumulate independent gradient contributions" do
+      first_derivative = grad(&sibling_conditionals/1)
+      second_derivative = grad(first_derivative)
+
+      assert_equal(first_derivative.(Nx.tensor(2.0)), Nx.tensor(16.0))
+      assert_equal(first_derivative.(Nx.tensor(-2.0)), Nx.tensor(8.0))
+      assert_equal(second_derivative.(Nx.tensor(2.0)), Nx.tensor(14.0))
+      assert_equal(second_derivative.(Nx.tensor(-2.0)), Nx.tensor(-10.0))
+    end
+
+    test "second-order gradient through a nonlinear conditional input" do
+      # Both inputs select x^8, whose second derivative is 56*x^6.
+      second_derivative = grad(grad(&squared_conditional_of_square/1))
+      assert_equal(second_derivative.(Nx.tensor(2.0)), Nx.tensor(3584.0))
+      assert_equal(second_derivative.(Nx.tensor(-2.0)), Nx.tensor(3584.0))
+    end
+
+    defn nonlinear_conditional(input) do
+      value =
+        if input > 0 do
+          Nx.sin(input) * Nx.sin(input)
+        else
+          Nx.cos(input) * Nx.cos(input) * Nx.cos(input)
+        end
+
+      Nx.sin(value)
+    end
+
+    defn sin_of_sin_squared(input), do: Nx.sin(Nx.sin(input) * Nx.sin(input))
+
+    defn sin_of_cos_cubed(input) do
+      Nx.sin(Nx.cos(input) * Nx.cos(input) * Nx.cos(input))
+    end
+
+    defn sign_flipping_conditional(input) do
+      if input > 0, do: -(input * input * input), else: input * input
+    end
+
+    defn composed_sign_flipping_conditional(input) do
+      Nx.sin(sign_flipping_conditional(sign_flipping_conditional(input)))
+    end
+
+    defn sin_of_sixth_power(input) do
+      Nx.sin(input * input * input * input * input * input)
+    end
+
+    defn sin_of_negated_sixth_power(input) do
+      Nx.sin(-(input * input * input * input * input * input))
+    end
+
+    defn two_input_nonlinear_conditional(selector, input) do
+      value =
+        if selector > 0 do
+          Nx.sin(input) * Nx.cos(selector)
+        else
+          Nx.cos(input) * Nx.sin(selector)
+        end
+
+      Nx.sin(value) + selector * input
+    end
+
+    defn two_input_positive_branch(selector, input) do
+      Nx.sin(Nx.sin(input) * Nx.cos(selector)) + selector * input
+    end
+
+    defn two_input_negative_branch(selector, input) do
+      Nx.sin(Nx.cos(input) * Nx.sin(selector)) + selector * input
+    end
+
+    test "gradients through nonlinear operations inside and outside the conditional" do
+      for {input, reference} <- [
+            {Nx.tensor(2.0), &sin_of_sin_squared/1},
+            {Nx.tensor(-2.0), &sin_of_cos_cubed/1}
+          ] do
+        assert_all_close(grad(&nonlinear_conditional/1).(input), grad(reference).(input))
+
+        assert_all_close(
+          grad(grad(&nonlinear_conditional/1)).(input),
+          grad(grad(reference)).(input)
+        )
+      end
+    end
+
+    test "gradients through a composed conditional whose branches swap" do
+      # The inner call maps positive inputs to negative values and negative inputs
+      # to positive values, so the outer call always takes the other branch.
+      for {input, reference} <- [
+            {Nx.tensor(2.0), &sin_of_sixth_power/1},
+            {Nx.tensor(-2.0), &sin_of_negated_sixth_power/1}
+          ] do
+        assert_all_close(
+          grad(&composed_sign_flipping_conditional/1).(input),
+          grad(reference).(input)
+        )
+
+        assert_all_close(
+          grad(grad(&composed_sign_flipping_conditional/1)).(input),
+          grad(grad(reference)).(input)
+        )
+      end
+    end
+
+    defn two_input_gradient_sum(selector, input, function) do
+      {selector_grad, input_grad} = grad({selector, input}, fn {s, i} -> function.(s, i) end)
+      selector_grad + input_grad
+    end
+
+    test "gradients with respect to both inputs of a nonlinear conditional" do
+      for {selector, reference} <- [
+            {Nx.tensor(0.5), &two_input_positive_branch/2},
+            {Nx.tensor(-0.5), &two_input_negative_branch/2}
+          ] do
+        input = Nx.tensor(1.5)
+
+        {selector_grad, input_grad} =
+          grad({selector, input}, fn {s, i} -> two_input_nonlinear_conditional(s, i) end)
+
+        {expected_selector_grad, expected_input_grad} =
+          grad({selector, input}, fn {s, i} -> reference.(s, i) end)
+
+        assert_all_close(selector_grad, expected_selector_grad)
+        assert_all_close(input_grad, expected_input_grad)
+
+        {selector_second, input_second} =
+          grad({selector, input}, fn {s, i} ->
+            two_input_gradient_sum(s, i, &two_input_nonlinear_conditional/2)
+          end)
+
+        {expected_selector_second, expected_input_second} =
+          grad({selector, input}, fn {s, i} -> two_input_gradient_sum(s, i, reference) end)
+
+        assert_all_close(selector_second, expected_selector_second)
+        assert_all_close(input_second, expected_input_second)
+      end
+    end
+
+    defn three_way_conditional(input) do
+      value =
+        cond do
+          input > 1 -> Nx.sin(input) * Nx.sin(input)
+          input > -1 -> -(input * input * input)
+          true -> Nx.cos(input) * Nx.cos(input) * Nx.cos(input)
+        end
+
+      Nx.sin(value)
+    end
+
+    defn sin_of_negated_cube(input), do: Nx.sin(-(input * input * input))
+
+    test "gradients through a conditional with three clauses" do
+      for {input, reference} <- [
+            {Nx.tensor(2.0), &sin_of_sin_squared/1},
+            {Nx.tensor(0.5), &sin_of_negated_cube/1},
+            {Nx.tensor(-2.0), &sin_of_cos_cubed/1}
+          ] do
+        assert_all_close(grad(&three_way_conditional/1).(input), grad(reference).(input))
+
+        assert_all_close(
+          grad(grad(&three_way_conditional/1)).(input),
+          grad(grad(reference)).(input)
+        )
+      end
+    end
+
     defn grad_if(t), do: grad(t, fn t -> if(t + 1, do: Nx.pow(t, 2), else: Nx.pow(t, 3)) end)
 
     defn grad_sum_if(t) do
