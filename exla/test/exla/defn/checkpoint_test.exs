@@ -276,6 +276,42 @@ defmodule EXLA.Defn.CheckpointTest do
     assert_all_close(elem(gradient, count - 1), elem(expected, count - 1))
   end
 
+  defn exp_weight_loss(x, w) do
+    Nx.sum(checkpoint(x, fn x -> Nx.sin(Nx.dot(x, Nx.exp(w))) end))
+  end
+
+  defn exp_weight_loss_all_saved(x, w) do
+    Nx.sum(Nx.Defn.Kernel.checkpoint([], fn -> Nx.sin(Nx.dot(x, Nx.exp(w))) end))
+  end
+
+  # On GPU the compiler duplicates cheap element-wise producers into each
+  # fusion that uses them, so the count does not measure sharing there.
+  @tag platform: :host
+  test "work that depends on a captured weight alone is shared with the forward pass" do
+    x = Nx.iota({4, 8}, type: :f32) |> Nx.divide(32)
+    w = Nx.iota({8, 8}, type: :f32) |> Nx.divide(64)
+
+    read_directly =
+      EXLA.to_executable(
+        fn x, w -> Nx.Defn.value_and_grad({x, w}, fn {x, w} -> exp_weight_loss(x, w) end) end,
+        [x, w]
+      )
+
+    all_saved =
+      EXLA.to_executable(
+        fn x, w ->
+          Nx.Defn.value_and_grad({x, w}, fn {x, w} -> exp_weight_loss_all_saved(x, w) end)
+        end,
+        [x, w]
+      )
+
+    # The loss keeps the forward pass alive. exp(w) only depends on the
+    # captured weight: read directly, the recomputation reuses the forward
+    # value; held back with everything else, it is computed again.
+    assert count(EXLA.Executable.optimized_hlo(read_directly), "exponential(") == 1
+    assert count(EXLA.Executable.optimized_hlo(all_saved), "exponential(") == 2
+  end
+
   test "a weight captured by the body gets the same gradient as an explicit input" do
     x = Nx.tensor([[0.5, 1.0], [1.5, 2.0], [2.5, 3.0]])
     w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])

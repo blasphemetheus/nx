@@ -794,6 +794,20 @@ defmodule Nx.Defn.CheckpointTest do
       assert_all_close(elem(gradient, count - 1), elem(expected, count - 1))
     end
 
+    test "the checkpoint records how many inputs were explicit" do
+      x = Nx.tensor([1.0, 2.0])
+      w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+
+      explicit = Nx.Defn.debug_expr(fn x, w -> checkpoint(x, fn x -> dense(x, w) end) end).(x, w)
+      %Nx.Tensor{data: %Nx.Defn.Expr{op: :block, args: [struct, in_args, _, _]}} = explicit
+      assert %Nx.Block.Checkpoint{saved: 1} = struct
+      assert length(in_args) == 2
+
+      none = Nx.Defn.debug_expr(fn x, w -> checkpoint([], fn -> dense(x, w) end) end).(x, w)
+      %Nx.Tensor{data: %Nx.Defn.Expr{op: :block, args: [struct, _, _, _]}} = none
+      assert %Nx.Block.Checkpoint{saved: :all} = struct
+    end
+
     defn nested_captured_loss(x, w1, w2) do
       Nx.sum(
         checkpoint(x, fn x ->

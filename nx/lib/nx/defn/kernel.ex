@@ -286,6 +286,14 @@ defmodule Nx.Defn.Kernel do
   read from the enclosing scope is passed whole: `ws[0]` in the body passes
   all of `ws` and slices it inside the checkpoint.
 
+  Pass the activations in `inputs` and read parameters from the enclosing
+  scope. The tensors in `inputs` are held back until the backward pass
+  reaches the checkpoint, which keeps the recomputation apart from the
+  forward pass. Tensors read from the enclosing scope are read as they are,
+  which suits parameters, since they are alive for the whole program anyway;
+  work that depends on them alone is shared with the forward pass instead of
+  recomputed. With no `inputs` every tensor the body reads is held back.
+
   `inputs` is a tensor or container, or a list of them when `fun` takes
   several arguments, with at most 253 tensors in total including the ones
   read from the enclosing scope. `fun` must return a tensor or a flat tuple
@@ -330,7 +338,7 @@ defmodule Nx.Defn.Kernel do
         end
 
         Nx.block(
-          %Nx.Block.Checkpoint{},
+          %Nx.Block.Checkpoint{saved: length(leaves)},
           leaves,
           nil,
           checkpoint_block_fun(length(leaves), rebuild)
