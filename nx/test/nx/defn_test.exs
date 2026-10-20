@@ -1027,6 +1027,30 @@ defmodule Nx.DefnTest do
     end
 
     @tag compiler: Evaluator
+    test "lifts more tensors than a function can take as arguments" do
+      count = 300
+      tensors = Enum.map(1..count, &Nx.tensor(&1 * 1.0))
+
+      sum_all = fn tensors ->
+        Nx.block(%VectorizedNonlinear{}, [], nil, fn _ -> Enum.reduce(tensors, &Nx.add/2) end)
+      end
+
+      result =
+        Nx.Defn.jit(fn tensors -> sum_all.(Tuple.to_list(tensors)) end).(List.to_tuple(tensors))
+
+      assert_equal(result, Nx.tensor(count * (count + 1) / 2))
+
+      gradient =
+        Nx.Defn.jit(fn tensors ->
+          grad(tensors, fn tensors -> sum_all.(Tuple.to_list(tensors)) end)
+        end).(List.to_tuple(tensors))
+
+      assert tuple_size(gradient) == count
+      assert_equal(elem(gradient, 0), Nx.tensor(1.0))
+      assert_equal(elem(gradient, count - 1), Nx.tensor(1.0))
+    end
+
+    @tag compiler: Evaluator
     test "a concrete tensor from the enclosing scope stays a constant in the body" do
       weight = Nx.tensor([2.0, 3.0, 4.0])
 

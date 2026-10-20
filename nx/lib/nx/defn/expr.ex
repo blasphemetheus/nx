@@ -867,7 +867,7 @@ defmodule Nx.Defn.Expr do
 
     traced =
       try do
-        apply(fun, [struct | vectorized_params ++ opts])
+        Nx.Shared.apply_block_fun(fun, struct, vectorized_params ++ opts)
       after
         if previous_body_context do
           Process.put(@block_context_key, previous_body_context)
@@ -973,7 +973,7 @@ defmodule Nx.Defn.Expr do
   defp instantiating_block_fun(body, param_ids, opts_count) do
     tensors_count = length(param_ids)
 
-    block_fun(tensors_count + opts_count, fn _struct, args ->
+    run = fn _struct, args ->
       {tensors, _opts} = Enum.split(args, tensors_count)
 
       if Enum.all?(tensors, &match?(%T{data: %Expr{}}, &1)) do
@@ -983,7 +983,13 @@ defmodule Nx.Defn.Expr do
           List.to_tuple(tensors)
         )
       end
-    end)
+    end
+
+    # Past the arguments a function can take, the callback takes the list.
+    case tensors_count + opts_count do
+      count when count <= 253 -> block_fun(count, run)
+      _ -> run
+    end
   end
 
   defp instantiate(body, param_ids, tensors) do

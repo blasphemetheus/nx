@@ -762,6 +762,38 @@ defmodule Nx.Defn.CheckpointTest do
       assert [%Nx.Tensor{shape: {2}}, %Nx.Tensor{shape: {2, 2}}] = in_args
     end
 
+    test "a checkpoint reading more tensors than a function can take as arguments" do
+      count = 300
+      weights = Enum.map(1..count, &Nx.tensor([&1 * 0.01, &1 * 0.02]))
+      x = Nx.tensor([1.0, 2.0])
+
+      loss = fn x, weights ->
+        checkpoint([], fn ->
+          weights
+          |> Enum.reduce(x, fn w, acc -> Nx.sin(Nx.multiply(acc, w)) end)
+          |> Nx.sum()
+        end)
+      end
+
+      plain = fn x, weights ->
+        weights |> Enum.reduce(x, fn w, acc -> Nx.sin(Nx.multiply(acc, w)) end) |> Nx.sum()
+      end
+
+      gradient =
+        Nx.Defn.jit(fn x, weights ->
+          grad(weights, fn weights -> loss.(x, Tuple.to_list(weights)) end)
+        end).(x, List.to_tuple(weights))
+
+      expected =
+        Nx.Defn.jit(fn x, weights ->
+          grad(weights, fn weights -> plain.(x, Tuple.to_list(weights)) end)
+        end).(x, List.to_tuple(weights))
+
+      assert tuple_size(gradient) == count
+      assert_all_close(elem(gradient, 0), elem(expected, 0))
+      assert_all_close(elem(gradient, count - 1), elem(expected, count - 1))
+    end
+
     defn nested_captured_loss(x, w1, w2) do
       Nx.sum(
         checkpoint(x, fn x ->

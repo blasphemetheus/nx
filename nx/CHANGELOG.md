@@ -7,6 +7,7 @@
   * [Nx.Defn.Evaluator] Mark values as donatable at their last use, so backends that run operations eagerly can reuse their buffers
   * [Nx.Defn] Add `checkpoint/2`, which recomputes a function's intermediate results in the backward pass instead of keeping them
   * [Nx] Pass tensors a block's function reads from the enclosing scope into the block as extra arguments
+  * [Nx] Accept a function of the struct and the argument list as a block's default implementation when the block has more than 254 arguments
 
 ### Bug fixes
 

@@ -247,6 +247,35 @@ defmodule EXLA.Defn.CheckpointTest do
     )
   end
 
+  test "a checkpoint reading more tensors than a function can take as arguments" do
+    # The body stays shallow on purpose: a chain hundreds of operations deep
+    # takes XLA tens of seconds to compile, and the point here is the number
+    # of lifted tensors.
+    count = 300
+    weights = Enum.map(1..count, &Nx.tensor([&1 * 0.01, &1 * 0.02]))
+    x = Nx.tensor([1.0, 2.0])
+
+    loss = fn x, weights ->
+      Nx.Defn.Kernel.checkpoint([], fn -> Nx.sum(Nx.sin(Nx.multiply(x, Nx.stack(weights)))) end)
+    end
+
+    plain = fn x, weights -> Nx.sum(Nx.sin(Nx.multiply(x, Nx.stack(weights)))) end
+
+    gradient =
+      Nx.Defn.jit(fn x, weights ->
+        Nx.Defn.grad(weights, fn weights -> loss.(x, Tuple.to_list(weights)) end)
+      end).(x, List.to_tuple(weights))
+
+    expected =
+      Nx.Defn.jit(fn x, weights ->
+        Nx.Defn.grad(weights, fn weights -> plain.(x, Tuple.to_list(weights)) end)
+      end).(x, List.to_tuple(weights))
+
+    assert tuple_size(gradient) == count
+    assert_all_close(elem(gradient, 0), elem(expected, 0))
+    assert_all_close(elem(gradient, count - 1), elem(expected, count - 1))
+  end
+
   test "a weight captured by the body gets the same gradient as an explicit input" do
     x = Nx.tensor([[0.5, 1.0], [1.5, 2.0], [2.5, 3.0]])
     w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])

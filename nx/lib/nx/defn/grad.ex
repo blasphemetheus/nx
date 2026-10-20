@@ -237,7 +237,9 @@ defmodule Nx.Defn.Grad do
   end
 
   defp parents_args(:block, %{data: %{args: [struct, in_args, _expr, callback]}} = t, id, acc) do
-    expr = apply(callback, [struct | in_args]) |> Composite.traverse(&Nx.devectorize/1)
+    expr =
+      Nx.Shared.apply_block_fun(callback, struct, in_args)
+      |> Composite.traverse(&Nx.devectorize/1)
 
     # Now traverse over the block expression where args are the new parameters.
     # Once we access the parameter itself, we point the parameter to the arg.
@@ -446,7 +448,8 @@ defmodule Nx.Defn.Grad do
     tied_gs = Tuple.to_list(tied_gs)
 
     recomputed =
-      apply(callback, [struct | tied_inputs ++ opts]) |> Composite.traverse(&Nx.devectorize/1)
+      Nx.Shared.apply_block_fun(callback, struct, tied_inputs ++ opts)
+      |> Composite.traverse(&Nx.devectorize/1)
 
     # Differentiate the recomputed body on its own. The tied inputs are marked
     # visited so the walk stays inside the body.
