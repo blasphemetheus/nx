@@ -219,6 +219,59 @@ defmodule EXLA.Defn.CheckpointTest do
     assert_all_close(gradient, Nx.Defn.grad(scale, &vectorized_scale_loss_plain(x, &1)))
   end
 
+  defn captured_loss(x, w) do
+    Nx.sum(checkpoint(x, fn x -> Nx.sin(Nx.dot(x, w)) * x end))
+  end
+
+  defn captured_vectorized_loss(x, scale) do
+    Nx.sum(checkpoint(x, fn x -> Nx.multiply(Nx.sin(x), scale) end))
+  end
+
+  defn captured_vectorized_loss_plain(x, scale) do
+    Nx.sum(Nx.multiply(Nx.sin(x), scale))
+  end
+
+  defn zero_inputs_loss(x, w) do
+    Nx.sum(checkpoint([], fn -> Nx.sin(Nx.dot(x, w)) * x end))
+  end
+
+  test "a checkpoint without inputs recomputes from the captured tensors" do
+    x = Nx.tensor([[0.5, 1.0], [1.5, 2.0], [2.5, 3.0]])
+    w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+
+    assert_all_close(zero_inputs_loss(x, w), vectorized_loss(x, w))
+
+    assert_all_close(
+      Nx.Defn.grad(w, &zero_inputs_loss(x, &1)),
+      Nx.Defn.grad(w, &vectorized_loss(x, &1))
+    )
+  end
+
+  test "a weight captured by the body gets the same gradient as an explicit input" do
+    x = Nx.tensor([[0.5, 1.0], [1.5, 2.0], [2.5, 3.0]])
+    w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+
+    assert_all_close(captured_loss(x, w), vectorized_loss(x, w))
+
+    assert_all_close(
+      Nx.Defn.grad(w, &captured_loss(x, &1)),
+      Nx.Defn.grad(w, &vectorized_loss(x, &1))
+    )
+  end
+
+  test "a captured vectorized tensor keeps its axes in the value and the gradient" do
+    x = Nx.tensor([0.5, 1.0])
+    scale = Nx.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+    value = captured_vectorized_loss(x, scale)
+    assert value.vectorized_axes == [batch: 3]
+    assert_all_close(value, captured_vectorized_loss_plain(x, scale))
+
+    gradient = Nx.Defn.grad(scale, &captured_vectorized_loss(x, &1))
+    assert gradient.vectorized_axes == [batch: 3]
+    assert_all_close(gradient, Nx.Defn.grad(scale, &captured_vectorized_loss_plain(x, &1)))
+  end
+
   test "a tuple input is flattened into the block and rebuilt for the body" do
     pair = {Nx.tensor([0.5, 1.0, 1.5]), Nx.tensor([2.0, 2.5, 3.0])}
     assert_all_close(pair_loss(pair), pair_loss_plain(pair))
