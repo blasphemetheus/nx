@@ -219,6 +219,124 @@ defmodule EXLA.Defn.CheckpointTest do
     assert_all_close(gradient, Nx.Defn.grad(scale, &vectorized_scale_loss_plain(x, &1)))
   end
 
+  defn captured_loss(x, w) do
+    Nx.sum(checkpoint(x, fn x -> Nx.sin(Nx.dot(x, w)) * x end))
+  end
+
+  defn captured_vectorized_loss(x, scale) do
+    Nx.sum(checkpoint(x, fn x -> Nx.multiply(Nx.sin(x), scale) end))
+  end
+
+  defn captured_vectorized_loss_plain(x, scale) do
+    Nx.sum(Nx.multiply(Nx.sin(x), scale))
+  end
+
+  defn zero_inputs_loss(x, w) do
+    Nx.sum(checkpoint([], fn -> Nx.sin(Nx.dot(x, w)) * x end))
+  end
+
+  test "a checkpoint without inputs recomputes from the captured tensors" do
+    x = Nx.tensor([[0.5, 1.0], [1.5, 2.0], [2.5, 3.0]])
+    w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+
+    assert_all_close(zero_inputs_loss(x, w), vectorized_loss(x, w))
+
+    assert_all_close(
+      Nx.Defn.grad(w, &zero_inputs_loss(x, &1)),
+      Nx.Defn.grad(w, &vectorized_loss(x, &1))
+    )
+  end
+
+  test "a checkpoint reading more tensors than a function can take as arguments" do
+    # The body stays shallow on purpose: a chain hundreds of operations deep
+    # takes XLA tens of seconds to compile, and the point here is the number
+    # of lifted tensors.
+    count = 300
+    weights = Enum.map(1..count, &Nx.tensor([&1 * 0.01, &1 * 0.02]))
+    x = Nx.tensor([1.0, 2.0])
+
+    loss = fn x, weights ->
+      Nx.Defn.Kernel.checkpoint([], fn -> Nx.sum(Nx.sin(Nx.multiply(x, Nx.stack(weights)))) end)
+    end
+
+    plain = fn x, weights -> Nx.sum(Nx.sin(Nx.multiply(x, Nx.stack(weights)))) end
+
+    gradient =
+      Nx.Defn.jit(fn x, weights ->
+        Nx.Defn.grad(weights, fn weights -> loss.(x, Tuple.to_list(weights)) end)
+      end).(x, List.to_tuple(weights))
+
+    expected =
+      Nx.Defn.jit(fn x, weights ->
+        Nx.Defn.grad(weights, fn weights -> plain.(x, Tuple.to_list(weights)) end)
+      end).(x, List.to_tuple(weights))
+
+    assert tuple_size(gradient) == count
+    assert_all_close(elem(gradient, 0), elem(expected, 0))
+    assert_all_close(elem(gradient, count - 1), elem(expected, count - 1))
+  end
+
+  defn exp_weight_loss(x, w) do
+    Nx.sum(checkpoint(x, fn x -> Nx.sin(Nx.dot(x, Nx.exp(w))) end))
+  end
+
+  defn exp_weight_loss_all_saved(x, w) do
+    Nx.sum(Nx.Defn.Kernel.checkpoint([], fn -> Nx.sin(Nx.dot(x, Nx.exp(w))) end))
+  end
+
+  # On GPU the compiler duplicates cheap element-wise producers into each
+  # fusion that uses them, so the count does not measure sharing there.
+  @tag platform: :host
+  test "work that depends on a captured weight alone is shared with the forward pass" do
+    x = Nx.iota({4, 8}, type: :f32) |> Nx.divide(32)
+    w = Nx.iota({8, 8}, type: :f32) |> Nx.divide(64)
+
+    read_directly =
+      EXLA.to_executable(
+        fn x, w -> Nx.Defn.value_and_grad({x, w}, fn {x, w} -> exp_weight_loss(x, w) end) end,
+        [x, w]
+      )
+
+    all_saved =
+      EXLA.to_executable(
+        fn x, w ->
+          Nx.Defn.value_and_grad({x, w}, fn {x, w} -> exp_weight_loss_all_saved(x, w) end)
+        end,
+        [x, w]
+      )
+
+    # The loss keeps the forward pass alive. exp(w) only depends on the
+    # captured weight: read directly, the recomputation reuses the forward
+    # value; held back with everything else, it is computed again.
+    assert count(EXLA.Executable.optimized_hlo(read_directly), "exponential(") == 1
+    assert count(EXLA.Executable.optimized_hlo(all_saved), "exponential(") == 2
+  end
+
+  test "a weight captured by the body gets the same gradient as an explicit input" do
+    x = Nx.tensor([[0.5, 1.0], [1.5, 2.0], [2.5, 3.0]])
+    w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+
+    assert_all_close(captured_loss(x, w), vectorized_loss(x, w))
+
+    assert_all_close(
+      Nx.Defn.grad(w, &captured_loss(x, &1)),
+      Nx.Defn.grad(w, &vectorized_loss(x, &1))
+    )
+  end
+
+  test "a captured vectorized tensor keeps its axes in the value and the gradient" do
+    x = Nx.tensor([0.5, 1.0])
+    scale = Nx.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+    value = captured_vectorized_loss(x, scale)
+    assert value.vectorized_axes == [batch: 3]
+    assert_all_close(value, captured_vectorized_loss_plain(x, scale))
+
+    gradient = Nx.Defn.grad(scale, &captured_vectorized_loss(x, &1))
+    assert gradient.vectorized_axes == [batch: 3]
+    assert_all_close(gradient, Nx.Defn.grad(scale, &captured_vectorized_loss_plain(x, &1)))
+  end
+
   test "a tuple input is flattened into the block and rebuilt for the body" do
     pair = {Nx.tensor([0.5, 1.0, 1.5]), Nx.tensor([2.0, 2.5, 3.0])}
     assert_all_close(pair_loss(pair), pair_loss_plain(pair))

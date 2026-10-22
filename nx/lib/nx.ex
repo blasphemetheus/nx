@@ -7387,22 +7387,31 @@ defmodule Nx do
   `struct` identifies the block and carries static configuration. `args` is a
   list of runtime inputs and `output` is the output template. The default
   implementation `fun` receives the struct first and then each argument in
-  order (`apply(fun, [struct | args])`).
+  order (`apply(fun, [struct | args])`). A function cannot take more than
+  255 arguments, so with more than 254 arguments `fun` receives the struct
+  and the list of arguments instead.
 
   The backend’s `c:Nx.Backend.block/4` receives `struct`, `output`, `args`, and `fun`, and
-  should either run a native implementation or invoke the default as
-  `apply(fun, [struct | args])`.
+  should either run a native implementation or invoke the default through
+  `Nx.Shared.apply_block_fun/3`.
   """
   @doc type: :element
   def block(struct, args, output, fun) when is_list(args) do
     arity = length(args) + 1
 
-    unless is_function(fun, arity) do
+    unless is_function(fun, arity) or (arity > 255 and is_function(fun, 2)) do
       raise ArgumentError,
             "Nx.block/4 expected a default fun/#{arity} for #{length(args)} argument(s), got: #{inspect(fun)}"
     end
 
-    backend = Nx.Shared.list_impl!(args)
+    # A block without arguments reads everything it needs from the enclosing
+    # scope, so there is no tensor to pick the backend from.
+    backend =
+      case args do
+        [] -> if Nx.Defn.Compiler.current(), do: Nx.Defn.Expr, else: elem(Nx.default_backend(), 0)
+        _ -> Nx.Shared.list_impl!(args)
+      end
+
     backend.block(struct, output, args, fun)
   end
 

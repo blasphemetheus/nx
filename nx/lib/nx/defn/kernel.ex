@@ -273,20 +273,31 @@ defmodule Nx.Defn.Kernel do
   when its body creates large intermediates that nothing outside needs:
 
       defn block(x, w1, w2) do
-        checkpoint([x, w1, w2], fn x, w1, w2 ->
+        checkpoint(x, fn x ->
           x |> Nx.dot(w1) |> Nx.relu() |> Nx.dot(w2)
         end)
       end
 
   Here `x`, the weights and the block's output are kept for the backward
   pass, while the hidden activation between the two matrix multiplications
-  is recomputed. A slice of a parameter is a new tensor that would be kept,
-  so pass the parameter whole and slice it inside `fun`.
+  is recomputed. Tensors `fun` reads from the enclosing scope, such as the
+  weights above, become inputs of the checkpoint as well, and their
+  gradients flow through it like the gradient of any other input. A tensor
+  read from the enclosing scope is passed whole: `ws[0]` in the body passes
+  all of `ws` and slices it inside the checkpoint.
+
+  Pass the activations in `inputs` and read parameters from the enclosing
+  scope. The tensors in `inputs` are held back until the backward pass
+  reaches the checkpoint, which keeps the recomputation apart from the
+  forward pass. Tensors read from the enclosing scope are read as they are,
+  which suits parameters, since they are alive for the whole program anyway;
+  work that depends on them alone is shared with the forward pass instead of
+  recomputed. With no `inputs` every tensor the body reads is held back.
 
   `inputs` is a tensor or container, or a list of them when `fun` takes
-  several arguments, with at most 253 tensors in total. `fun` must return
-  a tensor or a flat tuple of tensors, and every tensor it uses must come
-  from its arguments; it cannot read tensors from the enclosing scope.
+  several arguments, with at most 253 tensors in total including the ones
+  read from the enclosing scope. `fun` must return a tensor or a flat tuple
+  of tensors.
 
   `fun` may run more than once, so it must produce the same values from
   the same inputs. Random numbers inside the body need their `Nx.Random`
@@ -307,7 +318,16 @@ defmodule Nx.Defn.Kernel do
 
     case leaves do
       [] ->
-        apply(fun, arguments)
+        # Inside defn every tensor the body reads comes from the enclosing
+        # scope and Nx.block passes it in. Outside defn there is nothing to
+        # recompute, so the function is called as it is.
+        Kernel.if Nx.Defn.Compiler.current() do
+          Nx.block(%Nx.Block.Checkpoint{}, [], nil, fn %Nx.Block.Checkpoint{} ->
+            checkpoint_result(apply(fun, arguments))
+          end)
+        else
+          apply(fun, arguments)
+        end
 
       _ ->
         rebuild = fn recomputed_leaves ->
@@ -318,7 +338,7 @@ defmodule Nx.Defn.Kernel do
         end
 
         Nx.block(
-          %Nx.Block.Checkpoint{},
+          %Nx.Block.Checkpoint{saved: length(leaves)},
           leaves,
           nil,
           checkpoint_block_fun(length(leaves), rebuild)
@@ -362,7 +382,7 @@ defmodule Nx.Defn.Kernel do
   # The block callback takes the struct and one argument per tensor. It
   # also captures rebuild, and the struct and the capture both count toward
   # the 255 arguments a function can take.
-  for arity <- 1..253 do
+  for arity <- 0..253 do
     args = Macro.generate_arguments(arity, __MODULE__)
 
     defp checkpoint_block_fun(unquote(arity), rebuild) do

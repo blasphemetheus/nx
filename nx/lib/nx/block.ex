@@ -87,6 +87,14 @@ defmodule Nx.Block.Checkpoint do
   Marks a block whose intermediate results are not kept for the backward
   pass. The gradient recomputes the body from the inputs when it reaches
   the block. See `Nx.Defn.Kernel.checkpoint/2`.
+
+  `saved` is the number of leading inputs the checkpoint stands in for,
+  usually the activations passed to `checkpoint/2`. Those are tied to the
+  incoming gradient so the recomputation cannot run before the backward
+  pass needs it. The inputs after them, usually parameters read from the
+  enclosing scope, are alive for the whole program and are read directly,
+  so work that depends on them alone is shared with the forward pass.
+  `:all` ties every input.
   """
-  defstruct []
+  defstruct saved: :all
 end

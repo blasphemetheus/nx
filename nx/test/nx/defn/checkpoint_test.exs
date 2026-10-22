@@ -558,24 +558,282 @@ defmodule Nx.Defn.CheckpointTest do
       Nx.sum(checkpoint(x, fn x -> Nx.sin(Nx.dot(x, w)) end))
     end
 
-    test "raises in the forward pass" do
+    defn plain_weight_loss(x, w) do
+      Nx.sum(Nx.sin(Nx.dot(x, w)))
+    end
+
+    test "the forward value matches the plain function" do
       x = Nx.tensor([[0.5, 1.0], [1.5, 2.0]])
       w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
 
-      assert_raise RuntimeError, ~r/expressions come from different contexts/, fn ->
-        captured_weight_loss(x, w)
-      end
+      assert_all_close(captured_weight_loss(x, w), plain_weight_loss(x, w))
     end
 
     defn grad_captured_weight(x, w), do: grad(w, &captured_weight_loss(x, &1))
+    defn grad_plain_weight(x, w), do: grad(w, &plain_weight_loss(x, &1))
 
-    test "raises inside grad" do
+    test "the gradient of the captured weight matches the plain function" do
       x = Nx.tensor([[0.5, 1.0], [1.5, 2.0]])
       w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
 
-      assert_raise RuntimeError, ~r/expressions come from different contexts/, fn ->
-        grad_captured_weight(x, w)
+      assert_all_close(grad_captured_weight(x, w), grad_plain_weight(x, w))
+    end
+
+    test "a function held in a variable captures the same way as an inline one" do
+      x = Nx.tensor([[0.5, 1.0], [1.5, 2.0]])
+      w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+
+      gradient =
+        Nx.Defn.jit(fn x, w ->
+          Nx.Defn.grad(w, fn w ->
+            body = fn x -> Nx.sin(Nx.dot(x, w)) end
+            Nx.sum(checkpoint(x, body))
+          end)
+        end).(x, w)
+
+      assert_all_close(gradient, grad_plain_weight(x, w))
+    end
+
+    defn dense(x, w), do: Nx.dot(x, w) |> Nx.max(0)
+
+    defn grad_captured_weights(w1, w2, x) do
+      grad({w1, w2}, fn {w1, w2} ->
+        x
+        |> checkpoint(fn x -> dense(x, w1) end)
+        |> checkpoint(fn x -> dense(x, w2) end)
+        |> Nx.sum()
+      end)
+    end
+
+    defn grad_weights_plain(w1, w2, x) do
+      grad({w1, w2}, fn {w1, w2} -> x |> dense(w1) |> dense(w2) |> Nx.sum() end)
+    end
+
+    test "the gradient flows to weights captured by consecutive checkpoints" do
+      w1 = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+      w2 = Nx.tensor([[0.1, 0.4], [-0.2, 0.3]])
+      x = Nx.tensor([1.0, 2.0])
+      assert_equal(grad_captured_weights(w1, w2, x), grad_weights_plain(w1, w2, x))
+    end
+
+    defn grad_captured_params(params, x) do
+      value_and_grad(params, fn params ->
+        x
+        |> checkpoint(fn x -> dense(x, params.w1) end)
+        |> checkpoint(fn x -> dense(x, params.w2) end)
+        |> Nx.sum()
+      end)
+    end
+
+    defn grad_params_plain(params, x) do
+      value_and_grad(params, fn params ->
+        x |> dense(params.w1) |> dense(params.w2) |> Nx.sum()
+      end)
+    end
+
+    test "a captured map of parameters" do
+      params = %{
+        w1: Nx.tensor([[0.5, -0.3], [0.2, 0.8]]),
+        w2: Nx.tensor([[0.1, 0.4], [-0.2, 0.3]])
+      }
+
+      x = Nx.tensor([1.0, 2.0])
+      {value, gradient} = grad_captured_params(params, x)
+      {plain_value, plain_gradient} = grad_params_plain(params, x)
+      assert_equal(value, plain_value)
+      assert_equal(gradient, plain_gradient)
+    end
+
+    defn grad_captured_not_target(x, y) do
+      grad(x, fn x -> checkpoint(x, fn x -> Nx.sum(Nx.multiply(x, y)) end) end)
+    end
+
+    test "a captured tensor that is not a grad target" do
+      x = Nx.tensor([1.0, 2.0, 3.0])
+      y = Nx.tensor([4.0, 5.0, 6.0])
+      assert_equal(grad_captured_not_target(x, y), y)
+    end
+
+    defn grad_rebound_name(x, y) do
+      grad(x, fn x ->
+        checkpoint(x, fn x ->
+          y = Nx.multiply(x, 2.0)
+          Nx.sum(Nx.multiply(y, y))
+        end)
+      end)
+    end
+
+    test "the body may rebind a name from the enclosing scope" do
+      x = Nx.tensor([1.0, 2.0])
+      y = Nx.tensor([100.0, 100.0])
+      assert_equal(grad_rebound_name(x, y), Nx.tensor([8.0, 16.0]))
+    end
+
+    defn grad_indexed_capture(ws, x) do
+      grad(ws, fn ws -> Nx.sum(checkpoint(x, fn x -> dense(x, ws[0]) |> dense(ws[1]) end)) end)
+    end
+
+    defn grad_indexed_plain(ws, x) do
+      grad(ws, fn ws -> Nx.sum(dense(x, ws[0]) |> dense(ws[1])) end)
+    end
+
+    test "a sliced capture passes the whole tensor in" do
+      ws = Nx.tensor([[[0.5, -0.3], [0.2, 0.8]], [[0.1, 0.4], [-0.2, 0.3]]])
+      x = Nx.tensor([1.0, 2.0])
+      assert_equal(grad_indexed_capture(ws, x), grad_indexed_plain(ws, x))
+
+      expr =
+        Nx.Defn.debug_expr(fn ws, x -> checkpoint(x, fn x -> dense(x, ws[0]) end) end).(ws, x)
+
+      %Nx.Tensor{data: %Nx.Defn.Expr{op: :block, args: [_struct, in_args, _body, _fun]}} = expr
+      assert [%Nx.Tensor{shape: {2}}, %Nx.Tensor{shape: {2, 2, 2}}] = in_args
+    end
+
+    defn vectorized_scale(x, scale) do
+      checkpoint(x, fn x -> Nx.multiply(Nx.sin(x), scale) end)
+    end
+
+    test "a captured vectorized tensor keeps its axes in the forward pass" do
+      x = Nx.tensor([0.5, 1.0])
+      scale = Nx.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      result = vectorized_scale(x, scale)
+      assert result.vectorized_axes == [batch: 3]
+      assert_equal(result, Nx.multiply(Nx.sin(x), scale))
+    end
+
+    defn grad_captured_vectorized(x, scale) do
+      grad(scale, fn scale -> Nx.sum(checkpoint(x, fn x -> Nx.multiply(Nx.sin(x), scale) end)) end)
+    end
+
+    defn grad_captured_vectorized_scale_plain(x, scale) do
+      grad(scale, fn scale -> Nx.sum(Nx.multiply(Nx.sin(x), scale)) end)
+    end
+
+    test "the gradient with respect to a captured vectorized tensor" do
+      x = Nx.tensor([0.5, 1.0])
+      scale = Nx.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]) |> Nx.vectorize(:batch)
+
+      gradient = grad_captured_vectorized(x, scale)
+      assert gradient.vectorized_axes == [batch: 3]
+      assert_equal(gradient, grad_captured_vectorized_scale_plain(x, scale))
+    end
+
+    defn grad_captured_vectorized_constant(x) do
+      grad(x, fn x ->
+        scale = Nx.vectorize(Nx.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]), :batch)
+        Nx.sum(checkpoint(x, fn x -> Nx.multiply(Nx.sin(x), scale) end))
+      end)
+    end
+
+    defn grad_captured_vectorized_constant_plain(x) do
+      grad(x, fn x ->
+        scale = Nx.vectorize(Nx.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]), :batch)
+        Nx.sum(Nx.multiply(Nx.sin(x), scale))
+      end)
+    end
+
+    test "a vectorized constant captured from the enclosing scope" do
+      x = Nx.tensor([0.5, 1.0])
+      gradient = grad_captured_vectorized_constant(x)
+      assert gradient.vectorized_axes == [batch: 3]
+      assert_equal(gradient, grad_captured_vectorized_constant_plain(x))
+    end
+
+    defn grad_zero_inputs(w1, w2, x) do
+      grad({w1, w2}, fn {w1, w2} ->
+        hidden = checkpoint([], fn -> dense(x, w1) end)
+        checkpoint([], fn -> dense(hidden, w2) end) |> Nx.sum()
+      end)
+    end
+
+    defn zero_inputs_forward(x, w), do: checkpoint([], fn -> dense(x, w) end)
+
+    test "a checkpoint without inputs takes every tensor from the enclosing scope" do
+      w1 = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+      w2 = Nx.tensor([[0.1, 0.4], [-0.2, 0.3]])
+      x = Nx.tensor([1.0, 2.0])
+
+      assert_equal(zero_inputs_forward(x, w1), dense(x, w1))
+      assert_equal(grad_zero_inputs(w1, w2, x), grad_weights_plain(w1, w2, x))
+
+      expr = Nx.Defn.debug_expr(fn x, w -> checkpoint([], fn -> dense(x, w) end) end).(x, w1)
+      %Nx.Tensor{data: %Nx.Defn.Expr{op: :block, args: [_struct, in_args, _body, _fun]}} = expr
+      assert [%Nx.Tensor{shape: {2}}, %Nx.Tensor{shape: {2, 2}}] = in_args
+    end
+
+    test "a checkpoint reading more tensors than a function can take as arguments" do
+      count = 300
+      weights = Enum.map(1..count, &Nx.tensor([&1 * 0.01, &1 * 0.02]))
+      x = Nx.tensor([1.0, 2.0])
+
+      loss = fn x, weights ->
+        checkpoint([], fn ->
+          weights
+          |> Enum.reduce(x, fn w, acc -> Nx.sin(Nx.multiply(acc, w)) end)
+          |> Nx.sum()
+        end)
       end
+
+      plain = fn x, weights ->
+        weights |> Enum.reduce(x, fn w, acc -> Nx.sin(Nx.multiply(acc, w)) end) |> Nx.sum()
+      end
+
+      gradient =
+        Nx.Defn.jit(fn x, weights ->
+          grad(weights, fn weights -> loss.(x, Tuple.to_list(weights)) end)
+        end).(x, List.to_tuple(weights))
+
+      expected =
+        Nx.Defn.jit(fn x, weights ->
+          grad(weights, fn weights -> plain.(x, Tuple.to_list(weights)) end)
+        end).(x, List.to_tuple(weights))
+
+      assert tuple_size(gradient) == count
+      assert_all_close(elem(gradient, 0), elem(expected, 0))
+      assert_all_close(elem(gradient, count - 1), elem(expected, count - 1))
+    end
+
+    test "the checkpoint records how many inputs were explicit" do
+      x = Nx.tensor([1.0, 2.0])
+      w = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+
+      explicit = Nx.Defn.debug_expr(fn x, w -> checkpoint(x, fn x -> dense(x, w) end) end).(x, w)
+      %Nx.Tensor{data: %Nx.Defn.Expr{op: :block, args: [struct, in_args, _, _]}} = explicit
+      assert %Nx.Block.Checkpoint{saved: 1} = struct
+      assert length(in_args) == 2
+
+      none = Nx.Defn.debug_expr(fn x, w -> checkpoint([], fn -> dense(x, w) end) end).(x, w)
+      %Nx.Tensor{data: %Nx.Defn.Expr{op: :block, args: [struct, _, _, _]}} = none
+      assert %Nx.Block.Checkpoint{saved: :all} = struct
+    end
+
+    defn nested_captured_loss(x, w1, w2) do
+      Nx.sum(
+        checkpoint(x, fn x ->
+          hidden = checkpoint(x, fn x -> dense(x, w1) end)
+          dense(hidden, w2)
+        end)
+      )
+    end
+
+    defn nested_plain_loss(x, w1, w2), do: Nx.sum(x |> dense(w1) |> dense(w2))
+
+    defn grad_nested_captured(x, w1, w2) do
+      grad({w1, w2}, fn {w1, w2} -> nested_captured_loss(x, w1, w2) end)
+    end
+
+    defn grad_nested_plain(x, w1, w2) do
+      grad({w1, w2}, fn {w1, w2} -> nested_plain_loss(x, w1, w2) end)
+    end
+
+    test "a nested checkpoint captures through the enclosing checkpoint" do
+      x = Nx.tensor([1.0, 2.0])
+      w1 = Nx.tensor([[0.5, -0.3], [0.2, 0.8]])
+      w2 = Nx.tensor([[0.1, 0.4], [-0.2, 0.3]])
+
+      assert_equal(nested_captured_loss(x, w1, w2), nested_plain_loss(x, w1, w2))
+      assert_equal(grad_nested_captured(x, w1, w2), grad_nested_plain(x, w1, w2))
     end
   end
 
