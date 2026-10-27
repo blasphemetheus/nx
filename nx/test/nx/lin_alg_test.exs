@@ -1235,9 +1235,18 @@ defmodule Nx.LinAlgTest do
           # Calculate least-squares solution to a linear matrix equation Ax = y
           x = Nx.LinAlg.least_squares(a, y)
 
-          # Check linear matrix equation
-          Nx.dot(a, x)
-          |> assert_all_close(y, atol: noise_eps * 10)
+          # A least-squares solution minimizes the residual |Ax - y|. With an
+          # overdetermined system the residual is not small in general (it is
+          # the noise the equations cannot absorb), so compare it to the
+          # residual of an f64 pseudo-inverse solution rather than to a
+          # fixed tolerance.
+          a64 = Nx.as_type(a, :f64)
+          y64 = Nx.as_type(y, :f64)
+          x_ref = Nx.dot(Nx.LinAlg.pinv(a64), y64)
+          residual = Nx.LinAlg.norm(Nx.subtract(Nx.dot(a64, Nx.as_type(x, :f64)), y64))
+          residual_ref = Nx.LinAlg.norm(Nx.subtract(Nx.dot(a64, x_ref), y64))
+
+          assert Nx.to_number(residual) <= Nx.to_number(residual_ref) + 5.0e-3
 
           key
       end
