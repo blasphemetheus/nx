@@ -25,28 +25,37 @@ defmodule EXLA.DeviceMemorySharingTest do
       assert Nx.to_binary(t1) == Nx.to_binary(t2)
     end
 
-    # The pointer must not be handed out before the asynchronous
-    # host-to-device transfer has landed. A reader on the same PjRt stream
-    # (from_pointer below) is ordered after the transfer anyway; the case
-    # this pins is an out-of-stream reader such as a NIF doing cudaMemcpy,
-    # which is what `GetDevicePointer` now waits for. Large enough that the
-    # transfer is still in flight when `to_pointer` runs.
+    if client_name == :cuda do
+      @tag :cuda_required
+    end
+
+    # Nx.backend_transfer/2 queues the host-to-device copy and returns
+    # before it has run. Without the wait in GetDevicePointer the address
+    # comes back at once and a reader that is not ordered after the copy
+    # sees the memory's previous contents. Queuing a few transfers ahead
+    # on the same device makes the copy under test start late enough that
+    # the read always loses the race on a PjRt that does not wait itself
+    # (hex EXLA 1.0.0 on XLA 0.10: stale in 10 of 10 trials).
     test "to_pointer on #{inspect(client_name)} waits for a fresh transfer" do
-      host = Nx.iota({16 * 1024 * 1024}, type: {:f, 32}, backend: Nx.BinaryBackend)
-      dev = Nx.backend_transfer(host, {EXLA.Backend, client: unquote(client_name)})
-      pointer = Nx.to_pointer(dev, mode: :local)
+      backend = {EXLA.Backend, client: unquote(client_name)}
+      bytes = 16 * 1024 * 1024
+      filler = Nx.from_binary(:binary.copy(<<0>>, bytes), :u8, backend: Nx.BinaryBackend)
 
-      assert pointer.data_size == 64 * 1024 * 1024
+      for trial <- 1..3 do
+        expected = :crypto.strong_rand_bytes(bytes)
+        host = Nx.from_binary(expected, :u8, backend: Nx.BinaryBackend)
 
-      copy =
-        Nx.from_pointer(
-          {EXLA.Backend, client: unquote(client_name)},
-          pointer,
-          dev.type,
-          dev.shape
-        )
+        queued = for _ <- 1..8, do: Nx.backend_transfer(filler, backend)
+        dev = Nx.backend_transfer(host, backend)
+        pointer = Nx.to_pointer(dev, mode: :local)
+        view = Nx.from_pointer(backend, pointer, dev.type, dev.shape)
 
-      assert Nx.to_binary(copy) == Nx.to_binary(host)
+        assert Nx.to_binary(view) == expected,
+               "trial #{trial}: read stale device memory through to_pointer"
+
+        Nx.backend_deallocate(view)
+        Enum.each([dev | queued], &Nx.backend_deallocate/1)
+      end
     end
   end
 
