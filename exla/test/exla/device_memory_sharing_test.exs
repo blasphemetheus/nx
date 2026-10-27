@@ -24,6 +24,45 @@ defmodule EXLA.DeviceMemorySharingTest do
       assert t1.data.buffer.ref != t2.data.buffer.ref
       assert Nx.to_binary(t1) == Nx.to_binary(t2)
     end
+
+    if client_name == :cuda do
+      @tag :cuda_required
+    end
+
+    # Nx.backend_transfer/2 queues the host-to-device copy and returns
+    # before it has run. Without the wait in GetDevicePointer the address
+    # comes back at once and a reader that is not ordered after the copy
+    # sees the memory's previous contents. Queuing a few transfers ahead
+    # on the same device makes the copy under test start late enough that
+    # the read always loses the race on a PjRt that does not wait itself
+    # (hex EXLA 1.0.0 on XLA 0.10: stale in 10 of 10 trials).
+    test "to_pointer on #{inspect(client_name)} waits for a fresh transfer" do
+      backend = {EXLA.Backend, client: unquote(client_name)}
+      bytes = 16 * 1024 * 1024
+      filler = Nx.from_binary(:binary.copy(<<0>>, bytes), :u8, backend: Nx.BinaryBackend)
+
+      for trial <- 1..3 do
+        expected = :crypto.strong_rand_bytes(bytes)
+        host = Nx.from_binary(expected, :u8, backend: Nx.BinaryBackend)
+
+        queued = for _ <- 1..8, do: Nx.backend_transfer(filler, backend)
+        dev = Nx.backend_transfer(host, backend)
+        pointer = Nx.to_pointer(dev, mode: :local)
+        view = Nx.from_pointer(backend, pointer, dev.type, dev.shape)
+
+        assert Nx.to_binary(view) == expected,
+               "trial #{trial}: read stale device memory through to_pointer"
+
+        Nx.backend_deallocate(view)
+        Enum.each([dev | queued], &Nx.backend_deallocate/1)
+      end
+    end
+  end
+
+  test "to_pointer raises on a deallocated buffer instead of exporting freed memory" do
+    t = Nx.tensor([1, 2, 3], backend: {EXLA.Backend, client: :host})
+    Nx.backend_deallocate(t)
+    assert_raise RuntimeError, ~r/deleted or donated/, fn -> Nx.to_pointer(t, mode: :local) end
   end
 
   @tag :distributed

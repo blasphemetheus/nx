@@ -79,4 +79,55 @@ defmodule EXLA.MLIR.CustomCallTest do
     assert mlir =~ "#{name} = 1 : i64"
     assert_raise ArgumentError, fn -> String.to_existing_atom(name) end
   end
+
+  describe "layouts on protocol custom calls" do
+    # A handler that reads row-major gets a buffer in whatever layout XLA
+    # found convenient unless the op pins its layouts. The lowering pins
+    # row-major by default; a Spec that sets either attribute wins. The
+    # block tags and their protocol impls are in test/support.
+    defmodule Fun do
+      import Nx.Defn
+
+      defn default_layouts(x, w) do
+        out = Nx.template({2, 4, 3}, {:f, 32})
+        Nx.block(%EXLA.Test.DefaultLayoutBlock{}, [x, w], out, fn _, x, w -> Nx.dot(x, w) end)
+      end
+
+      defn pinned_layouts(x, w) do
+        out = Nx.template({2, 4, 3}, {:f, 32})
+        Nx.block(%EXLA.Test.PinnedLayoutBlock{}, [x, w], out, fn _, x, w -> Nx.dot(x, w) end)
+      end
+    end
+
+    defp mlir_of(fun, args) do
+      try do
+        Nx.Defn.jit_apply(fun, args, compiler: EXLA, module_compilation: :to_mlir)
+      catch
+        :throw, {:mlir_module, ref, _used_inputs, _output} ->
+          EXLA.MLIR.Module.as_string(%EXLA.MLIR.Module{ref: ref})
+      end
+    end
+
+    test "row-major operand and result layouts are emitted by default" do
+      x = Nx.iota({2, 4, 5}, type: {:f, 32})
+      w = Nx.iota({5, 3}, type: {:f, 32})
+      mlir = mlir_of(&Fun.default_layouts/2, [x, w])
+
+      assert mlir =~ "stablehlo.custom_call @test_default_layouts("
+
+      assert mlir =~
+               "operand_layouts = [dense<[2, 1, 0]> : tensor<3xindex>, dense<[1, 0]> : tensor<2xindex>]"
+
+      assert mlir =~ "result_layouts = [dense<[2, 1, 0]> : tensor<3xindex>]"
+    end
+
+    test "layouts set by the Spec are kept and not duplicated" do
+      x = Nx.iota({2, 4, 5}, type: {:f, 32})
+      w = Nx.iota({5, 3}, type: {:f, 32})
+      mlir = mlir_of(&Fun.pinned_layouts/2, [x, w])
+
+      assert mlir =~ "result_layouts = [dense<[0, 1, 2]> : tensor<3xindex>]"
+      refute mlir =~ "operand_layouts"
+    end
+  end
 end

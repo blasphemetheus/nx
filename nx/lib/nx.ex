@@ -17824,6 +17824,14 @@ defmodule Nx do
   for multiple tensors, as well as for interoperability with other programming
   languages.
 
+  The memory behind the pointer holds the tensor's data by the time this
+  function returns: a backend that fills buffers asynchronously (for example
+  EXLA, where host-to-device transfers and executable outputs complete in
+  the background) waits for the buffer to be ready before exporting it.
+  Readers of the pointer need no further synchronization with the backend
+  for the data to be valid, though the tensor must stay referenced for as
+  long as the pointer is in use.
+
   ## Options
 
     * `:mode` - one of `:local`, `:ipc`. `:local` means the returned value

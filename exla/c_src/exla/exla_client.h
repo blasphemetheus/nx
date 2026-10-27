@@ -35,7 +35,25 @@ public:
   tsl::StatusOr<ERL_NIF_TERM> ToBinary(ErlNifEnv *env, exla::int64 size);
   tsl::Status Deallocate();
 
+  // The raw device address of the buffer, once its contents are defined.
+  //
+  // PjRt enqueues host-to-device transfers and executable outputs
+  // asynchronously, and UnsafeBufferPointer returns the address as soon as
+  // the memory is allocated, not when the data has landed. The caller of
+  // Nx.to_pointer/2 (a NIF, a cudaMemcpy, another runtime) has no event to
+  // wait on, so wait here; for a buffer that is already ready this is a
+  // cheap check.
   tsl::StatusOr<std::uintptr_t> GetDevicePointer(xla::PjRtClient *client) {
+    if (buffer_->IsDeleted()) {
+      return xla::FailedPrecondition(
+          "cannot export a pointer to a deleted or donated buffer");
+    }
+
+    auto ready = buffer_->GetReadyFuture().Await();
+    if (!ready.ok()) {
+      return ready;
+    }
+
     return client->UnsafeBufferPointer(buffer_.get());
   }
 
