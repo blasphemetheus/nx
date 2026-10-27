@@ -24,6 +24,36 @@ defmodule EXLA.DeviceMemorySharingTest do
       assert t1.data.buffer.ref != t2.data.buffer.ref
       assert Nx.to_binary(t1) == Nx.to_binary(t2)
     end
+
+    # The pointer must not be handed out before the asynchronous
+    # host-to-device transfer has landed. A reader on the same PjRt stream
+    # (from_pointer below) is ordered after the transfer anyway; the case
+    # this pins is an out-of-stream reader such as a NIF doing cudaMemcpy,
+    # which is what `GetDevicePointer` now waits for. Large enough that the
+    # transfer is still in flight when `to_pointer` runs.
+    test "to_pointer on #{inspect(client_name)} waits for a fresh transfer" do
+      host = Nx.iota({16 * 1024 * 1024}, type: {:f, 32}, backend: Nx.BinaryBackend)
+      dev = Nx.backend_transfer(host, {EXLA.Backend, client: unquote(client_name)})
+      pointer = Nx.to_pointer(dev, mode: :local)
+
+      assert pointer.data_size == 64 * 1024 * 1024
+
+      copy =
+        Nx.from_pointer(
+          {EXLA.Backend, client: unquote(client_name)},
+          pointer,
+          dev.type,
+          dev.shape
+        )
+
+      assert Nx.to_binary(copy) == Nx.to_binary(host)
+    end
+  end
+
+  test "to_pointer raises on a deallocated buffer instead of exporting freed memory" do
+    t = Nx.tensor([1, 2, 3], backend: {EXLA.Backend, client: :host})
+    Nx.backend_deallocate(t)
+    assert_raise RuntimeError, ~r/deleted or donated/, fn -> Nx.to_pointer(t, mode: :local) end
   end
 
   @tag :distributed

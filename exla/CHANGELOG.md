@@ -10,6 +10,7 @@
 
 ### Bug fixes
 
+  * Wait for a buffer's contents to be ready before `Nx.to_pointer/2` returns its device address; a kernel or memcpy reading through the pointer could otherwise observe memory the asynchronous host-to-device transfer had not written yet
   * Do not donate the inputs of eager `EXLA.Backend` operations, which raised for donatable tensors passed to operations that change their shape
   * Compile every `Nx.block/4` body on its own instead of sharing one compiled body between blocks with the same struct and argument shapes
   * Support f16 in `Nx.LinAlg.triangular_solve/3` on CUDA, which raised "Invalid type for triangular solve"
