@@ -819,6 +819,8 @@ defmodule EXLA.Defn do
           |> Composite.flatten_list()
           |> Enum.map(&expr_to_typespec/1)
 
+        mlir_attributes = with_default_layouts(mlir_attributes, call_args, out_typespecs)
+
         lowered =
           Value.custom_call(
             call_args,
@@ -969,6 +971,44 @@ defmodule EXLA.Defn do
   defp cached_recur_operator(op, expr, state, cache) do
     {args, cache} = Tree.apply_args(expr, cache, &recur_operator(&1, state, &2))
     {to_operator(op, args, expr, state), cache}
+  end
+
+  # XLA assigns layouts to a custom call's operands and results freely unless
+  # the op constrains them, and it does pick non-default ones when a
+  # neighbouring op prefers them (observed: a time-major `[batch, time,
+  # hidden]` result feeding a reduce over `hidden` and a last-step slice).
+  # FFI handlers almost always assume row-major and have no way to tell, so
+  # pin row-major on both sides unless the Spec set either attribute itself.
+  # Tokens have no layout; leave such calls alone.
+  defp with_default_layouts(mlir_attributes, operands, out_typespecs) do
+    names = Enum.map(mlir_attributes, &elem(&1, 0))
+    operand_typespecs = Enum.map(operands, &Value.get_typespec/1)
+
+    cond do
+      "operand_layouts" in names or "result_layouts" in names ->
+        mlir_attributes
+
+      Enum.any?(operand_typespecs ++ out_typespecs, &(&1.type == :token)) ->
+        mlir_attributes
+
+      true ->
+        mlir_attributes ++
+          [
+            {"operand_layouts", row_major_layouts(operand_typespecs)},
+            {"result_layouts", row_major_layouts(out_typespecs)}
+          ]
+    end
+  end
+
+  defp row_major_layouts(typespecs) do
+    "[" <> Enum.map_join(typespecs, ", ", &row_major_layout/1) <> "]"
+  end
+
+  defp row_major_layout(%Typespec{shape: shape}) do
+    case tuple_size(shape) do
+      0 -> "dense<> : tensor<0xindex>"
+      rank -> "dense<[#{Enum.join((rank - 1)..0//-1, ", ")}]> : tensor<#{rank}xindex>"
+    end
   end
 
   defp cast_custom_call_operands(call_args, :default), do: call_args

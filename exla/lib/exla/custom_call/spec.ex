@@ -18,6 +18,14 @@ defmodule EXLA.CustomCall.Spec do
       `attributes`. Names must be unique and cannot be `call_target_name`, `api_version`,
       or `backend_config`.
 
+      Unless the list sets `operand_layouts` or `result_layouts`, EXLA emits both with
+      row-major layouts for every operand and result. XLA is otherwise free to hand the
+      handler a buffer in whatever layout a neighbouring op prefers (for example
+      time-major for a `[batch, time, hidden]` result feeding a reduce), and a handler
+      that assumes row-major then reads the right bytes in the wrong order. Handlers
+      that accept other layouts can set the attributes themselves, e.g.
+      `{"result_layouts", "[dense<[0, 1]> : tensor<2xindex>]"}`.
+
     * **`operand_element_types`** — How operand SSA values are presented to the handler:
 
       * **`:default`** — use each lowered operand’s element type as produced from the
