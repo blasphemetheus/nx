@@ -6,6 +6,32 @@ defmodule Nx.Defn.CheckpointTest do
   import Nx.Testing, only: [assert_equal: 2, assert_all_close: 2]
 
   describe "traced callback captures" do
+    test "repeated inputs, a capture of the same tensor, and an outer use accumulate gradients" do
+      marked = fn value ->
+        result =
+          checkpoint_capture([value, value], fn first, second ->
+            Nx.add(Nx.sin(Nx.multiply(first, value)), Nx.cos(second))
+          end)
+
+        Nx.add(result, Nx.multiply(value, value))
+      end
+
+      plain = fn value ->
+        Nx.add(
+          Nx.add(Nx.sin(Nx.multiply(value, value)), Nx.cos(value)),
+          Nx.multiply(value, value)
+        )
+      end
+
+      value = Nx.tensor(0.7)
+      assert_all_close(grad(value, marked), grad(value, plain))
+
+      assert_all_close(
+        grad(value, fn value -> grad(value, marked) end),
+        grad(value, fn value -> grad(value, plain) end)
+      )
+    end
+
     defn captured_pipeline(params, x) do
       x
       |> checkpoint_capture(&Nx.sin(&1 * params.first))
