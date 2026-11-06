@@ -2,6 +2,54 @@ defmodule EXLA.Defn.CheckpointTest do
   use EXLA.Case, async: true
 
   import Nx.Defn
+  import Nx.Defn.Kernel, only: [checkpoint_capture: 2]
+
+  defn inline_capture_loss(x, weight) do
+    y = x |> checkpoint_capture(&Nx.sin(Nx.exp(&1 * weight)))
+    Nx.sum(y * y)
+  end
+
+  test "traced capture preserves captured gradients and compiled recomputation" do
+    x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+    weight = Nx.tensor(0.5)
+
+    plain = fn {x, weight} ->
+      y = Nx.sin(Nx.exp(Nx.multiply(x, weight)))
+      Nx.sum(Nx.multiply(y, y))
+    end
+
+    {actual_x, actual_weight} =
+      grad({x, weight}, fn {x, weight} -> inline_capture_loss(x, weight) end)
+
+    {expected_x, expected_weight} = grad({x, weight}, plain)
+    assert_all_close(actual_x, expected_x)
+    assert_all_close(actual_weight, expected_weight)
+
+    executable =
+      EXLA.to_executable(fn x, weight -> grad(x, &inline_capture_loss(&1, weight)) end, [
+        x,
+        weight
+      ])
+
+    assert count(EXLA.Executable.optimized_hlo(executable), "exponential(") == 2
+  end
+
+  test "captured tuple outputs and nested regions compile" do
+    x = Nx.tensor([0.2, 0.4])
+    weight = Nx.tensor(0.7)
+
+    fun = fn x, weight ->
+      checkpoint_capture(x, fn y ->
+        z = checkpoint_capture(y, fn z -> Nx.sin(Nx.multiply(z, weight)) end)
+        {z, Nx.greater(z, 0)}
+      end)
+    end
+
+    {actual, mask} = EXLA.jit(fun).(x, weight)
+    expected = Nx.sin(Nx.multiply(x, weight))
+    assert_all_close(actual, expected)
+    assert_equal(mask, Nx.greater(expected, 0))
+  end
 
   defn body(x), do: x |> Nx.exp() |> Nx.sin()
 

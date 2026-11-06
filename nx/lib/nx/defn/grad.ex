@@ -214,6 +214,11 @@ defmodule Nx.Defn.Grad do
     end)
   end
 
+  defp parents_args(:checkpoint, %{data: %{args: [inputs, body, _, _]}} = tensor, id, acc) do
+    tensor = put_in(tensor.data.args, [%Nx.Block.Checkpoint{}, [inputs], body, nil])
+    parents_args(:block, tensor, id, acc)
+  end
+
   # A checkpoint is differentiated once its incoming gradient is known, so
   # only its inputs are registered here. The body is traversed at that point.
   defp parents_args(
@@ -485,6 +490,23 @@ defmodule Nx.Defn.Grad do
     end)
   end
 
+  defp update_grads(:checkpoint, [inputs, body, parameters, scope], ans, gs, to_grad_ids, grads) do
+    ids = parameters |> Tuple.to_list() |> Enum.map(& &1.data.id)
+
+    callback = fn _, inputs ->
+      Nx.Defn.CheckpointTrace.instantiate(body, ids, Tuple.to_list(inputs), scope)
+    end
+
+    update_grads(
+      :block,
+      [%Nx.Block.Checkpoint{}, [inputs], body, callback],
+      ans,
+      gs,
+      to_grad_ids,
+      grads
+    )
+  end
+
   defp update_grads(:block, [_struct, _in_args, expr, _callback], _ans, gs, _to_grad_ids, grads) do
     gs = List.wrap(gs)
 
@@ -729,6 +751,7 @@ defmodule Nx.Defn.Grad do
   end
 
   defp tuple_primal(:block, [_, _, expr | _]), do: expr
+  defp tuple_primal(:checkpoint, [_, body, _, _]), do: body
   defp tuple_primal(:metadata, [expr | _]), do: expr
   defp tuple_primal(:cond, [_, last]), do: last
   defp tuple_primal(:io_call, [tensor_expr | _]), do: tensor_expr

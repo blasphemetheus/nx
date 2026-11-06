@@ -314,6 +314,18 @@ defmodule Nx.Defn.Kernel do
     end
   end
 
+  @doc """
+  Traces a callback into a checkpoint region with its own expression scope.
+
+  The callback may capture tensors, including through other callbacks. Values
+  computed before the region are saved inputs. The body is stored as a graph
+  with explicit parameters rather than an `Nx.block` default callback.
+  Ordinary block and while scope rules remain unchanged.
+  """
+  def checkpoint_capture(inputs, fun) when is_function(fun) do
+    Nx.Defn.CheckpointTrace.run(inputs, fun)
+  end
+
   defp checkpoint_result(%Nx.Tensor{} = tensor), do: tensor
 
   defp checkpoint_result(tuple) when is_tuple(tuple) do
