@@ -6,6 +6,128 @@ defmodule Nx.Defn.CheckpointTest do
   import Nx.Testing, only: [assert_equal: 2, assert_all_close: 2]
 
   describe "traced callback captures" do
+    defn boundary_custom_rule(value) do
+      custom_grad(value * value, [value], fn incoming -> [incoming * 3 * value] end)
+    end
+
+    defn saved_custom_capture(x, weight) do
+      prepared = boundary_custom_rule(weight)
+      checkpoint_capture(x, fn value -> value * prepared end)
+    end
+
+    defn explicit_custom_input(x, weight) do
+      prepared = boundary_custom_rule(weight)
+      checkpoint_capture([x, prepared], fn value, prepared -> value * prepared end)
+    end
+
+    defn saved_constant_custom_capture(x, weight) do
+      prepared = custom_grad(Nx.tensor(2.0), [weight], fn incoming -> [incoming * 3 * weight] end)
+      checkpoint_capture(x, fn value -> value * prepared end)
+    end
+
+    test "a saved constant forward value can still have a custom derivative" do
+      x = Nx.tensor(0.2)
+      weight = Nx.tensor(0.7)
+      marked = fn weight -> saved_constant_custom_capture(x, weight) end
+      assert_all_close(marked.(weight), Nx.multiply(x, 2))
+      assert_all_close(grad(weight, marked), Nx.multiply(Nx.multiply(x, weight), 3))
+      assert_all_close(grad(weight, fn w -> grad(w, marked) end), Nx.multiply(x, 3))
+    end
+
+    defn wrapped_custom_region(x) do
+      output = checkpoint_capture(x, &Nx.sin/1)
+      custom_grad(output, [x], fn incoming -> [incoming * 7 * x] end)
+    end
+
+    test "a custom-gradient value computed outside is a saved capture with its own derivative" do
+      x = Nx.tensor(0.2)
+      weight = Nx.tensor(0.7)
+      marked = fn weight -> saved_custom_capture(x, weight) end
+      explicit = fn weight -> explicit_custom_input(x, weight) end
+      assert_all_close(marked.(weight), explicit.(weight))
+      assert_all_close(grad(weight, marked), Nx.multiply(Nx.multiply(x, weight), 3))
+      assert_all_close(grad(weight, marked), grad(weight, explicit))
+      assert_all_close(grad(weight, fn w -> grad(w, marked) end), Nx.multiply(x, 3))
+
+      expression = Nx.Defn.debug_expr(&saved_custom_capture/2).(x, weight)
+      %{data: %{args: [{_, captured}, body, _, _]}} = expression
+      assert match?(%{data: %{op: :metadata, args: [_, %{custom_grad: _}]}}, captured)
+      assert body.data.op == :multiply
+    end
+
+    test "a custom gradient outside the checkpoint controls its derivative" do
+      value = Nx.tensor(0.7)
+      assert_all_close(grad(value, &wrapped_custom_region/1), Nx.multiply(value, 7))
+
+      assert_all_close(
+        grad(value, fn value -> grad(value, &wrapped_custom_region/1) end),
+        Nx.tensor(7.0)
+      )
+    end
+
+    defn derivative_only_capture(x, weight) do
+      checkpoint_capture(x, fn value ->
+        custom_grad(Nx.sin(value), [value], fn incoming -> [incoming * weight] end)
+      end)
+    end
+
+    defn explicit_derivative_only_dependency(x, weight) do
+      checkpoint([x, weight], fn value, weight ->
+        custom_grad(Nx.sin(value), [value], fn incoming -> [incoming * weight] end)
+      end)
+    end
+
+    test "explicit checkpoint inputs preserve a dependency used only by a custom derivative" do
+      value = Nx.tensor(0.7)
+      weight = Nx.tensor(0.2)
+
+      derivative = fn value, weight ->
+        grad(value, &explicit_derivative_only_dependency(&1, weight))
+      end
+
+      assert_all_close(Nx.Defn.jit(derivative).(value, weight), weight)
+
+      mixed_derivative =
+        Nx.Defn.jit(fn value, weight ->
+          grad(weight, fn weight -> derivative.(value, weight) end)
+        end)
+
+      assert_all_close(mixed_derivative.(value, weight), Nx.tensor(1.0))
+    end
+
+    defn custom_rule_in_branch(x) do
+      checkpoint_capture(x, fn value ->
+        if value > 0, do: boundary_custom_rule(value), else: Nx.sin(value)
+      end)
+    end
+
+    defn custom_rule_in_loop(x) do
+      checkpoint_capture(x, fn value ->
+        {_, result} =
+          while {i = 0, value}, i < 2 do
+            {i + 1, boundary_custom_rule(value)}
+          end
+
+        result
+      end)
+    end
+
+    test "internal custom rules are rejected even in nested scopes or derivative-only captures" do
+      value = Nx.tensor(0.7)
+
+      assert_raise ArgumentError, ~r/cannot convert custom_grad/, fn ->
+        derivative_only_capture(value, Nx.tensor(0.2))
+      end
+
+      assert_raise ArgumentError, ~r/cannot convert custom_grad/, fn ->
+        custom_rule_in_branch(value)
+      end
+
+      assert_raise ArgumentError, ~r/cannot convert custom_grad/, fn ->
+        custom_rule_in_loop(value)
+      end
+    end
+
     defn nested_shared_boundary(x, weight) do
       prepared = Nx.sin(weight)
 

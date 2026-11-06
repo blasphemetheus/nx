@@ -50,7 +50,9 @@ A region stores:
 Static configuration, such as an axis number or an Elixir function used while
 tracing, is not a runtime tensor input. A function can itself invoke another
 closure; the resulting traced tensor dependencies are what matter.
-Context-free tensor constants remain embedded expressions.
+Literal constant and embedded-tensor nodes remain embedded expressions.
+A missing context tag alone does not make a node constant: custom-gradient
+metadata can wrap a constant forward value while defining a nonzero derivative.
 
 ## How the boundary is found
 
@@ -60,7 +62,7 @@ Context-free tensor constants remain embedded expressions.
    in process-local state. This is the prototype's unusual mechanism:
    expression construction history determines which work belongs inside.
 3. Walk backward from the outputs. Visit each tensor ID once.
-4. For a context-free expression, leave it embedded. For an expression created
+4. For a literal constant or embedded tensor, leave it embedded. For an expression created
    during this trace, inspect its arguments. For a pre-existing expression,
    stop and record that tensor as a captured input.
 5. Give each capture a fresh parameter and substitute parameters into the
@@ -127,15 +129,46 @@ There are three different cases to investigate:
 | Custom gradient created inside the checkpoint | Reconstruct its derivative dependencies correctly, or reject it explicitly. Merely copying its callback is insufficient. |
 | Custom gradient around the checkpoint's output | The outer custom rule controls differentiation, as it does around an ordinary computation. |
 
-The initial prototype rejects custom-gradient metadata during discovery and
-substitution without distinguishing all these placements. The investigation
-will test those cases before changing that restriction.
+The investigation found that the initial rejection was too broad. The prototype
+now accepts values computed before the checkpoint, including a constant forward
+value with a nonzero custom derivative. Discovery stops at that saved value,
+and substitution replaces it before inspecting its custom-gradient metadata.
+The outer gradient traversal invokes the original custom derivative. Tests
+check a deliberately nonstandard derivative and its second derivative, rather
+than comparing only against the ordinary derivative of the forward operation.
+
+An outer custom rule around a checkpoint also works and is tested. Internal
+custom rules remain rejected, including inside conditional branches and while
+bodies. The error now identifies this placement and suggests the explicit-input
+checkpoint alternative.
 
 For an internal rule, tracing only the forward callback can miss dependencies
 used solely by the derivative callback. Supporting that case may require a
 separate trace of the derivative, with symbolic incoming gradients and an
 explicit representation of any additional tensor dependencies. That is a
 larger design than removing the rejection.
+
+For example, consider a rule whose forward value is `sin(x)` and whose
+derivative callback returns `incoming * weight`. The forward graph does not
+use `weight` at all. Discovering only that graph misses a value required by the
+derivative and by a mixed second derivative. The test using A's explicit
+`checkpoint([x, weight], callback)` verifies that the declared dependency gives
+the intended first derivative and the derivative of that derivative with
+respect to `weight`. The captured version rejects this case instead of keeping
+an opaque callback with old expression references.
+
+A possible extension would trace the derivative callback with symbolic output
+gradients, record its own dependencies, and store that derivative graph beside
+the forward graph. It would need rules for duplicate declared inputs, tuple
+outputs, vectorized incoming gradients, derivative-only captures, nested custom
+rules, and higher derivatives. This has not been implemented. Inspecting a
+callback's immediate Elixir environment would not cover dependencies reached
+through another closure, so it is not a sufficient replacement.
+
+The current restriction deliberately does not distinguish a callback that only
+uses the incoming gradient from one that closes over tensors. Supporting a
+predictable derivative-graph representation is a separate design decision;
+removing the guard or special-casing a few callback shapes would not establish it.
 
 ## Boundary checks now covered
 
