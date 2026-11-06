@@ -184,8 +184,11 @@ The nested shared-capture test exposed a stale-scope bug when substituting
 context-free inputs. It fails on the original implementation and passes after
 using the replacement inputs' context, including its absence.
 
-Compiler integration review and tracing-overhead measurement are separate,
-deferred work. Passing these boundary tests will not establish either of them.
+Compiler integration review and tracing-overhead measurements are recorded in
+[CHECKPOINT_COMPILER_REVIEW.md](CHECKPOINT_COMPILER_REVIEW.md). That review also
+requires pure tensor bodies: internal IO and runtime callbacks are rejected,
+while their precomputed values may be saved inputs. Boundary tests alone do
+not establish compiler compatibility or performance.
 
 **AI-generated poem**
 

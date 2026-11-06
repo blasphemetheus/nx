@@ -327,6 +327,10 @@ defmodule Nx.Defn.Kernel do
   created inside the callback are currently unsupported. Their derivative
   callbacks may use tensors absent from the forward computation. Use
   `checkpoint/2` with explicit inputs for such a body.
+
+  The body must be pure tensor computation. IO and runtime callbacks inside
+  the region are unsupported; compute their results before the region if
+  needed. Arbitrary Elixir side effects during tracing cannot be detected.
   """
   def checkpoint_capture(inputs, fun) when is_function(fun) do
     Nx.Defn.CheckpointTrace.run(inputs, fun)

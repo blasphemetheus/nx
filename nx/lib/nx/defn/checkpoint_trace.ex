@@ -199,6 +199,13 @@ defmodule Nx.Defn.CheckpointTrace do
             "use checkpoint/2 with explicit inputs, or compute the custom-gradient value before the region"
   end
 
+  defp validate_rewritten_node!(%Nx.Tensor{data: %Expr{op: op}})
+       when op in [:io_call, :runtime_call] do
+    raise ArgumentError,
+          "checkpoint_capture requires a pure tensor body; #{op} is unsupported inside the region. " <>
+            "Compute the callback result before the region and pass or capture it as an input"
+  end
+
   defp validate_rewritten_node!(_tensor), do: :ok
 
   def revectorize(body, axes) do

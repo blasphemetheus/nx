@@ -6,6 +6,30 @@ defmodule Nx.Defn.CheckpointTest do
   import Nx.Testing, only: [assert_equal: 2, assert_all_close: 2]
 
   describe "traced callback captures" do
+    test "effects and opaque runtime callbacks cannot be reconstructed inside a region" do
+      for operation <- [
+            fn value -> Nx.Defn.Kernel.io_call(value, fn _ -> :ok end) end,
+            fn value -> Nx.runtime_call(value, value, fn input, _opts -> input end) end
+          ] do
+        assert_raise ArgumentError, ~r/requires a pure tensor body/, fn ->
+          Nx.Defn.jit(fn x -> checkpoint_capture(x, operation) end).(Nx.tensor(0.2))
+        end
+      end
+    end
+
+    test "a callback result computed before the region remains a saved input" do
+      parent = self()
+
+      fun = fn x ->
+        prepared = Nx.Defn.Kernel.io_call(x, fn _ -> send(parent, :prepared) end)
+        checkpoint_capture(x, fn value -> Nx.add(value, prepared) end)
+      end
+
+      assert_all_close(Nx.Defn.jit(fun).(Nx.tensor(0.2)), Nx.tensor(0.4))
+      assert_received :prepared
+      refute_received :prepared
+    end
+
     defn boundary_custom_rule(value) do
       custom_grad(value * value, [value], fn incoming -> [incoming * 3 * value] end)
     end

@@ -4,6 +4,41 @@ defmodule EXLA.Defn.CheckpointTest do
   import Nx.Defn
   import Nx.Defn.Kernel, only: [checkpoint_capture: 2]
 
+  test "compiled regions reject internal callbacks and preserve callbacks on saved inputs" do
+    assert_raise ArgumentError, ~r/requires a pure tensor body/, fn ->
+      EXLA.jit(fn x ->
+        checkpoint_capture(x, fn value -> Nx.Defn.Kernel.io_call(value, fn _ -> :ok end) end)
+      end).(Nx.tensor(0.2))
+    end
+
+    parent = self()
+
+    fun = fn x ->
+      saved = Nx.Defn.Kernel.io_call(x, fn _ -> send(parent, :compiled_saved) end)
+      checkpoint_capture(x, fn value -> Nx.add(value, saved) end)
+    end
+
+    assert_all_close(EXLA.jit(fun).(Nx.tensor(0.2)), Nx.tensor(0.4))
+    assert_receive :compiled_saved
+    refute_receive :compiled_saved
+  end
+
+  test "compiled gradients preserve mixed vectorized capture axes" do
+    x = Nx.tensor([0.2, 0.4])
+    weights = Nx.tensor([[0.3, 0.5], [0.7, 0.9]]) |> Nx.vectorize(:batch)
+
+    fun = fn x, weights ->
+      grad({x, weights}, fn {value, captured} ->
+        checkpoint_capture(value, fn v -> Nx.sin(Nx.multiply(v, captured)) end) |> Nx.sum()
+      end)
+    end
+
+    {actual_x, actual_w} = EXLA.jit(fun).(x, weights)
+    {expected_x, expected_w} = Nx.Defn.jit(fun, compiler: Nx.Defn.Evaluator).(x, weights)
+    assert_all_close(actual_x, expected_x)
+    assert_all_close(actual_w, expected_w)
+  end
+
   defn inline_capture_loss(x, weight) do
     y = x |> checkpoint_capture(&Nx.sin(Nx.exp(&1 * weight)))
     Nx.sum(y * y)
@@ -49,6 +84,77 @@ defmodule EXLA.Defn.CheckpointTest do
     expected = Nx.sin(Nx.multiply(x, weight))
     assert_all_close(actual, expected)
     assert_equal(mask, Nx.greater(expected, 0))
+  end
+
+  defn capture_in_loop(x, weight) do
+    {_, value, _} =
+      while {i = 0, value = x, weight}, i < 3 do
+        {i + 1, checkpoint_capture(value, fn v -> Nx.sin(v * weight) end), weight}
+      end
+
+    Nx.sum(value)
+  end
+
+  defn capture_with_control(x, weight) do
+    checkpoint_capture(x, fn value ->
+      prepared = checkpoint_capture(value, fn v -> Nx.sin(v * weight) end)
+
+      if Nx.sum(prepared) > 0 do
+        capture_in_loop(prepared, weight)
+      else
+        Nx.sum(prepared * prepared)
+      end
+    end)
+  end
+
+  test "captured regions preserve values and gradients across compiled loop and branch scopes" do
+    for weight <- [Nx.tensor(0.7), Nx.tensor(-0.7)],
+        fun <- [&capture_in_loop/2, &capture_with_control/2] do
+      x = Nx.tensor([0.2, 0.4])
+
+      assert_all_close(
+        EXLA.jit(fun).(x, weight),
+        Nx.Defn.jit(fun, compiler: Nx.Defn.Evaluator).(x, weight)
+      )
+
+      derivative = fn x, weight -> grad({x, weight}, fn {x, w} -> fun.(x, w) end) end
+      {actual_x, actual_w} = EXLA.jit(derivative).(x, weight)
+      {expected_x, expected_w} = Nx.Defn.jit(derivative, compiler: Nx.Defn.Evaluator).(x, weight)
+      assert_all_close(actual_x, expected_x)
+      assert_all_close(actual_w, expected_w)
+    end
+  end
+
+  defn capture_saved_custom(x, weight) do
+    prepared = custom_grad(weight * weight, [weight], fn g -> [g * 3 * weight] end)
+    checkpoint_capture(x, &(&1 * prepared))
+  end
+
+  test "compiled saved custom gradients retain their derivative rule" do
+    x = Nx.tensor(0.2)
+    weight = Nx.tensor(0.7)
+    derivative = fn x, w -> grad(w, &capture_saved_custom(x, &1)) end
+    second = fn x, w -> grad(w, fn w -> derivative.(x, w) end) end
+    assert_all_close(EXLA.jit(derivative).(x, weight), Nx.tensor(0.42))
+    assert_all_close(EXLA.jit(second).(x, weight), Nx.tensor(0.6))
+  end
+
+  test "compilation caches distinguish bodies and accept changed captured parameter values" do
+    make_fun = fn operation ->
+      fn x, weight ->
+        checkpoint_capture(x, fn value -> operation.(Nx.multiply(value, weight)) end)
+      end
+    end
+
+    for operation <- [&Nx.sin/1, &Nx.cos/1] do
+      fun = EXLA.jit(make_fun.(operation))
+
+      for weight <- [0.2, 0.7] do
+        x = Nx.tensor([0.3, 0.5])
+        w = Nx.tensor(weight)
+        assert_all_close(fun.(x, w), operation.(Nx.multiply(x, w)))
+      end
+    end
   end
 
   defn body(x), do: x |> Nx.exp() |> Nx.sin()
