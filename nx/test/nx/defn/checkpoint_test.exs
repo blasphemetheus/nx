@@ -7,6 +7,131 @@ defmodule Nx.Defn.CheckpointTest do
 
   # --- Forward pass: checkpoint is a no-op ---
 
+  describe "per-use recomputation" do
+    defp counted_exp(tensor, key) do
+      unless match?(%Nx.Tensor{data: %Nx.Defn.Expr{}}, tensor) do
+        Process.put(key, Process.get(key, 0) + 1)
+      end
+
+      Nx.exp(tensor)
+    end
+
+    test "each operand occurrence reconstructs, including repeated operands" do
+      Process.put(:recompute_calls, 0)
+
+      actual =
+        Nx.Defn.jit(fn x ->
+          y = Nx.Defn.Kernel.recompute_each_use(x, &counted_exp(&1, :recompute_calls))
+          Nx.multiply(y, y)
+        end).(Nx.tensor(0.2))
+
+      assert_all_close(actual, Nx.exp(Nx.tensor(0.4)))
+      assert Process.get(:recompute_calls) == 2
+    end
+
+    test "plain blocks share their result and returning a recipe is one use" do
+      Process.put(:plain_calls, 0)
+
+      Nx.Defn.jit(fn x ->
+        y =
+          Nx.block(%Nx.Block.Checkpoint{}, [x], nil, fn _, t -> counted_exp(t, :plain_calls) end)
+
+        Nx.multiply(y, y)
+      end).(Nx.tensor(0.2))
+
+      assert Process.get(:plain_calls) == 1
+      Process.put(:return_calls, 0)
+
+      Nx.Defn.jit(fn x ->
+        Nx.Defn.Kernel.recompute_each_use(x, &counted_exp(&1, :return_calls))
+      end).(Nx.tensor(0.2))
+
+      assert Process.get(:return_calls) == 1
+    end
+
+    test "chains retain explicit inputs instead of recursively expanding recipes" do
+      for depth <- [1, 2, 5, 10] do
+        Process.put(:chain_calls, 0)
+
+        fun = fn x ->
+          y =
+            Enum.reduce(1..depth, x, fn _, value ->
+              Nx.Defn.Kernel.recompute_each_use(value, fn t ->
+                unless match?(%Nx.Tensor{data: %Nx.Defn.Expr{}}, t) do
+                  Process.put(:chain_calls, Process.get(:chain_calls, 0) + 1)
+                end
+
+                Nx.sin(t)
+              end)
+            end)
+
+          Nx.add(y, y)
+        end
+
+        actual = Nx.Defn.jit(fun).(Nx.tensor(0.2))
+        expected = Enum.reduce(1..depth, Nx.tensor(0.2), fn _, x -> Nx.sin(x) end)
+        assert_all_close(actual, Nx.add(expected, expected))
+        assert Process.get(:chain_calls) == depth + 1
+      end
+    end
+
+    defn recompute_control(x, predicate) do
+      y = recompute_each_use(x, &Nx.sin/1)
+      z = if predicate, do: y * y, else: y + y
+      z + y
+    end
+
+    test "a recipe shared with a branch retains its inputs until later uses" do
+      x = Nx.tensor(0.2)
+      y = Nx.sin(x)
+      assert_all_close(recompute_control(x, Nx.tensor(1)), Nx.add(Nx.multiply(y, y), y))
+      assert_all_close(recompute_control(x, Nx.tensor(0)), Nx.multiply(y, 3))
+    end
+
+    test "container inputs, vectorization, boolean outputs and gradients" do
+      x = Nx.tensor([0.2, 0.4]) |> Nx.vectorize(:batch)
+      weight = Nx.tensor(0.7)
+      plain = fn {x, weights} -> Nx.sin(Nx.multiply(x, weights.value)) end
+      marked = fn args -> Nx.Defn.Kernel.recompute_each_use(args, plain) end
+
+      assert_all_close(Nx.Defn.jit(marked).({x, %{value: weight}}), plain.({x, %{value: weight}}))
+
+      assert_all_close(
+        grad({x, weight}, fn {v, w} -> Nx.sum(marked.({v, %{value: w}})) end) |> elem(1),
+        grad({x, weight}, fn {v, w} -> Nx.sum(plain.({v, %{value: w}})) end) |> elem(1)
+      )
+
+      assert_equal(
+        Nx.Defn.jit(fn x -> Nx.Defn.Kernel.recompute_each_use(x, &Nx.greater(&1, 0)) end).(x),
+        Nx.greater(x, 0)
+      )
+
+      scalar = fn x -> Nx.sum(Nx.Defn.Kernel.recompute_each_use(x, &Nx.sin(Nx.exp(&1)))) end
+      expected = fn x -> Nx.sin(Nx.exp(x)) end
+
+      assert_all_close(
+        grad(weight, fn x -> grad(x, scalar) end),
+        grad(weight, fn x -> grad(x, expected) end)
+      )
+    end
+
+    test "rejects effects and tuple outputs" do
+      assert_raise ArgumentError, ~r/one tensor output/, fn ->
+        Nx.Defn.jit(fn x -> Nx.Defn.Kernel.recompute_each_use(x, fn y -> {y, y} end) end).(
+          Nx.tensor(1)
+        )
+      end
+
+      assert_raise ArgumentError, ~r/does not support io_call/, fn ->
+        Nx.Defn.jit(fn x ->
+          Nx.Defn.Kernel.recompute_each_use(x, fn y ->
+            Nx.Defn.Kernel.io_call(y, fn _ -> :ok end)
+          end)
+        end).(Nx.tensor(1))
+      end
+    end
+  end
+
   describe "forward pass (outside grad)" do
     defn checkpoint_identity(x) do
       checkpoint(x, fn x -> x end)

@@ -250,6 +250,34 @@ defmodule Nx.Defn.Kernel do
   end
 
   @doc """
+  Rebuilds a tensor for each operand occurrence in the evaluator and EXLA.
+
+  The explicit inputs are evaluated once and retained while the recipe is
+  needed. The result is not cached by its expression ID. Consequently,
+  `y * y` reconstructs a marked `y` twice. A returned result is also a use.
+
+  This experimental policy can trade repeated cheap work for retaining a
+  large result. It does not promise lower peak memory or replace gradient
+  checkpointing. Other compilers may treat the block as an ordinary block.
+
+  The callback must be pure and return one tensor. This prototype rejects
+  nested blocks, control flow, runtime callbacks, and custom gradients in
+  the body. Pass random keys and all tensor dependencies explicitly.
+  """
+  def recompute_each_use(inputs, fun) when is_function(fun) do
+    arguments = List.wrap(inputs)
+    arity = length(arguments)
+
+    unless is_function(fun, arity) do
+      Kernel.raise(ArgumentError, "recompute_each_use expected a callback of arity #{arity}")
+    end
+
+    Nx.block(%Nx.Block.Recompute{}, [List.to_tuple(arguments)], nil, fn _, arguments ->
+      Nx.Defn.Recompute.validate!(apply(fun, Tuple.to_list(arguments)))
+    end)
+  end
+
+  @doc """
   Runs `fun` on `inputs` and asks the gradient to recompute the body
   instead of keeping its intermediate results.
 

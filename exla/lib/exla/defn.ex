@@ -580,6 +580,14 @@ defmodule EXLA.Defn do
     {List.flatten(acc), cache}
   end
 
+  defp recur_operator(
+         %T{data: %Expr{op: :block, args: [%Nx.Block.Recompute{} | _]}} = expr,
+         state,
+         cache
+       ) do
+    cached_recur_operator(:block, Nx.devectorize(expr), state, cache)
+  end
+
   defp recur_operator(%T{data: %Expr{id: id, op: op}} = expr, state, cache) do
     case cache do
       %{^id => res} ->
@@ -780,6 +788,16 @@ defmodule EXLA.Defn do
      ), cache}
   end
 
+  defp cached_recur_operator(
+         :block,
+         %T{data: %Expr{args: [%Nx.Block.Recompute{} | _]}} = expr,
+         state,
+         cache
+       ) do
+    {value, [], cache} = lower_recompute_block(expr, [], state, cache)
+    {value, cache}
+  end
+
   # C-backed custom_call blocks (QR, Eigh, …): `EXLA.CustomCall`; else compile default callback.
   defp cached_recur_operator(
          :block,
@@ -972,9 +990,90 @@ defmodule EXLA.Defn do
   end
 
   defp cached_recur_operator(op, expr, state, cache) do
-    {args, cache} = Tree.apply_args(expr, cache, &recur_operator(&1, state, &2))
+    {args, cache} =
+      Tree.apply_args(expr, cache, fn
+        %T{data: %Expr{op: :block, args: [%Nx.Block.Recompute{} | _]}} = arg, cache ->
+          {arg, cache}
+
+        arg, cache ->
+          recur_operator(arg, state, cache)
+      end)
+
+    {args, cache} = lower_recompute_args(args, state, cache)
     {to_operator(op, args, expr, state), cache}
   end
+
+  defp lower_recompute_block(
+         %T{data: %Expr{id: id, args: [%Nx.Block.Recompute{} = struct, inputs, body, _]}},
+         ties,
+         state,
+         cache
+       ) do
+    key = {:recompute_inputs, id}
+
+    {call_args, cache} =
+      case cache do
+        %{^key => inputs} ->
+          {inputs, cache}
+
+        _ ->
+          {inputs, cache} =
+            Enum.map_reduce(Composite.flatten_list(inputs), cache, &recur_operator(&1, state, &2))
+
+          {inputs, Map.put(cache, key, inputs)}
+      end
+
+    {args, ties} =
+      Value.optimization_barrier(call_args ++ ties) |> Enum.split(length(call_args))
+
+    {value, cache} = default_block_implementation(struct, args, body, state, cache)
+    {value, ties, cache}
+  end
+
+  # Every tied operand must leave through the barrier too. Keeping the
+  # consumer's original operands would let unused barrier outputs disappear.
+  defp lower_recompute_args(args, state, cache) do
+    {_, reversed} = map_recompute_values(args, [], fn value, acc -> {value, [value | acc]} end)
+    values = Enum.reverse(reversed)
+
+    {values, cache} =
+      values
+      |> Enum.with_index()
+      |> Enum.reduce({values, cache}, fn
+        {%T{data: %Expr{op: :block, args: [%Nx.Block.Recompute{} | _]}} = expr, index},
+        {values, cache} ->
+          ties = Enum.filter(values, &match?(%Value{}, &1))
+          {value, tied, cache} = lower_recompute_block(expr, ties, state, cache)
+          replacements = Map.new(Enum.zip(ties, tied))
+          values = Enum.map(values, &Map.get(replacements, &1, &1))
+          {List.replace_at(values, index, value), cache}
+
+        _, acc ->
+          acc
+      end)
+
+    {args, []} = map_recompute_values(args, values, fn _, [value | rest] -> {value, rest} end)
+    {args, cache}
+  end
+
+  defp map_recompute_values(%Value{} = value, acc, fun), do: fun.(value, acc)
+
+  defp map_recompute_values(
+         %T{data: %Expr{op: :block, args: [%Nx.Block.Recompute{} | _]}} = value,
+         acc,
+         fun
+       ),
+       do: fun.(value, acc)
+
+  defp map_recompute_values(values, acc, fun) when is_list(values),
+    do: Enum.map_reduce(values, acc, &map_recompute_values(&1, &2, fun))
+
+  defp map_recompute_values(values, acc, fun) when is_tuple(values) do
+    {values, acc} = map_recompute_values(Tuple.to_list(values), acc, fun)
+    {List.to_tuple(values), acc}
+  end
+
+  defp map_recompute_values(value, acc, _fun), do: {value, acc}
 
   defp cast_custom_call_operands(call_args, :default), do: call_args
 
