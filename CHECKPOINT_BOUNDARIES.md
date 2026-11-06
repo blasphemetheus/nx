@@ -82,7 +82,10 @@ that trace finishes.
 During substitution, the walker can enter nested bodies to reconnect graph
 references, but must preserve each body's parameter ownership and sharing.
 Only expressions in the source scope change to the substitution's target
-context. The nested region keeps its own scope identity.
+context. The target is selected from the replacement inputs. If all replacements
+have no context tag, the rebuilt expressions must also have no context tag;
+falling back to the old checkpoint scope can make nested gradient contributions
+incompatible. The nested region keeps its own scope identity.
 
 Conditional branches can refer to enclosing values, so capture discovery visits
 both traced branches, including the branch not selected at runtime. A capture
@@ -134,13 +137,19 @@ separate trace of the derivative, with symbolic incoming gradients and an
 explicit representation of any additional tensor dependencies. That is a
 larger design than removing the rejection.
 
-## Checks to perform next
+## Boundary checks now covered
 
-Test shared expressions crossing nested regions, sibling regions, conditional
-branches, checkpoints inside loop bodies, mixed explicit/captured tensor
-identities, and recovery after a nested tracing exception. Compare forward
-values and nonlinear first/second derivatives where supported, and inspect
-region inputs where the numeric answer alone cannot show the chosen boundary.
+The tests cover shared precomputed expressions crossing nested regions and
+outer uses, sibling regions with vectorized captures, branch-only captures,
+checkpoints inside loop bodies, mixed explicit/captured tensor identities,
+ordinary block scope restrictions, and recovery after a nested tracing exception.
+They compare forward values and nonlinear first/second derivatives where
+supported, and inspect region inputs where numeric agreement alone cannot
+show the chosen boundary.
+
+The nested shared-capture test exposed a stale-scope bug when substituting
+context-free inputs. It fails on the original implementation and passes after
+using the replacement inputs' context, including its absence.
 
 Compiler integration review and tracing-overhead measurement are separate,
 deferred work. Passing these boundary tests will not establish either of them.

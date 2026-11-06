@@ -147,7 +147,8 @@ defmodule Nx.Defn.CheckpointTrace do
 
   def instantiate(body, ids, values, context) do
     substitutions = Map.new(Enum.zip(ids, values))
-    target_context = Enum.find_value(values, context, & &1.data.context)
+    # Context-free replacements must not leave the rebuilt body in its old scope.
+    target_context = Enum.find_value(values, & &1.data.context)
 
     {result, _} =
       Composite.traverse(
