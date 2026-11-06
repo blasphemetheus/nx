@@ -125,4 +125,32 @@ defmodule EXLA.CustomCallAliasTest do
     assert Nx.all_close(elem(exp, 0), elem(act, 0), atol: 1.0e-4, rtol: 1.0e-4)
     assert Nx.all_close(elem(exp, 1), elem(act, 1), atol: 1.0e-4, rtol: 1.0e-4)
   end
+
+  test "checkpoint policy preserves native forward dispatch and differentiates the default body" do
+    load_plugin!()
+    input = Nx.tensor([[2.0, 0.5], [0.3, 1.5]])
+
+    block = fn x ->
+      Nx.block(%QRAliasBlock{}, [x], nil, fn _, x -> Nx.LinAlg.qr(x) end, checkpoint: true)
+    end
+
+    assert %{mlir_module: mlir} = mlir_via_jit_apply!(block, [input])
+    assert mlir =~ "qr_cpu_custom_call_f32_exla_alias"
+    refute mlir =~ "@qr_cpu_custom_call_f32("
+
+    {actual_q, actual_r} = EXLA.jit_apply(block, [input])
+    {expected_q, expected_r} = EXLA.jit_apply(&Nx.LinAlg.qr/1, [input])
+    assert_all_close(actual_q, expected_q)
+    assert_all_close(actual_r, expected_r)
+
+    loss = fn x, fun ->
+      {q, r} = fun.(x)
+      Nx.add(Nx.sum(Nx.sin(q)), Nx.sum(Nx.cos(r)))
+    end
+
+    assert_all_close(
+      grad(input, &loss.(&1, block)),
+      grad(input, &loss.(&1, fn x -> Nx.LinAlg.qr(x) end))
+    )
+  end
 end

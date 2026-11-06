@@ -1112,6 +1112,9 @@ defmodule EXLA.Defn do
 
       op when is_tuple(op) ->
         Tuple.to_list(op)
+
+      op when is_list(op) ->
+        op
     end
   end
 

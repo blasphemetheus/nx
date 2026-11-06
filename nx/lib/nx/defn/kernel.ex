@@ -253,6 +253,9 @@ defmodule Nx.Defn.Kernel do
   Runs `fun` on `inputs` and asks the gradient to recompute the body
   instead of keeping its intermediate results.
 
+  This builds a block with the `:checkpoint` option of `Nx.block/5`.
+  Use that option directly to checkpoint a block with its own struct identity.
+
   Reverse-mode differentiation keeps the intermediate results of the
   forward pass until the backward pass has used them, so the memory
   `grad` needs grows with the depth of the function. Inside a checkpoint
@@ -306,9 +309,13 @@ defmodule Nx.Defn.Kernel do
     # The arguments travel as one block argument, so fun may take any number
     # of tensors.
     Kernel.if Enum.any?(Nx.Defn.Composite.flatten_list(arguments), &is_struct(&1, Nx.Tensor)) do
-      Nx.block(%Nx.Block.Checkpoint{}, [List.to_tuple(arguments)], nil, fn _struct, arguments ->
-        checkpoint_result(apply(fun, Tuple.to_list(arguments)))
-      end)
+      Nx.block(
+        %Nx.Block.Checkpoint{},
+        [List.to_tuple(arguments)],
+        nil,
+        fn _struct, arguments -> checkpoint_result(apply(fun, Tuple.to_list(arguments))) end,
+        checkpoint: true
+      )
     else
       apply(fun, arguments)
     end

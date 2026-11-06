@@ -934,7 +934,116 @@ defmodule Nx.DefnTest do
 
   describe "block" do
     defmodule VectorizedNonlinear do
-      defstruct []
+      defstruct scale: 1
+    end
+
+    @tag compiler: Evaluator
+    test "checkpoint policy keeps the block identity and recomputes only during grad" do
+      parent = self()
+      input = Nx.tensor([0.2, 0.4])
+
+      body = fn %VectorizedNonlinear{}, x ->
+        x |> Nx.exp() |> Nx.io_call(fn _ -> send(parent, :block_ran) end) |> Nx.sin()
+      end
+
+      for checkpoint <- [false, true] do
+        fun = fn x ->
+          Nx.block(%VectorizedNonlinear{}, [x], nil, body, checkpoint: checkpoint)
+        end
+
+        expr = Nx.Defn.debug_expr(fun).(input)
+        assert inspect(expr) =~ "block %Nx.DefnTest.VectorizedNonlinear{scale: 1}"
+
+        result =
+          Nx.Defn.jit(fn x ->
+            y = fun.(x)
+            Nx.add(y, y)
+          end).(input)
+
+        assert_all_close(result, Nx.multiply(Nx.sin(Nx.exp(input)), 2))
+        assert_received :block_ran
+        refute_received :block_ran
+
+        if checkpoint do
+          {value, gradient} = Nx.Defn.value_and_grad(input, fn x -> Nx.sum(fun.(x)) end)
+          assert_all_close(value, Nx.sum(Nx.sin(Nx.exp(input))))
+          assert_all_close(gradient, Nx.multiply(Nx.cos(Nx.exp(input)), Nx.exp(input)))
+          assert_received :block_ran
+          assert_received :block_ran
+          refute_received :block_ran
+        end
+      end
+    end
+
+    @tag compiler: Evaluator
+    test "checkpoint policy accepts container inputs and mixed vectorized axes" do
+      left = Nx.tensor([[0.2, 0.4], [0.6, 0.8]]) |> Nx.vectorize(:batch)
+      right = Nx.tensor([0.5, 1.5])
+
+      body = fn %{scale: scale}, {left, right} ->
+        value = Nx.sin(Nx.multiply(left, right))
+        {Nx.multiply(value, scale), Nx.greater(left, right)}
+      end
+
+      plain = fn pair -> body.(%VectorizedNonlinear{scale: 2}, pair) end
+
+      checkpointed = fn pair ->
+        Nx.block(%VectorizedNonlinear{scale: 2}, [pair], nil, body, checkpoint: true)
+      end
+
+      {actual, mask} = Nx.Defn.jit(checkpointed).({left, right})
+      {expected, expected_mask} = Nx.Defn.jit(plain).({left, right})
+      assert actual.vectorized_axes == [batch: 2]
+      assert mask.vectorized_axes == [batch: 2]
+      assert_all_close(actual, expected)
+      assert_equal(mask, expected_mask)
+
+      loss = fn pair, fun ->
+        {value, mask} = fun.(pair)
+        Nx.sum(Nx.multiply(value, mask))
+      end
+
+      {actual_left, actual_right} = grad({left, right}, &loss.(&1, checkpointed))
+      {expected_left, expected_right} = grad({left, right}, &loss.(&1, plain))
+      assert_all_close(actual_left, expected_left)
+      assert_all_close(actual_right, expected_right)
+    end
+
+    @tag compiler: Evaluator
+    test "checkpoint policy accumulates duplicated tuple outputs and supports second gradients" do
+      input = Nx.tensor([0.2, 0.4])
+
+      body = fn _, x ->
+        value = Nx.sin(Nx.multiply(x, x))
+        {value, value, Nx.greater(x, 0)}
+      end
+
+      checkpointed = fn x ->
+        {left, right, _unused} =
+          Nx.block(%VectorizedNonlinear{}, [x], nil, body, checkpoint: true)
+
+        Nx.sum(Nx.add(left, Nx.multiply(right, 3)))
+      end
+
+      plain = fn x -> Nx.sum(Nx.multiply(Nx.sin(Nx.multiply(x, x)), 4)) end
+      assert_all_close(grad(input, checkpointed), grad(input, plain))
+
+      assert_all_close(
+        grad(input, fn x -> Nx.sum(grad(x, checkpointed)) end),
+        grad(input, fn x -> Nx.sum(grad(x, plain)) end)
+      )
+    end
+
+    test "checkpoint option validates options before running the body" do
+      body = fn _, _ -> flunk("invalid options must not run the body") end
+
+      assert_raise ArgumentError, ~r/expected :checkpoint to be a boolean/, fn ->
+        Nx.block(%VectorizedNonlinear{}, [Nx.tensor(1)], nil, body, checkpoint: :always)
+      end
+
+      assert_raise ArgumentError, ~r/unknown keys/, fn ->
+        Nx.block(%VectorizedNonlinear{}, [Nx.tensor(1)], nil, body, checkpoints: true)
+      end
     end
 
     test "raises when the body mixes an argument with a tensor from the enclosing scope" do

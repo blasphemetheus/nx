@@ -3,6 +3,36 @@ defmodule EXLA.Defn.CheckpointTest do
 
   import Nx.Defn
 
+  defmodule NonlinearBlock do
+    defstruct []
+  end
+
+  test "checkpoint policy preserves an arbitrary block and its backward recomputation" do
+    input = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+
+    loss = fn x, checkpoint ->
+      y =
+        Nx.block(
+          %NonlinearBlock{},
+          [x],
+          nil,
+          fn _, x ->
+            Nx.sin(Nx.exp(x))
+          end,
+          checkpoint: checkpoint
+        )
+
+      Nx.sum(Nx.multiply(y, y))
+    end
+
+    checkpointed = EXLA.to_executable(fn x -> grad(x, &loss.(&1, true)) end, [input])
+    ordinary = EXLA.to_executable(fn x -> grad(x, &loss.(&1, false)) end, [input])
+
+    assert count(EXLA.Executable.optimized_hlo(checkpointed), "exponential(") == 2
+    assert count(EXLA.Executable.optimized_hlo(ordinary), "exponential(") == 1
+    assert_all_close(grad(input, &loss.(&1, true)), grad(input, &loss.(&1, false)))
+  end
+
   defn body(x), do: x |> Nx.exp() |> Nx.sin()
 
   defn loss_with_checkpoint(x) do

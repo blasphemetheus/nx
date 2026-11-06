@@ -84,9 +84,10 @@ end
 
 defmodule Nx.Block.Checkpoint do
   @moduledoc """
-  Marks a block whose intermediate results are not kept for the backward
-  pass. The gradient recomputes the body from the inputs when it reaches
-  the block. See `Nx.Defn.Kernel.checkpoint/2`.
+  Identifies the block built by `Nx.Defn.Kernel.checkpoint/2`.
+
+  The helper enables the `:checkpoint` option of `Nx.block/5`.
+  The struct alone does not change differentiation.
   """
   defstruct []
 end
