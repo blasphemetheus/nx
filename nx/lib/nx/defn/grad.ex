@@ -217,8 +217,10 @@ defmodule Nx.Defn.Grad do
   # A checkpoint is differentiated once its incoming gradient is known, so
   # only its inputs are registered here. The body is traversed at that point.
   defp parents_args(
-         :block,
-         %{data: %{args: [%Nx.Block.Checkpoint{}, in_args, _expr, _callback]}},
+         :metadata,
+         %{
+           data: %{args: [%{data: %{op: :block, args: [_, in_args, _, _]}}, %{checkpoint: true}]}
+         },
          id,
          acc
        ) do
@@ -427,8 +429,8 @@ defmodule Nx.Defn.Grad do
   end
 
   defp update_grads(
-         :block,
-         [%Nx.Block.Checkpoint{} = struct, in_args, _expr, callback],
+         :metadata,
+         [%{data: %{op: :block, args: [struct, in_args, _expr, callback]}}, %{checkpoint: true}],
          _ans,
          gs,
          to_grad_ids,
@@ -729,6 +731,12 @@ defmodule Nx.Defn.Grad do
   end
 
   defp tuple_primal(:block, [_, _, expr | _]), do: expr
+
+  defp tuple_primal(:metadata, [block, %{checkpoint: true}]) do
+    %{data: %{op: :block, args: [_, _, expr, _]}} = block
+    expr
+  end
+
   defp tuple_primal(:metadata, [expr | _]), do: expr
   defp tuple_primal(:cond, [_, last]), do: last
   defp tuple_primal(:io_call, [tensor_expr | _]), do: tensor_expr

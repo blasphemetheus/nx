@@ -7411,6 +7411,8 @@ defmodule Nx do
   should either run a native implementation or invoke the default as
   `apply(fun, [struct | args])`.
 
+  See `block/5` to checkpoint the block during reverse-mode differentiation.
+
   ## Examples
 
       iex> defmodule ScaleShift do
@@ -7439,6 +7441,51 @@ defmodule Nx do
     {tensor_args, _opts} = Enum.split_while(args, &(not is_list(&1)))
     backend = tensor_args |> Nx.Defn.Composite.flatten_list() |> Nx.Shared.list_impl!()
     backend.block(struct, output, args, fun)
+  end
+
+  @doc """
+  Executes a block with a differentiation policy.
+
+  Accepts the same arguments as `block/4`, followed by options:
+
+    * `:checkpoint` - when `true`, the backward pass reconstructs the
+      default implementation's intermediate results from the block inputs.
+      Defaults to `false`.
+
+  The block keeps its struct identity, so backends can still select a native
+  forward implementation. As with `block/4`, differentiation uses the default
+  implementation. It must compute the same function as the native implementation.
+
+  Checkpointing preserves the block's value and gradient. It asks the compiler
+  to trade recomputation for memory; the saving depends on the compiler and the
+  chosen inputs. Outside differentiation it behaves like `block/4`.
+  See `Nx.Defn.Kernel.checkpoint/2` for input lifetimes and reproducible randomness.
+
+  ## Examples
+
+      iex> defmodule SineSquare do
+      ...>   defstruct []
+      ...> end
+      iex> Nx.block(struct(SineSquare), [Nx.tensor(0.0)], nil, fn _, x ->
+      ...>   Nx.multiply(Nx.sin(x), Nx.sin(x))
+      ...> end, checkpoint: true)
+      #Nx.Tensor<
+        f32
+        0.0
+      >
+  """
+  @doc type: :element
+  def block(struct, args, output, fun, opts) when is_list(args) and is_list(opts) do
+    opts = Keyword.validate!(opts, checkpoint: false)
+    checkpoint = Keyword.fetch!(opts, :checkpoint)
+
+    unless is_boolean(checkpoint) do
+      raise ArgumentError, "expected :checkpoint to be a boolean, got: #{inspect(checkpoint)}"
+    end
+
+    result = block(struct, args, output, fun)
+
+    if checkpoint, do: Nx.Defn.Expr.checkpoint(result), else: result
   end
 
   @doc """

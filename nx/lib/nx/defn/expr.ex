@@ -954,6 +954,23 @@ defmodule Nx.Defn.Expr do
     result
   end
 
+  @doc false
+  def checkpoint(%T{data: %Expr{op: :block}} = block) do
+    metadata(block, %{checkpoint: true, inspect: :checkpoint})
+  end
+
+  def checkpoint(outputs) when is_tuple(outputs) do
+    case Tuple.to_list(outputs) do
+      [%T{data: %Expr{op: :elem, args: [block, 0]}} | _] ->
+        tuple(checkpoint(block), Tuple.to_list(outputs))
+
+      _ ->
+        outputs
+    end
+  end
+
+  def checkpoint(result), do: result
+
   # A barrier is a metadata node with the `barrier: true` key, see
   # `metadata/2`. The container is flattened so nested tuples go through one
   # node and is rebuilt on the way out.
