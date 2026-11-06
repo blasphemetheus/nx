@@ -5,6 +5,123 @@ defmodule Nx.Defn.CheckpointTest do
   import Nx.Defn.Kernel, only: [checkpoint: 2]
   import Nx.Testing, only: [assert_equal: 2, assert_all_close: 2]
 
+  describe "inline callback macro" do
+    defnp captured_layer(params, x), do: Nx.sin(x * params.weight + params.bias)
+
+    defn inline_pipeline(params, x) do
+      x
+      |> checkpoint_inline(&captured_layer(params.first, &1))
+      |> checkpoint_inline(&captured_layer(params.second, &1))
+      |> Nx.sum()
+    end
+
+    defn plain_pipeline(params, x) do
+      x
+      |> then(&captured_layer(params.first, &1))
+      |> then(&captured_layer(params.second, &1))
+      |> Nx.sum()
+    end
+
+    test "pipes through captured parameter maps and differentiates both inputs and parameters" do
+      params = %{
+        first: %{weight: Nx.tensor(0.4), bias: Nx.tensor(0.2)},
+        second: %{weight: Nx.tensor(0.8), bias: Nx.tensor(0.1)}
+      }
+
+      x = Nx.tensor([0.3, 0.7])
+      assert_all_close(inline_pipeline(params, x), plain_pipeline(params, x))
+      actual = grad(params, &inline_pipeline(&1, x))
+      expected = grad(params, &plain_pipeline(&1, x))
+
+      for layer <- [:first, :second], key <- [:weight, :bias] do
+        assert_all_close(actual[layer][key], expected[layer][key])
+      end
+
+      assert_all_close(
+        grad(x, &inline_pipeline(params, &1)),
+        grad(x, &plain_pipeline(params, &1))
+      )
+    end
+
+    defn inline_nested(x, weight) do
+      checkpoint_inline(x, fn value ->
+        inner = checkpoint_inline(value, &Nx.sin(&1 * weight))
+        Nx.sum(inner * inner)
+      end)
+    end
+
+    test "nested inline functions preserve gradients of captured vectorized tensors" do
+      x = Nx.tensor([0.2, 0.4])
+      weight = Nx.tensor([[0.3, 0.5], [0.7, 0.9]]) |> Nx.vectorize(:batch)
+
+      plain = fn weight ->
+        value = Nx.sin(Nx.multiply(x, weight))
+        Nx.sum(Nx.multiply(value, value))
+      end
+
+      assert_all_close(grad(weight, &inline_nested(x, &1)), grad(weight, plain))
+    end
+
+    test "nested inline functions preserve nonlinear second derivatives" do
+      x = Nx.tensor(0.2)
+      weight = Nx.tensor(0.7)
+
+      plain = fn weight ->
+        value = Nx.sin(Nx.multiply(x, weight))
+        Nx.multiply(value, value)
+      end
+
+      assert_all_close(
+        grad(weight, fn w -> Nx.sum(grad(w, &inline_nested(x, &1))) end),
+        grad(weight, fn w -> Nx.sum(grad(w, plain)) end)
+      )
+    end
+
+    defn inline_shadow(x, weight) do
+      checkpoint_inline(x, fn weight -> Nx.sin(weight) end)
+    end
+
+    test "a callback argument shadows an outer variable without changing the result" do
+      x = Nx.tensor(0.2)
+      weight = Nx.tensor(5.0)
+      assert_all_close(inline_shadow(x, weight), Nx.sin(x))
+      assert_equal(grad(weight, &inline_shadow(x, &1)), Nx.tensor(0.0))
+    end
+
+    deftransform inline_static(x, opts) do
+      Nx.Defn.Kernel.checkpoint_inline(x, fn x -> Nx.sum(x, opts) end)
+    end
+
+    test "static keyword options remain Elixir data" do
+      x = Nx.tensor([[1.0, 2.0], [3.0, 4.0]])
+      assert_equal(inline_static(x, axes: [1]), Nx.tensor([3.0, 7.0]))
+    end
+
+    test "rejects a callback variable at expansion time" do
+      assert_raise ArgumentError, ~r/expects an inline fn or & callback/, fn ->
+        Code.eval_quoted(
+          quote do
+            require Nx.Defn.Kernel
+            callback = fn x -> x end
+            Nx.Defn.Kernel.checkpoint_inline(Nx.tensor(1.0), callback)
+          end
+        )
+      end
+    end
+
+    test "rejects a function hidden in an otherwise inline callback" do
+      assert_raise ArgumentError, ~r/inside a captured function/, fn ->
+        Code.eval_quoted(
+          quote do
+            require Nx.Defn.Kernel
+            callback = fn x -> x end
+            Nx.Defn.Kernel.checkpoint_inline(Nx.tensor(1.0), fn x -> callback.(x) end)
+          end
+        )
+      end
+    end
+  end
+
   # --- Forward pass: checkpoint is a no-op ---
 
   describe "forward pass (outside grad)" do

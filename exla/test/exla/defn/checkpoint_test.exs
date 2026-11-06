@@ -3,6 +3,36 @@ defmodule EXLA.Defn.CheckpointTest do
 
   import Nx.Defn
 
+  defn inline_capture_loss(x, weight) do
+    y = x |> checkpoint_inline(&Nx.sin(Nx.exp(&1 * weight)))
+    Nx.sum(y * y)
+  end
+
+  test "inline capture macro preserves captured gradients and compiled recomputation" do
+    x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+    weight = Nx.tensor(0.5)
+
+    plain = fn {x, weight} ->
+      y = Nx.sin(Nx.exp(Nx.multiply(x, weight)))
+      Nx.sum(Nx.multiply(y, y))
+    end
+
+    {actual_x, actual_weight} =
+      grad({x, weight}, fn {x, weight} -> inline_capture_loss(x, weight) end)
+
+    {expected_x, expected_weight} = grad({x, weight}, plain)
+    assert_all_close(actual_x, expected_x)
+    assert_all_close(actual_weight, expected_weight)
+
+    executable =
+      EXLA.to_executable(fn x, weight -> grad(x, &inline_capture_loss(&1, weight)) end, [
+        x,
+        weight
+      ])
+
+    assert count(EXLA.Executable.optimized_hlo(executable), "exponential(") == 2
+  end
+
   defn body(x), do: x |> Nx.exp() |> Nx.sin()
 
   defn loss_with_checkpoint(x) do
