@@ -2,8 +2,178 @@ defmodule Nx.Defn.CheckpointTest do
   use ExUnit.Case, async: true
 
   import Nx.Defn
-  import Nx.Defn.Kernel, only: [checkpoint: 2]
+  import Nx.Defn.Kernel, only: [checkpoint: 2, checkpoint_capture: 2]
   import Nx.Testing, only: [assert_equal: 2, assert_all_close: 2]
+
+  describe "traced callback captures" do
+    defn captured_pipeline(params, x) do
+      x
+      |> checkpoint_capture(&Nx.sin(&1 * params.first))
+      |> checkpoint_capture(&Nx.sin(&1 * params.second))
+      |> Nx.sum()
+    end
+
+    defn stored_callback(x, weight) do
+      inner = fn value -> Nx.sin(value * weight) end
+      callback = fn value -> inner.(value) end
+      x |> checkpoint_capture(callback) |> Nx.sum()
+    end
+
+    test "pipes through parameter maps and accumulates captured parameter gradients" do
+      params = %{first: Nx.tensor(0.3), second: Nx.tensor(0.7)}
+      x = Nx.tensor([0.2, 0.4])
+
+      plain = fn params ->
+        Nx.sum(Nx.sin(Nx.multiply(Nx.sin(Nx.multiply(x, params.first)), params.second)))
+      end
+
+      assert_all_close(captured_pipeline(params, x), plain.(params))
+      actual = grad(params, &captured_pipeline(&1, x))
+      expected = grad(params, plain)
+      assert_all_close(actual.first, expected.first)
+      assert_all_close(actual.second, expected.second)
+    end
+
+    test "stored and transitively captured callbacks behave like inline callbacks" do
+      x = Nx.tensor([0.2, 0.4])
+      weight = Nx.tensor(0.7)
+      plain = fn weight -> Nx.sum(Nx.sin(Nx.multiply(x, weight))) end
+      assert_all_close(stored_callback(x, weight), plain.(weight))
+      assert_all_close(grad(weight, &stored_callback(x, &1)), grad(weight, plain))
+
+      assert_all_close(
+        grad(weight, fn w -> grad(w, &stored_callback(x, &1)) end),
+        grad(weight, fn w -> grad(w, plain) end)
+      )
+    end
+
+    defn captured_tuple(x, weight) do
+      checkpoint_capture(x, fn x ->
+        value = Nx.sin(x * weight)
+        {value, value, value > 0}
+      end)
+    end
+
+    test "mixed vectorized captures and duplicated tuple outputs retain their gradients" do
+      x = Nx.tensor([0.2, 0.4])
+      weight = Nx.tensor([[0.3, 0.5], [0.7, 0.9]]) |> Nx.vectorize(:batch)
+
+      actual =
+        grad(weight, fn w ->
+          {a, b, mask} = captured_tuple(x, w)
+          Nx.sum(Nx.add(a, Nx.multiply(b, mask)))
+        end)
+
+      expected =
+        grad(weight, fn w ->
+          value = Nx.sin(Nx.multiply(x, w))
+          Nx.sum(Nx.add(value, Nx.multiply(value, Nx.greater(value, 0))))
+        end)
+
+      assert_all_close(actual, expected)
+      {a, b, mask} = captured_tuple(x, weight)
+      assert a.vectorized_axes == [batch: 2]
+      assert_all_close(a, b)
+      assert_equal(mask, Nx.greater(a, 0))
+    end
+
+    defn captured_control(x, weight) do
+      checkpoint_capture(x, fn x ->
+        value = checkpoint_capture(x, &Nx.sin(&1 * weight))
+
+        if Nx.sum(value) > 0 do
+          {_, value} =
+            while {i = 0, value}, i < 2 do
+              {i + 1, Nx.sin(value)}
+            end
+
+          Nx.sum(value)
+        else
+          Nx.sum(value * value)
+        end
+      end)
+    end
+
+    defn plain_control(x, weight) do
+      value = Nx.sin(x * weight)
+
+      if Nx.sum(value) > 0 do
+        {_, value} =
+          while {i = 0, value}, i < 2 do
+            {i + 1, Nx.sin(value)}
+          end
+
+        Nx.sum(value)
+      else
+        Nx.sum(value * value)
+      end
+    end
+
+    test "nested captures compose with conditional branches and while" do
+      x = Nx.tensor([0.2, 0.4])
+
+      for weight <- [Nx.tensor(0.7), Nx.tensor(-0.7)] do
+        assert_all_close(captured_control(x, weight), plain_control(x, weight))
+
+        assert_all_close(
+          grad(weight, &captured_control(x, &1)),
+          grad(weight, &plain_control(x, &1))
+        )
+      end
+    end
+
+    test "operations on captures stay inside the body but precomputed tensors are inputs" do
+      fun = fn x, weight -> checkpoint_capture(x, fn x -> Nx.multiply(x, Nx.sin(weight)) end) end
+      expr = Nx.Defn.debug_expr(fun).(Nx.tensor(0.2), Nx.tensor(0.7))
+      %{data: %{op: :block, args: [_, [arguments], _, _]}} = expr
+      {{_explicit, {captured}}} = arguments
+      assert captured.data.op == :parameter
+
+      fun = fn x, weight ->
+        prepared = Nx.sin(weight)
+        checkpoint_capture(x, &Nx.multiply(&1, prepared))
+      end
+
+      expr = Nx.Defn.debug_expr(fun).(Nx.tensor(0.2), Nx.tensor(0.7))
+      %{data: %{args: [_, [arguments], _, _]}} = expr
+      {{_explicit, {captured}}} = arguments
+      assert captured.data.op == :sin
+    end
+
+    test "a returned capture receives its gradient and an unused input receives zero" do
+      x = Nx.tensor(0.2)
+      weight = Nx.tensor(0.7)
+
+      {dx, dw} =
+        grad({x, weight}, fn {x, weight} ->
+          checkpoint_capture(x, fn _ -> Nx.multiply(weight, weight) end)
+        end)
+
+      assert_equal(dx, Nx.tensor(0.0))
+      assert_all_close(dw, Nx.multiply(weight, 2))
+    end
+
+    test "rejects opaque custom gradients and unsupported output containers" do
+      assert_raise ArgumentError, ~r/cannot convert custom_grad/, fn ->
+        Nx.Defn.jit(fn x -> checkpoint_capture(x, &my_relu/1) end).(Nx.tensor(0.5))
+      end
+
+      assert_raise ArgumentError, ~r/tensor or flat tuple/, fn ->
+        Nx.Defn.jit(fn x -> checkpoint_capture(x, fn y -> %{value: y} end) end).(Nx.tensor(0.5))
+      end
+    end
+
+    test "restores trace bookkeeping after an exception" do
+      assert_raise RuntimeError, "trace failed", fn ->
+        Nx.Defn.debug_expr(fn x -> checkpoint_capture(x, fn _ -> raise "trace failed" end) end).(
+          Nx.tensor(0.2)
+        )
+      end
+
+      refute Process.get({Nx.Defn.CheckpointTrace, :created})
+      assert_all_close(stored_callback(Nx.tensor(0.2), Nx.tensor(0.7)), Nx.sin(Nx.tensor(0.14)))
+    end
+  end
 
   # --- Forward pass: checkpoint is a no-op ---
 

@@ -435,7 +435,7 @@ defmodule Nx.Defn.Expr do
   ## Nx.Defn AST callbacks
 
   @doc false
-  def id(), do: make_ref()
+  def id(), do: Nx.Defn.CheckpointTrace.record(make_ref())
 
   @doc false
   def io_call(tensor_or_container, callback_spec) do
