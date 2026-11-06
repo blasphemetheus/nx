@@ -321,6 +321,16 @@ defmodule Nx.Defn.Kernel do
   computed before the region are saved inputs. The body is stored as a graph
   with explicit parameters rather than an `Nx.block` default callback.
   Ordinary block and while scope rules remain unchanged.
+
+  A custom-gradient value computed before the callback can be a saved input;
+  its derivative is handled by the enclosing computation. Custom gradients
+  created inside the callback are currently unsupported. Their derivative
+  callbacks may use tensors absent from the forward computation. Use
+  `checkpoint/2` with explicit inputs for such a body.
+
+  The body must be pure tensor computation. IO and runtime callbacks inside
+  the region are unsupported; compute their results before the region if
+  needed. Arbitrary Elixir side effects during tracing cannot be detected.
   """
   def checkpoint_capture(inputs, fun) when is_function(fun) do
     Nx.Defn.CheckpointTrace.run(inputs, fun)

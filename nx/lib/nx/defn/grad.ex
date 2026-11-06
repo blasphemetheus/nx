@@ -214,9 +214,8 @@ defmodule Nx.Defn.Grad do
     end)
   end
 
-  defp parents_args(:checkpoint, %{data: %{args: [inputs, body, _, _]}} = tensor, id, acc) do
-    tensor = put_in(tensor.data.args, [%Nx.Block.Checkpoint{}, [inputs], body, nil])
-    parents_args(:block, tensor, id, acc)
+  defp parents_args(:checkpoint, %{data: %{args: [inputs, _, _, _]}}, id, acc) do
+    checkpoint_parents(Tuple.to_list(inputs), id, acc)
   end
 
   # A checkpoint is differentiated once its incoming gradient is known, so
@@ -229,16 +228,7 @@ defmodule Nx.Defn.Grad do
        ) do
     {inputs, _opts} = Enum.split_while(in_args, &(not is_list(&1)))
 
-    inputs
-    |> Composite.flatten_list()
-    |> Enum.reduce(acc, fn arg, {parents, nodes} ->
-      if arg.data.op in @constants do
-        {parents, nodes}
-      else
-        parents = Map.update(parents, arg.data.id, [id], &[id | &1])
-        recur_parents_tree(arg, {parents, nodes})
-      end
-    end)
+    checkpoint_parents(Composite.flatten_list(inputs), id, acc)
   end
 
   defp parents_args(:block, %{data: %{args: [struct, in_args, _expr, callback]}} = t, id, acc) do
@@ -273,9 +263,19 @@ defmodule Nx.Defn.Grad do
     end)
   end
 
+  defp checkpoint_parents(inputs, id, acc) do
+    Enum.reduce(inputs, acc, fn arg, {parents, nodes} ->
+      if arg.data.op in @constants do
+        {parents, nodes}
+      else
+        parents = Map.update(parents, arg.data.id, [id], &[id | &1])
+        recur_parents_tree(arg, {parents, nodes})
+      end
+    end)
+  end
+
   # For some functions, only a subset of the args participate in the grad,
   # so we handle them accordingly here.
-
   defp reduce_args(:select, %{data: %{args: [_, on_true, on_false | _]}}, acc, fun),
     do: fun.(on_true, fun.(on_false, acc))
 
@@ -457,51 +457,28 @@ defmodule Nx.Defn.Grad do
     input_tensors = Composite.flatten_list(inputs)
     tied_tensors = Composite.flatten_list(tied_inputs)
 
-    # Differentiate the recomputed body on its own. The tied inputs are marked
-    # visited so the walk stays inside the body.
-    stops = Map.new(tied_tensors, &{&1.data.id, :stop})
-    {parents, nodes} = parents_tree(recomputed, stops)
-    {_to_grad, _ids, batch_count} = to_grad_ids
-    body_to_grad_ids = {List.to_tuple(tied_tensors), stops, batch_count}
-
-    {seeded, []} =
-      Composite.reduce(recomputed, {%{}, tied_gs}, fn out, {acc, [g | rest]} ->
-        {Map.update(acc, out.data.id, [g], &[g | &1]), rest}
-      end)
-
-    # Conds are registered under the module name by parents_args(:cond).
-    # Differentiate their branches with respect to the checkpoint inputs.
-    acc = traverse_parents(__MODULE__, body_to_grad_ids, parents, {nodes, seeded})
-
-    {_nodes, body_grads} =
-      Enum.reduce(tied_tensors, acc, &traverse_parents(&1.data.id, body_to_grad_ids, parents, &2))
-
-    # Hand each input's gradient back to the enclosing traversal under the
-    # original input's id.
-    Enum.zip_reduce(input_tensors, tied_tensors, grads, fn input, tied_input, grads ->
-      case Map.fetch(body_grads, tied_input.data.id) do
-        {:ok, pieces} ->
-          input_grad = sum_grad(pieces)
-          Map.update(grads, input.data.id, [input_grad], &[input_grad | &1])
-
-        :error ->
-          grads
-      end
-    end)
+    differentiate_checkpoint_body(
+      recomputed,
+      input_tensors,
+      tied_tensors,
+      tied_gs,
+      to_grad_ids,
+      grads
+    )
   end
 
-  defp update_grads(:checkpoint, [inputs, body, parameters, scope], ans, gs, to_grad_ids, grads) do
-    ids = parameters |> Tuple.to_list() |> Enum.map(& &1.data.id)
+  defp update_grads(:checkpoint, [inputs, body, parameters, scope], _ans, gs, to_grad_ids, grads) do
+    # Reconstruct the stored region using inputs tied to its incoming gradients.
+    {tied_inputs, tied_gs} = Expr.barrier({inputs, List.to_tuple(List.wrap(gs))})
+    tied_tensors = Tuple.to_list(tied_inputs)
+    parameter_ids = parameters |> Tuple.to_list() |> Enum.map(& &1.data.id)
+    recomputed = Nx.Defn.CheckpointTrace.instantiate(body, parameter_ids, tied_tensors, scope)
 
-    callback = fn _, inputs ->
-      Nx.Defn.CheckpointTrace.instantiate(body, ids, Tuple.to_list(inputs), scope)
-    end
-
-    update_grads(
-      :block,
-      [%Nx.Block.Checkpoint{}, [inputs], body, callback],
-      ans,
-      gs,
+    differentiate_checkpoint_body(
+      recomputed,
+      Tuple.to_list(inputs),
+      tied_tensors,
+      Tuple.to_list(tied_gs),
       to_grad_ids,
       grads
     )
@@ -733,6 +710,49 @@ defmodule Nx.Defn.Grad do
     Enum.reduce(pairs, grads, fn {child, g}, grads ->
       g = clear_axis_names(g)
       Map.update(grads, child.data.id, [g], &[g | &1])
+    end)
+  end
+
+  # Both checkpoint representations use the same local derivative traversal.
+  # Each caller supplies a reconstructed body and its original and tied inputs.
+  defp differentiate_checkpoint_body(
+         recomputed,
+         input_tensors,
+         tied_tensors,
+         tied_gs,
+         to_grad_ids,
+         grads
+       ) do
+    # Differentiate the recomputed body on its own. The tied inputs are marked
+    # visited so the walk stays inside the body.
+    stops = Map.new(tied_tensors, &{&1.data.id, :stop})
+    {parents, nodes} = parents_tree(recomputed, stops)
+    {_to_grad, _ids, batch_count} = to_grad_ids
+    body_to_grad_ids = {List.to_tuple(tied_tensors), stops, batch_count}
+
+    {seeded, []} =
+      Composite.reduce(recomputed, {%{}, tied_gs}, fn out, {acc, [g | rest]} ->
+        {Map.update(acc, out.data.id, [g], &[g | &1]), rest}
+      end)
+
+    # Conds are registered under the module name by parents_args(:cond).
+    # Differentiate their branches with respect to the checkpoint inputs.
+    acc = traverse_parents(__MODULE__, body_to_grad_ids, parents, {nodes, seeded})
+
+    {_nodes, body_grads} =
+      Enum.reduce(tied_tensors, acc, &traverse_parents(&1.data.id, body_to_grad_ids, parents, &2))
+
+    # Hand each input's gradient back to the enclosing traversal under the
+    # original input's id.
+    Enum.zip_reduce(input_tensors, tied_tensors, grads, fn input, tied_input, grads ->
+      case Map.fetch(body_grads, tied_input.data.id) do
+        {:ok, pieces} ->
+          input_grad = sum_grad(pieces)
+          Map.update(grads, input.data.id, [input_grad], &[input_grad | &1])
+
+        :error ->
+          grads
+      end
     end)
   end
 

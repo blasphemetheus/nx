@@ -6,6 +6,344 @@ defmodule Nx.Defn.CheckpointTest do
   import Nx.Testing, only: [assert_equal: 2, assert_all_close: 2]
 
   describe "traced callback captures" do
+    test "effects and opaque runtime callbacks cannot be reconstructed inside a region" do
+      for operation <- [
+            fn value -> Nx.Defn.Kernel.io_call(value, fn _ -> :ok end) end,
+            fn value -> Nx.runtime_call(value, value, fn input, _opts -> input end) end
+          ] do
+        assert_raise ArgumentError, ~r/requires a pure tensor body/, fn ->
+          Nx.Defn.jit(fn x -> checkpoint_capture(x, operation) end).(Nx.tensor(0.2))
+        end
+      end
+    end
+
+    test "a callback result computed before the region remains a saved input" do
+      parent = self()
+
+      fun = fn x ->
+        prepared = Nx.Defn.Kernel.io_call(x, fn _ -> send(parent, :prepared) end)
+        checkpoint_capture(x, fn value -> Nx.add(value, prepared) end)
+      end
+
+      assert_all_close(Nx.Defn.jit(fun).(Nx.tensor(0.2)), Nx.tensor(0.4))
+      assert_received :prepared
+      refute_received :prepared
+    end
+
+    defn boundary_custom_rule(value) do
+      custom_grad(value * value, [value], fn incoming -> [incoming * 3 * value] end)
+    end
+
+    defn saved_custom_capture(x, weight) do
+      prepared = boundary_custom_rule(weight)
+      checkpoint_capture(x, fn value -> value * prepared end)
+    end
+
+    defn explicit_custom_input(x, weight) do
+      prepared = boundary_custom_rule(weight)
+      checkpoint_capture([x, prepared], fn value, prepared -> value * prepared end)
+    end
+
+    defn saved_constant_custom_capture(x, weight) do
+      prepared = custom_grad(Nx.tensor(2.0), [weight], fn incoming -> [incoming * 3 * weight] end)
+      checkpoint_capture(x, fn value -> value * prepared end)
+    end
+
+    test "a saved constant forward value can still have a custom derivative" do
+      x = Nx.tensor(0.2)
+      weight = Nx.tensor(0.7)
+      marked = fn weight -> saved_constant_custom_capture(x, weight) end
+      assert_all_close(marked.(weight), Nx.multiply(x, 2))
+      assert_all_close(grad(weight, marked), Nx.multiply(Nx.multiply(x, weight), 3))
+      assert_all_close(grad(weight, fn w -> grad(w, marked) end), Nx.multiply(x, 3))
+    end
+
+    defn wrapped_custom_region(x) do
+      output = checkpoint_capture(x, &Nx.sin/1)
+      custom_grad(output, [x], fn incoming -> [incoming * 7 * x] end)
+    end
+
+    test "a custom-gradient value computed outside is a saved capture with its own derivative" do
+      x = Nx.tensor(0.2)
+      weight = Nx.tensor(0.7)
+      marked = fn weight -> saved_custom_capture(x, weight) end
+      explicit = fn weight -> explicit_custom_input(x, weight) end
+      assert_all_close(marked.(weight), explicit.(weight))
+      assert_all_close(grad(weight, marked), Nx.multiply(Nx.multiply(x, weight), 3))
+      assert_all_close(grad(weight, marked), grad(weight, explicit))
+      assert_all_close(grad(weight, fn w -> grad(w, marked) end), Nx.multiply(x, 3))
+
+      expression = Nx.Defn.debug_expr(&saved_custom_capture/2).(x, weight)
+      %{data: %{args: [{_, captured}, body, _, _]}} = expression
+      assert match?(%{data: %{op: :metadata, args: [_, %{custom_grad: _}]}}, captured)
+      assert body.data.op == :multiply
+    end
+
+    test "a custom gradient outside the checkpoint controls its derivative" do
+      value = Nx.tensor(0.7)
+      assert_all_close(grad(value, &wrapped_custom_region/1), Nx.multiply(value, 7))
+
+      assert_all_close(
+        grad(value, fn value -> grad(value, &wrapped_custom_region/1) end),
+        Nx.tensor(7.0)
+      )
+    end
+
+    defn derivative_only_capture(x, weight) do
+      checkpoint_capture(x, fn value ->
+        custom_grad(Nx.sin(value), [value], fn incoming -> [incoming * weight] end)
+      end)
+    end
+
+    defn explicit_derivative_only_dependency(x, weight) do
+      checkpoint([x, weight], fn value, weight ->
+        custom_grad(Nx.sin(value), [value], fn incoming -> [incoming * weight] end)
+      end)
+    end
+
+    test "explicit checkpoint inputs preserve a dependency used only by a custom derivative" do
+      value = Nx.tensor(0.7)
+      weight = Nx.tensor(0.2)
+
+      derivative = fn value, weight ->
+        grad(value, &explicit_derivative_only_dependency(&1, weight))
+      end
+
+      assert_all_close(Nx.Defn.jit(derivative).(value, weight), weight)
+
+      mixed_derivative =
+        Nx.Defn.jit(fn value, weight ->
+          grad(weight, fn weight -> derivative.(value, weight) end)
+        end)
+
+      assert_all_close(mixed_derivative.(value, weight), Nx.tensor(1.0))
+    end
+
+    defn custom_rule_in_branch(x) do
+      checkpoint_capture(x, fn value ->
+        if value > 0, do: boundary_custom_rule(value), else: Nx.sin(value)
+      end)
+    end
+
+    defn custom_rule_in_loop(x) do
+      checkpoint_capture(x, fn value ->
+        {_, result} =
+          while {i = 0, value}, i < 2 do
+            {i + 1, boundary_custom_rule(value)}
+          end
+
+        result
+      end)
+    end
+
+    test "internal custom rules are rejected even in nested scopes or derivative-only captures" do
+      value = Nx.tensor(0.7)
+
+      assert_raise ArgumentError, ~r/cannot convert custom_grad/, fn ->
+        derivative_only_capture(value, Nx.tensor(0.2))
+      end
+
+      assert_raise ArgumentError, ~r/cannot convert custom_grad/, fn ->
+        custom_rule_in_branch(value)
+      end
+
+      assert_raise ArgumentError, ~r/cannot convert custom_grad/, fn ->
+        custom_rule_in_loop(value)
+      end
+    end
+
+    defn nested_shared_boundary(x, weight) do
+      prepared = Nx.sin(weight)
+
+      result =
+        checkpoint_capture(x, fn value ->
+          inner = checkpoint_capture(value, fn value -> Nx.sin(value * prepared) end)
+          inner * prepared
+        end)
+
+      Nx.sum(result + prepared)
+    end
+
+    defn plain_nested_shared_boundary(x, weight) do
+      prepared = Nx.sin(weight)
+      Nx.sum(Nx.sin(x * prepared) * prepared + prepared)
+    end
+
+    test "precomputed captures shared across nested and outer uses retain their boundary" do
+      x = Nx.tensor([0.2, 0.4])
+      weight = Nx.tensor(0.7)
+      marked = fn w -> nested_shared_boundary(x, w) end
+      plain = fn w -> plain_nested_shared_boundary(x, w) end
+      assert_all_close(marked.(weight), plain.(weight))
+      assert_all_close(grad(weight, marked), grad(weight, plain))
+
+      assert_all_close(
+        grad(weight, fn w -> grad(w, marked) end),
+        grad(weight, fn w -> grad(w, plain) end)
+      )
+
+      expression =
+        Nx.Defn.debug_expr(fn x, weight ->
+          prepared = Nx.sin(weight)
+
+          checkpoint_capture(x, fn value ->
+            checkpoint_capture(value, fn inner -> Nx.multiply(inner, prepared) end)
+          end)
+        end).(x, weight)
+
+      %{data: %{args: [{_, captured}, inner, _, _]}} = expression
+      assert captured.data.op == :sin
+      %{data: %{op: :checkpoint, args: [{_, nested_capture}, _, _, _]}} = inner
+      assert nested_capture.data.op == :parameter
+      refute nested_capture.data.id == captured.data.id
+    end
+
+    test "sibling regions deduplicate shared captures and accumulate their contributions" do
+      marked = fn {x, weight} ->
+        prepared = Nx.sin(weight)
+
+        first =
+          checkpoint_capture(x, fn value ->
+            Nx.add(Nx.multiply(value, prepared), prepared)
+          end)
+
+        second = checkpoint_capture(x, fn value -> Nx.cos(Nx.multiply(value, prepared)) end)
+        Nx.sum(Nx.add(first, second))
+      end
+
+      plain = fn {x, weight} ->
+        prepared = Nx.sin(weight)
+
+        Nx.sum(
+          Nx.add(Nx.add(Nx.multiply(x, prepared), prepared), Nx.cos(Nx.multiply(x, prepared)))
+        )
+      end
+
+      x = Nx.tensor([0.2, 0.4])
+      weight = Nx.tensor([[0.3, 0.5], [0.7, 0.9]]) |> Nx.vectorize(:batch)
+      {actual_x, actual_weight} = grad({x, weight}, marked)
+      {expected_x, expected_weight} = grad({x, weight}, plain)
+      assert_all_close(actual_x, expected_x)
+      assert_all_close(actual_weight, expected_weight)
+
+      expression =
+        Nx.Defn.debug_expr(fn x, w ->
+          checkpoint_capture(x, fn value -> Nx.add(Nx.multiply(value, w), w) end)
+        end).(Nx.tensor(0.2), Nx.tensor(0.7))
+
+      assert tuple_size(hd(expression.data.args)) == 2
+    end
+
+    defn branch_capture(x, weight) do
+      checkpoint_capture(x, fn value ->
+        if value > 0, do: Nx.sin(value * weight), else: Nx.cos(value)
+      end)
+    end
+
+    defn plain_branch_capture(x, weight) do
+      if x > 0, do: Nx.sin(x * weight), else: Nx.cos(x)
+    end
+
+    test "a branch-only capture receives zero on the branch that does not use it" do
+      for x <- [Nx.tensor(0.2), Nx.tensor(-0.2)] do
+        weight = Nx.tensor(0.7)
+        marked = fn {v, w} -> branch_capture(v, w) end
+        plain = fn {v, w} -> plain_branch_capture(v, w) end
+        assert_all_close(marked.({x, weight}), plain.({x, weight}))
+        actual = grad({x, weight}, marked)
+        expected = grad({x, weight}, plain)
+        assert_all_close(elem(actual, 0), elem(expected, 0))
+        assert_all_close(elem(actual, 1), elem(expected, 1))
+        if Nx.to_number(x) < 0, do: assert_equal(elem(actual, 1), Nx.tensor(0.0))
+      end
+    end
+
+    defn checkpoint_in_loop(x, weight) do
+      {_, result, _} =
+        while {i = 0, value = x, weight}, i < 3 do
+          {i + 1, checkpoint_capture(value, fn v -> Nx.sin(v * weight) end), weight}
+        end
+
+      Nx.sum(result)
+    end
+
+    defn plain_checkpoint_in_loop(x, weight) do
+      {_, result, _} =
+        while {i = 0, value = x, weight}, i < 3 do
+          {i + 1, Nx.sin(value * weight), weight}
+        end
+
+      Nx.sum(result)
+    end
+
+    test "a checkpoint inside a loop captures the current loop parameter" do
+      x = Nx.tensor([0.2, 0.4])
+      weight = Nx.tensor(0.7)
+      assert_all_close(checkpoint_in_loop(x, weight), plain_checkpoint_in_loop(x, weight))
+      actual = grad({x, weight}, fn {x, w} -> checkpoint_in_loop(x, w) end)
+      expected = grad({x, weight}, fn {x, w} -> plain_checkpoint_in_loop(x, w) end)
+      assert_all_close(elem(actual, 0), elem(expected, 0))
+      assert_all_close(elem(actual, 1), elem(expected, 1))
+    end
+
+    test "a checkpoint does not permit captures through an ordinary block scope" do
+      assert_raise RuntimeError, ~r/different contexts/, fn ->
+        Nx.Defn.debug_expr(fn x, weight ->
+          Nx.block(%Nx.Block.Checkpoint{}, [x], nil, fn _, value ->
+            checkpoint_capture(value, fn inner -> Nx.multiply(inner, weight) end)
+          end)
+        end).(Nx.tensor(0.2), Nx.tensor(0.7))
+      end
+    end
+
+    test "a failed nested trace restores the enclosing scope before another checkpoint" do
+      fun = fn x, weight ->
+        checkpoint_capture(x, fn value ->
+          before = Process.get({Nx.Defn.CheckpointTrace, :scope})
+
+          assert_raise RuntimeError, "nested trace failed", fn ->
+            checkpoint_capture(value, fn value ->
+              Nx.sin(value)
+              raise "nested trace failed"
+            end)
+          end
+
+          assert Process.get({Nx.Defn.CheckpointTrace, :scope}) == before
+          checkpoint_capture(value, fn inner -> Nx.sin(Nx.multiply(inner, weight)) end)
+        end)
+      end
+
+      assert_all_close(Nx.Defn.jit(fun).(Nx.tensor(0.2), Nx.tensor(0.7)), Nx.sin(Nx.tensor(0.14)))
+      refute Process.get({Nx.Defn.CheckpointTrace, :scope})
+      refute Process.get({Nx.Defn.CheckpointTrace, :created})
+    end
+
+    test "repeated inputs, a capture of the same tensor, and an outer use accumulate gradients" do
+      marked = fn value ->
+        result =
+          checkpoint_capture([value, value], fn first, second ->
+            Nx.add(Nx.sin(Nx.multiply(first, value)), Nx.cos(second))
+          end)
+
+        Nx.add(result, Nx.multiply(value, value))
+      end
+
+      plain = fn value ->
+        Nx.add(
+          Nx.add(Nx.sin(Nx.multiply(value, value)), Nx.cos(value)),
+          Nx.multiply(value, value)
+        )
+      end
+
+      value = Nx.tensor(0.7)
+      assert_all_close(grad(value, marked), grad(value, plain))
+
+      assert_all_close(
+        grad(value, fn value -> grad(value, marked) end),
+        grad(value, fn value -> grad(value, plain) end)
+      )
+    end
+
     defn captured_pipeline(params, x) do
       x
       |> checkpoint_capture(&Nx.sin(&1 * params.first))

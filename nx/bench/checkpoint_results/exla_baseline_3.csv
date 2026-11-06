@@ -1,0 +1,13 @@
+label,revision,compiler,depth,mode,phase,median_us,p25_us,p75_us,median_reductions,nodes
+exla_baseline_3,b63a692c,EXLA,32,plain,trace_forward,44,42,45,13577,100
+exla_baseline_3,b63a692c,EXLA,32,plain,trace_gradient,225,214,228,49951,290
+exla_baseline_3,b63a692c,EXLA,32,plain,compile_forward,30711,29718,30861,158855,100
+exla_baseline_3,b63a692c,EXLA,32,plain,compile_gradient,141507,139818,143233,679634,290
+exla_baseline_3,b63a692c,EXLA,32,plain,execute_forward,36,30,40,418,0
+exla_baseline_3,b63a692c,EXLA,32,plain,execute_gradient,183,169,189,1084,0
+exla_baseline_3,b63a692c,EXLA,32,explicit,trace_forward,84,82,84,26196,196
+exla_baseline_3,b63a692c,EXLA,32,explicit,trace_gradient,399,377,399,97166,575
+exla_baseline_3,b63a692c,EXLA,32,explicit,compile_forward,32980,32438,33318,205821,196
+exla_baseline_3,b63a692c,EXLA,32,explicit,compile_gradient,97799,96845,97908,613536,575
+exla_baseline_3,b63a692c,EXLA,32,explicit,execute_forward,32,30,32,398,0
+exla_baseline_3,b63a692c,EXLA,32,explicit,execute_gradient,112,106,113,776,0

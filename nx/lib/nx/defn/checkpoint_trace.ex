@@ -2,6 +2,11 @@ defmodule Nx.Defn.CheckpointTrace do
   @moduledoc false
   alias Nx.Defn.{Composite, Expr, Tree}
 
+  # The callback is traced with fresh parameters. Newly created expressions
+  # form the body; pre-existing dependencies become saved inputs. Substitution
+  # closes that body over parameters before evaluation or differentiation.
+  # CHECKPOINT_BOUNDARIES.md explains the scope and custom-gradient rules.
+
   @trace_key {__MODULE__, :created}
   @scope_key {__MODULE__, :scope}
 
@@ -109,16 +114,7 @@ defmodule Nx.Defn.CheckpointTrace do
   end
 
   defp captures(
-         %Nx.Tensor{data: %Expr{op: :metadata, args: [_, %{custom_grad: _}]}},
-         _created,
-         _acc
-       ) do
-    raise ArgumentError,
-          "checkpoint_capture prototype cannot convert custom_grad callbacks; use checkpoint/2 with explicit inputs"
-  end
-
-  defp captures(
-         %Nx.Tensor{data: %Expr{id: id, context: context}} = tensor,
+         %Nx.Tensor{data: %Expr{id: id, op: op}} = tensor,
          created,
          {captures, seen}
        ) do
@@ -126,10 +122,12 @@ defmodule Nx.Defn.CheckpointTrace do
       MapSet.member?(seen, id) ->
         {tensor, {captures, seen}}
 
-      context == nil ->
+      op in [:constant, :tensor] ->
         {tensor, {captures, MapSet.put(seen, id)}}
 
       MapSet.member?(created, id) ->
+        validate_rewritten_node!(tensor)
+
         {_, acc} =
           Tree.apply_args(
             tensor,
@@ -147,7 +145,8 @@ defmodule Nx.Defn.CheckpointTrace do
 
   def instantiate(body, ids, values, context) do
     substitutions = Map.new(Enum.zip(ids, values))
-    target_context = Enum.find_value(values, context, & &1.data.context)
+    # Context-free replacements must not leave the rebuilt body in its old scope.
+    target_context = Enum.find_value(values, & &1.data.context)
 
     {result, _} =
       Composite.traverse(
@@ -157,17 +156,6 @@ defmodule Nx.Defn.CheckpointTrace do
       )
 
     result
-  end
-
-  defp instantiate_node(
-         %Nx.Tensor{data: %Expr{op: :metadata, args: [_, %{custom_grad: _}]}},
-         _substitutions,
-         _source,
-         _target,
-         _cache
-       ) do
-    raise ArgumentError,
-          "checkpoint_capture prototype cannot convert custom_grad callbacks; use checkpoint/2 with explicit inputs"
   end
 
   defp instantiate_node(
@@ -185,6 +173,8 @@ defmodule Nx.Defn.CheckpointTrace do
         {replacement, cache}
 
       _ ->
+        validate_rewritten_node!(tensor)
+
         {args, cache} =
           Tree.apply_args(
             tensor,
@@ -198,6 +188,25 @@ defmodule Nx.Defn.CheckpointTrace do
         {result, Map.put(cache, id, result)}
     end
   end
+
+  # Saved inputs are substituted before this check. Their custom derivative
+  # belongs to the outer graph and does not need closure conversion here.
+  defp validate_rewritten_node!(%Nx.Tensor{
+         data: %Expr{op: :metadata, args: [_, %{custom_grad: _}]}
+       }) do
+    raise ArgumentError,
+          "checkpoint_capture prototype cannot convert custom_grad callbacks created inside the region; " <>
+            "use checkpoint/2 with explicit inputs, or compute the custom-gradient value before the region"
+  end
+
+  defp validate_rewritten_node!(%Nx.Tensor{data: %Expr{op: op}})
+       when op in [:io_call, :runtime_call] do
+    raise ArgumentError,
+          "checkpoint_capture requires a pure tensor body; #{op} is unsupported inside the region. " <>
+            "Compute the callback result before the region and pass or capture it as an input"
+  end
+
+  defp validate_rewritten_node!(_tensor), do: :ok
 
   def revectorize(body, axes) do
     {result, []} =

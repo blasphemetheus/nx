@@ -169,6 +169,37 @@ defmodule Nx.Defn.DonationTest do
   end
 
   describe "evaluator last-use marks" do
+    test "a checkpoint returning an input does not donate an alias needed outside" do
+      fun = fn x ->
+        value = Nx.add(x, 1)
+        alias_value = Nx.Defn.Kernel.checkpoint_capture(value, fn v -> v end)
+        Nx.add(Nx.exp(alias_value), Nx.negate(value))
+      end
+
+      {result, recorded} = record(fun, [Nx.tensor([1.0, 2.0])])
+      refute Nx.donatable?(result)
+      assert flags_of(recorded, :exp) == [[false]]
+      assert flags_of(recorded, :negate) == [[false]]
+
+      assert_all_close(
+        Nx.backend_transfer(result),
+        Nx.subtract(Nx.exp(Nx.tensor([2.0, 3.0])), Nx.tensor([2.0, 3.0]))
+      )
+    end
+
+    test "a captured input returned in a tuple remains protected across outer uses" do
+      fun = fn x ->
+        value = Nx.add(x, 1)
+        {first, second} = Nx.Defn.Kernel.checkpoint_capture(x, fn _ -> {value, value} end)
+        Nx.add(Nx.exp(first), Nx.add(Nx.negate(second), value))
+      end
+
+      {result, recorded} = record(fun, [Nx.tensor([1.0, 2.0])])
+      assert flags_of(recorded, :exp) == [[false]]
+      assert flags_of(recorded, :negate) == [[false]]
+      assert_all_close(Nx.backend_transfer(result), Nx.exp(Nx.tensor([2.0, 3.0])))
+    end
+
     test "an intermediate used once is donatable" do
       {result, recorded} = record(&once/1, [Nx.tensor([1.0, 2.0])])
 

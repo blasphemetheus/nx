@@ -1,0 +1,13 @@
+label,revision,compiler,depth,mode,phase,median_us,p25_us,p75_us,median_reductions,nodes
+exla_baseline,b63a692c,EXLA,32,plain,trace_forward,45,41,45,13393,100
+exla_baseline,b63a692c,EXLA,32,plain,trace_gradient,231,209,238,50978,290
+exla_baseline,b63a692c,EXLA,32,plain,compile_forward,31055,29705,31134,160993,100
+exla_baseline,b63a692c,EXLA,32,plain,compile_gradient,141920,140742,145841,681723,290
+exla_baseline,b63a692c,EXLA,32,plain,execute_forward,22,21,24,398,0
+exla_baseline,b63a692c,EXLA,32,plain,execute_gradient,179,173,181,1060,0
+exla_baseline,b63a692c,EXLA,32,explicit,trace_forward,77,75,77,26197,196
+exla_baseline,b63a692c,EXLA,32,explicit,trace_gradient,372,363,377,96836,575
+exla_baseline,b63a692c,EXLA,32,explicit,compile_forward,33459,32707,33691,206941,196
+exla_baseline,b63a692c,EXLA,32,explicit,compile_gradient,98821,96382,99067,620807,575
+exla_baseline,b63a692c,EXLA,32,explicit,execute_forward,32,29,33,410,0
+exla_baseline,b63a692c,EXLA,32,explicit,execute_gradient,110,104,115,772,0
