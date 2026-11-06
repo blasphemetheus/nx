@@ -314,6 +314,19 @@ defmodule Nx.Defn.Kernel do
     end
   end
 
+  @doc """
+  Checkpoints a callback after discovering its tensor dependencies by tracing it.
+
+  Unlike `checkpoint/2`, the callback can read tensors from its enclosing scope.
+  Inline callbacks and callbacks stored in variables have the same behavior.
+  Values computed before the call become saved inputs; operations performed
+  inside the callback remain in the region, including work on captured tensors.
+  Ordinary `Nx.block/4` callbacks still require explicit tensor arguments.
+  """
+  def checkpoint_capture(inputs, fun) when is_function(fun) do
+    Nx.Defn.CheckpointTrace.run(inputs, fun)
+  end
+
   defp checkpoint_result(%Nx.Tensor{} = tensor), do: tensor
 
   defp checkpoint_result(tuple) when is_tuple(tuple) do
