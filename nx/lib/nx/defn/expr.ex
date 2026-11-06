@@ -435,7 +435,23 @@ defmodule Nx.Defn.Expr do
   ## Nx.Defn AST callbacks
 
   @doc false
-  def id(), do: make_ref()
+  def id(), do: Nx.Defn.CheckpointTrace.record(make_ref())
+
+  @doc false
+  def checkpoint_region(inputs, body, parameters, scope, parent_context) do
+    args = [inputs, body, parameters, scope]
+
+    case body do
+      %T{} = tensor ->
+        expr(tensor, parent_context, :checkpoint, args)
+
+      outputs when is_tuple(outputs) ->
+        tuple(
+          expr(tuple_out(tuple_size(outputs)), parent_context, :checkpoint, args),
+          Tuple.to_list(outputs)
+        )
+    end
+  end
 
   @doc false
   def io_call(tensor_or_container, callback_spec) do
@@ -1483,6 +1499,7 @@ defmodule Nx.Defn.Expr do
 
   defp expr(tensor, context, op, args) do
     args = promote_constants(tensor, args)
+    context = Nx.Defn.CheckpointTrace.scope_context(context)
 
     %{tensor | data: %Expr{id: id(), op: op, args: args, context: context}, donatable?: false}
   end
@@ -1599,6 +1616,13 @@ defmodule Nx.Defn.Expr do
   end
 
   defp merge_context!(%{data: %{context: context}}, acc) do
+    case Nx.Defn.CheckpointTrace.merge_context(context, acc) do
+      {:ok, merged} -> merged
+      :error -> merge_strict_context!(context, acc)
+    end
+  end
+
+  defp merge_strict_context!(context, acc) do
     if context != acc and context != nil and acc != nil do
       raise """
       cannot build defn because expressions come from different contexts: \
@@ -2002,6 +2026,11 @@ defmodule Nx.Defn.Expr do
 
   defp traverse_args(:while, [initial, _arg, _condition, _body], state),
     do: traverse_args([initial], state)
+
+  defp traverse_args(:checkpoint, [inputs, _body, _parameters, _scope], state) do
+    {inputs, state} = recur_inspect(inputs, state)
+    {["checkpoint_region ", inputs], state}
+  end
 
   defp traverse_args(:block, [%Nx.Block.Checkpoint{}, in_args, _body, _callback], state) do
     {in_args_io, state} = Enum.map_reduce(in_args, state, &recur_inspect/2)

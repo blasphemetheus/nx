@@ -108,6 +108,21 @@ defmodule Nx.Defn.Tree do
   """
   def apply_args(expr, type \\ :all, acc, fun)
 
+  def apply_args(
+        %T{data: %Expr{op: :checkpoint, args: [inputs, body, parameters, scope]}},
+        type,
+        acc,
+        fun
+      ) do
+    {inputs, acc} = Composite.traverse(inputs, acc, fun)
+    {body, acc} = if type == :all, do: Composite.traverse(body, acc, fun), else: {body, acc}
+
+    {parameters, acc} =
+      if type == :all, do: Composite.traverse(parameters, acc, fun), else: {parameters, acc}
+
+    {[inputs, body, parameters, scope], acc}
+  end
+
   def apply_args(%T{data: %Expr{op: :fun, args: [args, expr, mfa]}}, type, acc, fun) do
     {args, acc} = Enum.map_reduce(args, acc, &Composite.traverse(&1, &2, fun))
 

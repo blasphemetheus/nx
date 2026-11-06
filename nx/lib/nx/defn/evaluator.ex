@@ -39,7 +39,7 @@ defmodule Nx.Defn.Evaluator do
 
   # Ops whose result may alias one of their arguments or comes from user code,
   # so they never hand their result over for donation.
-  @never_donate_ops [:block, :optional, :runtime_call, :io_call, :fun]
+  @never_donate_ops [:block, :checkpoint, :optional, :runtime_call, :io_call, :fun]
 
   @creation_ops [:eye, :iota, :from_binary]
   @list_ops [:concatenate, :stack]
@@ -162,6 +162,8 @@ defmodule Nx.Defn.Evaluator do
   defp add_aliased(:block, [_struct, in_args | _], aliased),
     do: Enum.reduce(in_args, aliased, &add_leaf_ids/2)
 
+  defp add_aliased(:checkpoint, [inputs | _], aliased), do: add_leaf_ids(inputs, aliased)
+
   defp add_aliased(_op, _args, aliased), do: aliased
 
   defp add_leaf_ids(composite, aliased) do
@@ -241,6 +243,12 @@ defmodule Nx.Defn.Evaluator do
     in_args = call_prefix ++ call_suffix
 
     {[struct, in_args, expr, callback], cache}
+  end
+
+  defp compute_cache(:checkpoint, %{data: %Expr{args: [inputs, body, _, _]}}, state, cache) do
+    {inputs, cache} = composite_compute_cache(inputs, state, cache)
+    {body, body_cache} = init_compute_cache(body, state)
+    {[inputs, body, body_cache], cache}
   end
 
   defp compute_cache(:cond, %{data: %Expr{args: [clauses, last]}}, state, cache) do
@@ -482,6 +490,15 @@ defmodule Nx.Defn.Evaluator do
       end
 
     {backend.block(struct, out, in_args, callback), caches}
+  end
+
+  defp eval_apply(:checkpoint, [inputs, body, body_cache], _ans, state, caches) do
+    {inputs, caches} = composite_eval(inputs, state, caches)
+
+    {result, _} =
+      composite_eval(body, %{state | params: composite_to_params(inputs)}, [body_cache])
+
+    {result, caches}
   end
 
   defp eval_apply(:runtime_call, [expr, fun, out_template, opts], _ans, state, caches) do

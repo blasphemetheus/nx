@@ -971,6 +971,26 @@ defmodule EXLA.Defn do
     {[p, l, u], cache}
   end
 
+  defp cached_recur_operator(
+         :checkpoint,
+         %{data: %{args: [inputs, body, parameters, scope]}} = expr,
+         state,
+         cache
+       ) do
+    ids = parameters |> Tuple.to_list() |> Enum.map(& &1.data.id)
+    body = Nx.Defn.CheckpointTrace.instantiate(body, ids, Tuple.to_list(inputs), scope)
+    {values, cache} = recur_flatten(body, state, cache)
+
+    case expr.type do
+      {:tuple, _} ->
+        {values, cache}
+
+      _ ->
+        [value] = values
+        {value, cache}
+    end
+  end
+
   defp cached_recur_operator(op, expr, state, cache) do
     {args, cache} = Tree.apply_args(expr, cache, &recur_operator(&1, state, &2))
     {to_operator(op, args, expr, state), cache}
