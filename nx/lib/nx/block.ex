@@ -90,3 +90,8 @@ defmodule Nx.Block.Checkpoint do
   """
   defstruct []
 end
+
+defmodule Nx.Block.Recompute do
+  @moduledoc false
+  defstruct []
+end
