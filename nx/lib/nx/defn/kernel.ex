@@ -253,10 +253,10 @@ defmodule Nx.Defn.Kernel do
   Computes `fun` on `inputs` again at every use of its result.
 
   The result is not kept in memory. Every operation that uses it runs
-  `fun` again from `inputs`, with or without `grad`. An input that is
-  itself the result of a checkpoint is computed again as well, so in a
-  chain of checkpoints one use of the last result runs every function in
-  the chain.
+  `fun` again from `inputs`, with or without `grad`. The inputs are kept.
+  An input that is itself the result of a checkpoint is computed once and
+  kept like any other input, so in a chain of checkpoints one use of the
+  last result runs only the last function.
 
   `inputs` is a tensor or a container of tensors, or a list of them for a
   function of several arguments. `fun` cannot read tensors from the

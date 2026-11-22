@@ -588,7 +588,8 @@ defmodule EXLA.Defn do
          %T{data: %Expr{op: :block, args: [%Nx.Block.Checkpoint{} | _]}} = expr,
          state,
          cache
-       ) do
+       )
+       when not is_map_key(state, :keep_checkpoint_inputs) do
     cached_recur_operator(:block, Nx.devectorize(expr), state, cache)
   end
 
@@ -796,18 +797,20 @@ defmodule EXLA.Defn do
   # that consumer's other operands, so it cannot run before the consumer
   # could, and it is not merged with the copy made for another consumer.
   # The consumer reads those operands from the barrier too, otherwise XLA
-  # drops them from it. Inputs that are checkpoint blocks are lowered again
-  # here as well.
+  # drops them from it. An input that is a checkpoint block is lowered once
+  # and kept, so a copy computes one block and not the chain before it.
   defp cached_recur_operator(
          :block,
          %T{data: %Expr{args: [%Nx.Block.Checkpoint{} = struct, in_args, out, _callback]}},
          %{builder: %Function{} = builder} = state,
          cache
        ) do
+    input_state = Map.put(state, :keep_checkpoint_inputs, true)
+
     {call_args, cache} =
       in_args
       |> Composite.flatten_list()
-      |> Enum.map_reduce(cache, &recur_operator(&1, state, &2))
+      |> Enum.map_reduce(cache, &recur_operator(&1, input_state, &2))
 
     tied = Map.get(cache, @checkpoint_tied, %{})
 
@@ -825,7 +828,7 @@ defmodule EXLA.Defn do
       struct,
       call_args,
       out,
-      state,
+      Map.delete(state, :keep_checkpoint_inputs),
       Map.put(cache, @checkpoint_tied, tied)
     )
   end

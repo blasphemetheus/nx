@@ -86,9 +86,7 @@ defmodule Nx.Defn.CheckpointTest do
       assert runs(:exp) == 2
     end
 
-    # The evaluator keeps the evaluated inputs of a checkpoint, so the first
-    # checkpoint of a chain runs once. EXLA lowers it again for every use.
-    test "the evaluator keeps the inputs of a checkpoint" do
+    test "keeps the inputs of a checkpoint, including the result of another checkpoint" do
       chain(Nx.tensor([0.1, 0.2, 0.3]))
       assert runs(:sin) == 2
       assert runs(:exp) == 1
