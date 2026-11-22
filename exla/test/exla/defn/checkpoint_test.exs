@@ -3,6 +3,60 @@ defmodule EXLA.Defn.CheckpointTest do
 
   import Nx.Defn
 
+  defn per_use_loss(x) do
+    y = recompute_each_use(x, &Nx.exp/1)
+    Nx.sum(y * y)
+  end
+
+  defn per_use_delayed(x) do
+    y = recompute_each_use(x, &Nx.exp/1)
+    first = Nx.mean(y)
+    Nx.sum(y * Nx.sin(first))
+  end
+
+  test "per-use blocks preserve separate reconstructions in optimized code" do
+    x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+    expected = Nx.sum(Nx.exp(Nx.multiply(x, 2)))
+    assert_all_close(per_use_loss(x), expected)
+    executable = EXLA.to_executable(&per_use_loss/1, [x])
+    assert count(EXLA.Executable.optimized_hlo(executable), "exponential(") == 2
+
+    plain = fn x ->
+      y = Nx.exp(x)
+      Nx.sum(Nx.multiply(y, Nx.sin(Nx.mean(y))))
+    end
+
+    assert_all_close(per_use_delayed(x), plain.(x))
+    assert_all_close(grad(x, &per_use_delayed/1), grad(x, plain))
+    executable = EXLA.to_executable(&per_use_delayed/1, [x])
+    assert count(EXLA.Executable.optimized_hlo(executable), "exponential(") == 2
+  end
+
+  defn expanded_recipe(row, column) do
+    values =
+      recompute_each_use([row, column], fn r, c ->
+        Nx.exp(Nx.new_axis(r, 1) + Nx.new_axis(c, 0))
+      end)
+
+    first = Nx.mean(values, axes: [1])
+    Nx.sum(values * Nx.new_axis(Nx.sin(first), 1))
+  end
+
+  test "expanded recipes keep reconstruction tied to the later consumer" do
+    row = Nx.iota({512}, type: :f32) |> Nx.divide(2048)
+    column = Nx.negate(row)
+
+    plain = fn row, column ->
+      values = Nx.exp(Nx.add(Nx.new_axis(row, 1), Nx.new_axis(column, 0)))
+      first = Nx.mean(values, axes: [1])
+      Nx.sum(Nx.multiply(values, Nx.new_axis(Nx.sin(first), 1)))
+    end
+
+    assert_all_close(expanded_recipe(row, column), EXLA.jit(plain).(row, column))
+    executable = EXLA.to_executable(&expanded_recipe/2, [row, column])
+    assert count(EXLA.Executable.optimized_hlo(executable), "exponential(") == 2
+  end
+
   defn body(x), do: x |> Nx.exp() |> Nx.sin()
 
   defn loss_with_checkpoint(x) do
