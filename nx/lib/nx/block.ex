@@ -90,3 +90,11 @@ defmodule Nx.Block.Checkpoint do
   """
   defstruct []
 end
+
+defmodule Nx.Block.Recompute do
+  @moduledoc """
+  Marks a block whose result is not kept. Every operation that uses the
+  result computes it again from the block's inputs.
+  """
+  defstruct []
+end
