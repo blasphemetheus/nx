@@ -64,6 +64,60 @@ defmodule EXLA.Defn.RecomputeTest do
     Nx.sum(x)
   end
 
+  defn recompute_then_checkpoint(x) do
+    y = recompute(x, &Nx.exp/1)
+    z = checkpoint(y, &Nx.tanh/1)
+    first = Nx.sum(z)
+    Nx.sum(z * first)
+  end
+
+  defn checkpoint_then_recompute(x) do
+    y = checkpoint(x, &Nx.exp/1)
+    z = recompute(y, &Nx.tanh/1)
+    first = Nx.sum(z)
+    Nx.sum(z * first)
+  end
+
+  defn mlp_recompute_in_checkpoint(ws, x) do
+    x =
+      checkpoint([x, ws], fn x, ws ->
+        x = recompute([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+        pair(x, ws[2], ws[3])
+      end)
+
+    x =
+      checkpoint([x, ws], fn x, ws ->
+        x = recompute([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+        pair(x, ws[6], ws[7])
+      end)
+
+    Nx.sum(x)
+  end
+
+  defn mlp_checkpoint_in_recompute(ws, x) do
+    x =
+      recompute([x, ws], fn x, ws ->
+        x = checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+        pair(x, ws[2], ws[3])
+      end)
+
+    x =
+      recompute([x, ws], fn x, ws ->
+        x = checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+        pair(x, ws[6], ws[7])
+      end)
+
+    Nx.sum(x)
+  end
+
+  defn mlp_alternating(ws, x) do
+    x = checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+    x = recompute([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
+    x = checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+    x = recompute([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
+    Nx.sum(x)
+  end
+
   defp count(hlo, needle), do: hlo |> String.split(needle) |> length() |> Kernel.-(1)
 
   defp optimized(fun, args),
@@ -141,6 +195,64 @@ defmodule EXLA.Defn.RecomputeTest do
       # 47 products with recompute. On CUDA: 604 MB plain, 269 MB with.
       products = &count(EXLA.Executable.optimized_hlo(&1), " dot(")
       assert products.(with_recompute) > products.(plain)
+    end
+  end
+
+  describe "recompute/2 with checkpoint/2" do
+    test "mixed chains return the value of the plain function" do
+      x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+      assert_all_close(recompute_then_checkpoint(x), chain_plain(x))
+      assert_all_close(checkpoint_then_recompute(x), chain_plain(x))
+    end
+
+    # Outside grad a checkpoint is the plain function. Its result is kept, so
+    # a recompute block that feeds it has one use.
+    test "a checkpoint keeps its result outside grad" do
+      x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+      hlo = optimized(&recompute_then_checkpoint/1, [x])
+
+      assert count(hlo, "tanh(") == 1
+      assert count(hlo, "exponential(") == 1
+    end
+
+    test "a recompute block that reads a checkpoint result computes only itself again" do
+      x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+      hlo = optimized(&checkpoint_then_recompute/1, [x])
+
+      assert count(hlo, "tanh(") == 2
+      assert count(hlo, "exponential(") == 1
+    end
+
+    test "gradients of nested and alternating blocks match the plain function" do
+      {ws, _} = Nx.Random.normal(Nx.Random.key(0), shape: {8, 16, 16}, type: :f32)
+      x = Nx.iota({8, 16}, type: :f32) |> Nx.divide(128)
+      plain = Nx.Defn.grad(ws, &mlp_plain(&1, x))
+
+      assert_all_close(Nx.Defn.grad(ws, &mlp_recompute_in_checkpoint(&1, x)), plain)
+      assert_all_close(Nx.Defn.grad(ws, &mlp_checkpoint_in_recompute(&1, x)), plain)
+      assert_all_close(Nx.Defn.grad(ws, &mlp_alternating(&1, x)), plain)
+    end
+
+    # Measured on the host client, in MB of scratch and matrix products:
+    # plain 1008 and 23, checkpoint only 470 and 29, recompute only 807 and
+    # 47, alternating 605 and 29, recompute in checkpoint 537 and 35,
+    # checkpoint in recompute 605 and 31.
+    test "nested and alternating blocks lower the peak scratch memory of a gradient" do
+      n = 256
+      batch = 65536
+      ws = Nx.broadcast(Nx.tensor(0.01, type: :f32), {8, n, n})
+      x = Nx.broadcast(Nx.tensor(0.5, type: :f32), {batch, n})
+
+      scratch = fn fun ->
+        scratch_bytes(fn ws, x -> Nx.Defn.grad(ws, &fun.(&1, x)) end, [ws, x])
+      end
+
+      plain = scratch.(&mlp_plain/2)
+      activation_bytes = batch * n * 4
+
+      assert plain - scratch.(&mlp_alternating/2) >= activation_bytes
+      assert plain - scratch.(&mlp_recompute_in_checkpoint/2) >= activation_bytes
+      assert plain - scratch.(&mlp_checkpoint_in_recompute/2) >= activation_bytes
     end
   end
 end
