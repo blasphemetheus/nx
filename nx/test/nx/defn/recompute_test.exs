@@ -69,7 +69,7 @@ defmodule Nx.Defn.RecomputeTest do
 
   defn recompute_in_checkpoint(weights, x) do
     z =
-      checkpoint([x, weights], fn x, weights ->
+      grad_checkpoint([x, weights], fn x, weights ->
         y = recompute([x, weights], fn x, weights -> dense(x, weights.a, weights.b) end)
         dense(y, weights.c, weights.d) + Nx.sum(y)
       end)
@@ -80,7 +80,7 @@ defmodule Nx.Defn.RecomputeTest do
   defn checkpoint_in_recompute(weights, x) do
     z =
       recompute([x, weights], fn x, weights ->
-        y = checkpoint([x, weights], fn x, weights -> dense(x, weights.a, weights.b) end)
+        y = grad_checkpoint([x, weights], fn x, weights -> dense(x, weights.a, weights.b) end)
         dense(y, weights.c, weights.d) + Nx.sum(y)
       end)
 
@@ -95,24 +95,24 @@ defmodule Nx.Defn.RecomputeTest do
 
   defn recompute_then_checkpoint(weights, x) do
     y = recompute([x, weights], fn x, weights -> dense(x, weights.a, weights.b) end)
-    z = checkpoint([y, weights], fn y, weights -> dense(y, weights.c, weights.d) end)
+    z = grad_checkpoint([y, weights], fn y, weights -> dense(y, weights.c, weights.d) end)
     Nx.sum(z * z)
   end
 
   defn checkpoint_then_recompute(weights, x) do
-    y = checkpoint([x, weights], fn x, weights -> dense(x, weights.a, weights.b) end)
+    y = grad_checkpoint([x, weights], fn x, weights -> dense(x, weights.a, weights.b) end)
     z = recompute([y, weights], fn y, weights -> dense(y, weights.c, weights.d) end)
     Nx.sum(z * z)
   end
 
   defn counted_recompute_then_checkpoint(x) do
     y = recompute(x, &counted_exp/1)
-    z = checkpoint(y, &counted_sin/1)
+    z = grad_checkpoint(y, &counted_sin/1)
     Nx.sum(z) + Nx.reduce_max(z)
   end
 
   defn counted_checkpoint_then_recompute(x) do
-    y = checkpoint(x, &counted_exp/1)
+    y = grad_checkpoint(x, &counted_exp/1)
     z = recompute(y, &counted_sin/1)
     Nx.sum(z) + Nx.reduce_max(z)
   end
@@ -358,7 +358,7 @@ defmodule Nx.Defn.RecomputeTest do
     end
   end
 
-  describe "recompute/2 with checkpoint/2" do
+  describe "recompute/2 with grad_checkpoint/2" do
     test "recompute inside a checkpoint matches the plain function" do
       assert_same_grads(&recompute_in_checkpoint/2, &nested_plain/2)
     end

@@ -66,13 +66,13 @@ defmodule EXLA.Defn.RecomputeTest do
 
   defn recompute_then_checkpoint(x) do
     y = recompute(x, &Nx.exp/1)
-    z = checkpoint(y, &Nx.tanh/1)
+    z = grad_checkpoint(y, &Nx.tanh/1)
     first = Nx.sum(z)
     Nx.sum(z * first)
   end
 
   defn checkpoint_then_recompute(x) do
-    y = checkpoint(x, &Nx.exp/1)
+    y = grad_checkpoint(x, &Nx.exp/1)
     z = recompute(y, &Nx.tanh/1)
     first = Nx.sum(z)
     Nx.sum(z * first)
@@ -80,13 +80,13 @@ defmodule EXLA.Defn.RecomputeTest do
 
   defn mlp_recompute_in_checkpoint(ws, x) do
     x =
-      checkpoint([x, ws], fn x, ws ->
+      grad_checkpoint([x, ws], fn x, ws ->
         x = recompute([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
         pair(x, ws[2], ws[3])
       end)
 
     x =
-      checkpoint([x, ws], fn x, ws ->
+      grad_checkpoint([x, ws], fn x, ws ->
         x = recompute([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
         pair(x, ws[6], ws[7])
       end)
@@ -97,13 +97,13 @@ defmodule EXLA.Defn.RecomputeTest do
   defn mlp_checkpoint_in_recompute(ws, x) do
     x =
       recompute([x, ws], fn x, ws ->
-        x = checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+        x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
         pair(x, ws[2], ws[3])
       end)
 
     x =
       recompute([x, ws], fn x, ws ->
-        x = checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+        x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
         pair(x, ws[6], ws[7])
       end)
 
@@ -111,9 +111,9 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn mlp_alternating(ws, x) do
-    x = checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+    x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
     x = recompute([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
-    x = checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+    x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
     x = recompute([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
     Nx.sum(x)
   end
@@ -300,7 +300,7 @@ defmodule EXLA.Defn.RecomputeTest do
     end
   end
 
-  describe "recompute/2 with checkpoint/2" do
+  describe "recompute/2 with grad_checkpoint/2" do
     test "mixed chains return the value of the plain function" do
       x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
       assert_all_close(recompute_then_checkpoint(x), chain_plain(x))
