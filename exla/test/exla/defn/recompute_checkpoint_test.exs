@@ -64,21 +64,21 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
     Nx.sum(x)
   end
 
-  defn recompute_then_checkpoint(x) do
+  defn recompute_then_grad(x) do
     y = recompute_checkpoint(x, &Nx.exp/1)
     z = grad_checkpoint(y, &Nx.tanh/1)
     first = Nx.sum(z)
     Nx.sum(z * first)
   end
 
-  defn checkpoint_then_recompute(x) do
+  defn grad_then_recompute(x) do
     y = grad_checkpoint(x, &Nx.exp/1)
     z = recompute_checkpoint(y, &Nx.tanh/1)
     first = Nx.sum(z)
     Nx.sum(z * first)
   end
 
-  defn mlp_recompute_in_checkpoint(ws, x) do
+  defn mlp_recompute_in_grad(ws, x) do
     x =
       grad_checkpoint([x, ws], fn x, ws ->
         x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
@@ -94,7 +94,7 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
     Nx.sum(x)
   end
 
-  defn mlp_checkpoint_in_recompute(ws, x) do
+  defn mlp_grad_in_recompute(ws, x) do
     x =
       recompute_checkpoint([x, ws], fn x, ws ->
         x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
@@ -303,23 +303,23 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
   describe "recompute_checkpoint/2 with grad_checkpoint/2" do
     test "mixed chains return the value of the plain function" do
       x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
-      assert_all_close(recompute_then_checkpoint(x), chain_plain(x))
-      assert_all_close(checkpoint_then_recompute(x), chain_plain(x))
+      assert_all_close(recompute_then_grad(x), chain_plain(x))
+      assert_all_close(grad_then_recompute(x), chain_plain(x))
     end
 
     # Outside grad a checkpoint is the plain function. Its result is kept, so
     # a recompute block that feeds it has one use.
-    test "a checkpoint keeps its result outside grad" do
+    test "grad_checkpoint keeps its result outside grad" do
       x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
-      hlo = optimized(&recompute_then_checkpoint/1, [x])
+      hlo = optimized(&recompute_then_grad/1, [x])
 
       assert count(hlo, "tanh(") == 1
       assert count(hlo, "exponential(") == 1
     end
 
-    test "a recompute block that reads a checkpoint result computes only itself again" do
+    test "recompute_checkpoint reading a grad_checkpoint result computes only itself again" do
       x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
-      hlo = optimized(&checkpoint_then_recompute/1, [x])
+      hlo = optimized(&grad_then_recompute/1, [x])
 
       assert count(hlo, "tanh(") == 2
       assert count(hlo, "exponential(") == 1
@@ -330,8 +330,8 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
       x = Nx.iota({8, 16}, type: :f32) |> Nx.divide(128)
       plain = Nx.Defn.grad(ws, &mlp_plain(&1, x))
 
-      assert_all_close(Nx.Defn.grad(ws, &mlp_recompute_in_checkpoint(&1, x)), plain)
-      assert_all_close(Nx.Defn.grad(ws, &mlp_checkpoint_in_recompute(&1, x)), plain)
+      assert_all_close(Nx.Defn.grad(ws, &mlp_recompute_in_grad(&1, x)), plain)
+      assert_all_close(Nx.Defn.grad(ws, &mlp_grad_in_recompute(&1, x)), plain)
       assert_all_close(Nx.Defn.grad(ws, &mlp_alternating(&1, x)), plain)
     end
 
@@ -353,8 +353,8 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
       activation_bytes = batch * n * 4
 
       assert plain - scratch.(&mlp_alternating/2) >= activation_bytes
-      assert plain - scratch.(&mlp_recompute_in_checkpoint/2) >= activation_bytes
-      assert plain - scratch.(&mlp_checkpoint_in_recompute/2) >= activation_bytes
+      assert plain - scratch.(&mlp_recompute_in_grad/2) >= activation_bytes
+      assert plain - scratch.(&mlp_grad_in_recompute/2) >= activation_bytes
     end
   end
 

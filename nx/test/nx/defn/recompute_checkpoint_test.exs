@@ -67,7 +67,7 @@ defmodule Nx.Defn.RecomputeCheckpointTest do
 
   defn tuple_output_plain(x), do: Nx.sum(Nx.sin(x) * Nx.cos(x))
 
-  defn recompute_in_checkpoint(weights, x) do
+  defn recompute_in_grad(weights, x) do
     z =
       grad_checkpoint([x, weights], fn x, weights ->
         y =
@@ -79,7 +79,7 @@ defmodule Nx.Defn.RecomputeCheckpointTest do
     Nx.sum(z * z)
   end
 
-  defn checkpoint_in_recompute(weights, x) do
+  defn grad_in_recompute(weights, x) do
     z =
       recompute_checkpoint([x, weights], fn x, weights ->
         y = grad_checkpoint([x, weights], fn x, weights -> dense(x, weights.a, weights.b) end)
@@ -95,25 +95,25 @@ defmodule Nx.Defn.RecomputeCheckpointTest do
     Nx.sum(z * z)
   end
 
-  defn recompute_then_checkpoint(weights, x) do
+  defn recompute_then_grad(weights, x) do
     y = recompute_checkpoint([x, weights], fn x, weights -> dense(x, weights.a, weights.b) end)
     z = grad_checkpoint([y, weights], fn y, weights -> dense(y, weights.c, weights.d) end)
     Nx.sum(z * z)
   end
 
-  defn checkpoint_then_recompute(weights, x) do
+  defn grad_then_recompute(weights, x) do
     y = grad_checkpoint([x, weights], fn x, weights -> dense(x, weights.a, weights.b) end)
     z = recompute_checkpoint([y, weights], fn y, weights -> dense(y, weights.c, weights.d) end)
     Nx.sum(z * z)
   end
 
-  defn counted_recompute_then_checkpoint(x) do
+  defn counted_recompute_then_grad(x) do
     y = recompute_checkpoint(x, &counted_exp/1)
     z = grad_checkpoint(y, &counted_sin/1)
     Nx.sum(z) + Nx.reduce_max(z)
   end
 
-  defn counted_checkpoint_then_recompute(x) do
+  defn counted_grad_then_recompute(x) do
     y = grad_checkpoint(x, &counted_exp/1)
     z = recompute_checkpoint(y, &counted_sin/1)
     Nx.sum(z) + Nx.reduce_max(z)
@@ -363,20 +363,20 @@ defmodule Nx.Defn.RecomputeCheckpointTest do
   end
 
   describe "recompute_checkpoint/2 with grad_checkpoint/2" do
-    test "recompute inside a checkpoint matches the plain function" do
-      assert_same_grads(&recompute_in_checkpoint/2, &nested_plain/2)
+    test "recompute_checkpoint inside grad_checkpoint matches the plain function" do
+      assert_same_grads(&recompute_in_grad/2, &nested_plain/2)
     end
 
-    test "checkpoint inside a recompute matches the plain function" do
-      assert_same_grads(&checkpoint_in_recompute/2, &nested_plain/2)
+    test "grad_checkpoint inside recompute_checkpoint matches the plain function" do
+      assert_same_grads(&grad_in_recompute/2, &nested_plain/2)
     end
 
-    test "a recompute result as a checkpoint input matches the plain function" do
-      assert_same_grads(&recompute_then_checkpoint/2, &mlp_plain/2)
+    test "a recompute_checkpoint result as a grad_checkpoint input matches the plain function" do
+      assert_same_grads(&recompute_then_grad/2, &mlp_plain/2)
     end
 
-    test "a checkpoint result as a recompute input matches the plain function" do
-      assert_same_grads(&checkpoint_then_recompute/2, &mlp_plain/2)
+    test "a grad_checkpoint result as a recompute_checkpoint input matches the plain function" do
+      assert_same_grads(&grad_then_recompute/2, &mlp_plain/2)
     end
 
     test "the second-order gradient of a mixed chain matches the plain function" do
@@ -387,22 +387,22 @@ defmodule Nx.Defn.RecomputeCheckpointTest do
         Nx.Defn.grad(x, fn x -> Nx.sum(Nx.Defn.grad(x, &fun.(weights, &1))) end)
       end
 
-      assert_all_close(second.(&recompute_then_checkpoint/2), second.(&mlp_plain/2))
-      assert_all_close(second.(&checkpoint_then_recompute/2), second.(&mlp_plain/2))
+      assert_all_close(second.(&recompute_then_grad/2), second.(&mlp_plain/2))
+      assert_all_close(second.(&grad_then_recompute/2), second.(&mlp_plain/2))
     end
 
     # Outside grad a checkpoint is the plain function, so its result is kept
     # and its recompute input has one use.
-    test "a checkpoint keeps its result, so its recompute input runs once" do
+    test "grad_checkpoint keeps its result, so its recompute_checkpoint input runs once" do
       x = Nx.tensor([0.1, 0.2, 0.3])
-      assert_all_close(counted_recompute_then_checkpoint(x), counted_plain(x))
+      assert_all_close(counted_recompute_then_grad(x), counted_plain(x))
       assert runs(:sin) == 1
       assert runs(:exp) == 1
     end
 
-    test "a recompute runs at every use and reads the kept checkpoint result" do
+    test "recompute_checkpoint runs at every use and reads the kept grad_checkpoint result" do
       x = Nx.tensor([0.1, 0.2, 0.3])
-      assert_all_close(counted_checkpoint_then_recompute(x), counted_plain(x))
+      assert_all_close(counted_grad_then_recompute(x), counted_plain(x))
       assert runs(:sin) == 2
       assert runs(:exp) == 1
     end
