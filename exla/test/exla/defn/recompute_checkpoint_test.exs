@@ -64,60 +64,6 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
     Nx.sum(x)
   end
 
-  defn recompute_then_grad(x) do
-    y = recompute_checkpoint(x, &Nx.exp/1)
-    z = grad_checkpoint(y, &Nx.tanh/1)
-    first = Nx.sum(z)
-    Nx.sum(z * first)
-  end
-
-  defn grad_then_recompute(x) do
-    y = grad_checkpoint(x, &Nx.exp/1)
-    z = recompute_checkpoint(y, &Nx.tanh/1)
-    first = Nx.sum(z)
-    Nx.sum(z * first)
-  end
-
-  defn mlp_recompute_in_grad(ws, x) do
-    x =
-      grad_checkpoint([x, ws], fn x, ws ->
-        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
-        pair(x, ws[2], ws[3])
-      end)
-
-    x =
-      grad_checkpoint([x, ws], fn x, ws ->
-        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
-        pair(x, ws[6], ws[7])
-      end)
-
-    Nx.sum(x)
-  end
-
-  defn mlp_grad_in_recompute(ws, x) do
-    x =
-      recompute_checkpoint([x, ws], fn x, ws ->
-        x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
-        pair(x, ws[2], ws[3])
-      end)
-
-    x =
-      recompute_checkpoint([x, ws], fn x, ws ->
-        x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
-        pair(x, ws[6], ws[7])
-      end)
-
-    Nx.sum(x)
-  end
-
-  defn mlp_alternating(ws, x) do
-    x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
-    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
-    x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
-    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
-    Nx.sum(x)
-  end
-
   defn tuple_two_uses(x) do
     {a, b} = recompute_checkpoint(x, fn x -> {Nx.exp(x), Nx.cos(x)} end)
     first = Nx.sum(a)
@@ -186,6 +132,60 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
     y = Nx.exp(x)
     first = Nx.sum(y)
     Nx.sum(Nx.take(y, Nx.as_type(Nx.remainder(first, 4), :s32)) * first)
+  end
+
+  defn recompute_then_grad(x) do
+    y = recompute_checkpoint(x, &Nx.exp/1)
+    z = grad_checkpoint(y, &Nx.tanh/1)
+    first = Nx.sum(z)
+    Nx.sum(z * first)
+  end
+
+  defn grad_then_recompute(x) do
+    y = grad_checkpoint(x, &Nx.exp/1)
+    z = recompute_checkpoint(y, &Nx.tanh/1)
+    first = Nx.sum(z)
+    Nx.sum(z * first)
+  end
+
+  defn mlp_recompute_in_grad(ws, x) do
+    x =
+      grad_checkpoint([x, ws], fn x, ws ->
+        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+        pair(x, ws[2], ws[3])
+      end)
+
+    x =
+      grad_checkpoint([x, ws], fn x, ws ->
+        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+        pair(x, ws[6], ws[7])
+      end)
+
+    Nx.sum(x)
+  end
+
+  defn mlp_grad_in_recompute(ws, x) do
+    x =
+      recompute_checkpoint([x, ws], fn x, ws ->
+        x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+        pair(x, ws[2], ws[3])
+      end)
+
+    x =
+      recompute_checkpoint([x, ws], fn x, ws ->
+        x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+        pair(x, ws[6], ws[7])
+      end)
+
+    Nx.sum(x)
+  end
+
+  defn mlp_alternating(ws, x) do
+    x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
+    x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
+    Nx.sum(x)
   end
 
   defp count(hlo, needle), do: hlo |> String.split(needle) |> length() |> Kernel.-(1)
@@ -300,76 +300,6 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
     end
   end
 
-  describe "recompute_checkpoint/2 with grad_checkpoint/2" do
-    test "mixed chains return the value of the plain function" do
-      x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
-      assert_all_close(recompute_then_grad(x), chain_plain(x))
-      assert_all_close(grad_then_recompute(x), chain_plain(x))
-    end
-
-    # Outside grad a checkpoint is the plain function. Its result is kept, so
-    # a recompute block that feeds it has one use.
-    test "grad_checkpoint keeps its result outside grad" do
-      x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
-      hlo = optimized(&recompute_then_grad/1, [x])
-
-      assert count(hlo, "tanh(") == 1
-      assert count(hlo, "exponential(") == 1
-    end
-
-    test "recompute_checkpoint reading a grad_checkpoint result computes only itself again" do
-      x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
-      hlo = optimized(&grad_then_recompute/1, [x])
-
-      assert count(hlo, "tanh(") == 2
-      assert count(hlo, "exponential(") == 1
-    end
-
-    test "gradients of nested and alternating blocks match the plain function" do
-      {ws, _} = Nx.Random.normal(Nx.Random.key(0), shape: {8, 16, 16}, type: :f32)
-      x = Nx.iota({8, 16}, type: :f32) |> Nx.divide(128)
-      plain = Nx.Defn.grad(ws, &mlp_plain(&1, x))
-
-      assert_all_close(Nx.Defn.grad(ws, &mlp_recompute_in_grad(&1, x)), plain)
-      assert_all_close(Nx.Defn.grad(ws, &mlp_grad_in_recompute(&1, x)), plain)
-      assert_all_close(Nx.Defn.grad(ws, &mlp_alternating(&1, x)), plain)
-    end
-
-    # Measured on the host client, in MB of scratch and matrix products:
-    # plain 1008 and 23, checkpoint only 470 and 29, recompute only 807 and
-    # 47, alternating 605 and 29, recompute in checkpoint 537 and 35,
-    # checkpoint in recompute 605 and 31.
-    test "nested and alternating blocks lower the peak scratch memory of a gradient" do
-      n = 256
-      batch = 65536
-      ws = Nx.broadcast(Nx.tensor(0.01, type: :f32), {8, n, n})
-      x = Nx.broadcast(Nx.tensor(0.5, type: :f32), {batch, n})
-
-      scratch = fn fun ->
-        scratch_bytes(fn ws, x -> Nx.Defn.grad(ws, &fun.(&1, x)) end, [ws, x])
-      end
-
-      plain = scratch.(&mlp_plain/2)
-      activation_bytes = batch * n * 4
-
-      assert plain - scratch.(&mlp_alternating/2) >= activation_bytes
-      assert plain - scratch.(&mlp_recompute_in_grad/2) >= activation_bytes
-      assert plain - scratch.(&mlp_grad_in_recompute/2) >= activation_bytes
-    end
-  end
-
-  defn body(x), do: x |> Nx.exp() |> Nx.sin()
-
-  defn loss_with_recompute(x) do
-    y = recompute_checkpoint(x, &body/1)
-    Nx.sum(y * y)
-  end
-
-  defn loss_without_recompute(x) do
-    y = body(x)
-    Nx.sum(y * y)
-  end
-
   defn nested(x) do
     out =
       recompute_checkpoint(x, fn x ->
@@ -386,42 +316,6 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
     Nx.sum(out * out)
   end
 
-  defn cond_inside(x) do
-    recompute_checkpoint(x, fn x ->
-      if Nx.sum(x) > 0, do: Nx.sum(Nx.sin(x)), else: Nx.sum(Nx.cos(x))
-    end)
-  end
-
-  defn cond_outside(x) do
-    if Nx.sum(x) > 0 do
-      recompute_checkpoint(x, fn x -> Nx.sum(Nx.sin(x)) end)
-    else
-      Nx.sum(Nx.cos(x))
-    end
-  end
-
-  defn cond_plain(x) do
-    if Nx.sum(x) > 0, do: Nx.sum(Nx.sin(x)), else: Nx.sum(Nx.cos(x))
-  end
-
-  defn while_inside(x) do
-    {_, acc} =
-      while {i = 0, acc = x}, i < 3 do
-        {i + 1, recompute_checkpoint(acc, fn acc -> Nx.sin(acc) * acc end)}
-      end
-
-    Nx.sum(acc)
-  end
-
-  defn while_plain(x) do
-    {_, acc} =
-      while {i = 0, acc = x}, i < 3 do
-        {i + 1, Nx.sin(acc) * acc}
-      end
-
-    Nx.sum(acc)
-  end
-
   defn vectorized_loss(x, w) do
     Nx.sum(recompute_checkpoint([x, w], fn x, w -> Nx.sin(Nx.dot(x, w)) * x end))
   end
@@ -430,58 +324,9 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
     Nx.sum(Nx.sin(Nx.dot(x, w)) * x)
   end
 
-  defn vectorized_scale_loss(x, scale) do
-    Nx.sum(recompute_checkpoint([x, scale], fn x, scale -> Nx.multiply(Nx.sin(x), scale) end))
-  end
-
-  defn vectorized_scale_loss_plain(x, scale) do
-    Nx.sum(Nx.multiply(Nx.sin(x), scale))
-  end
-
-  defn pair_loss(pair) do
-    {a, b} = recompute_checkpoint(pair, fn {a, b} -> {Nx.sin(a), Nx.cos(b)} end)
-    Nx.sum(a * b)
-  end
-
-  defn pair_loss_plain({a, b}) do
-    Nx.sum(Nx.sin(a) * Nx.cos(b))
-  end
-
-  test "computes the same gradient as the plain function" do
-    x = Nx.iota({16}, type: :f32) |> Nx.divide(16)
-
-    assert_all_close(
-      Nx.Defn.grad(x, &loss_with_recompute/1),
-      Nx.Defn.grad(x, &loss_without_recompute/1)
-    )
-  end
-
-  test "recompute_checkpoint blocks with equal shapes and different bodies keep their own body" do
-    {ws, _} = Nx.Random.normal(Nx.Random.key(0), shape: {8, 16, 16}, type: :f32)
-    x = Nx.iota({8, 16}, type: :f32) |> Nx.divide(128)
-
-    assert_equal(
-      Nx.Defn.grad(ws, &mlp(&1, x)),
-      Nx.Defn.grad(ws, &mlp_plain(&1, x))
-    )
-  end
-
   test "nested recompute_checkpoint blocks compute the same gradient as the plain function" do
     x = Nx.tensor([0.5, 1.0, 1.5])
     assert_all_close(Nx.Defn.grad(x, &nested/1), Nx.Defn.grad(x, &nested_plain/1))
-  end
-
-  test "a cond inside or around a recompute computes the same gradient" do
-    for x <- [Nx.tensor([1.0, 2.0, 3.0]), Nx.tensor([-1.0, -2.0, -3.0])] do
-      plain = Nx.Defn.grad(x, &cond_plain/1)
-      assert_all_close(Nx.Defn.grad(x, &cond_inside/1), plain)
-      assert_all_close(Nx.Defn.grad(x, &cond_outside/1), plain)
-    end
-  end
-
-  test "a recompute inside a while body computes the same gradient" do
-    x = Nx.tensor([0.5, 1.0])
-    assert_all_close(Nx.Defn.grad(x, &while_inside/1), Nx.Defn.grad(x, &while_plain/1))
   end
 
   test "a vectorized activation keeps its axes in the value and the gradient" do
@@ -495,84 +340,6 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
     gradient = Nx.Defn.grad(x, &vectorized_loss(&1, w))
     assert gradient.vectorized_axes == [batch: 3]
     assert_all_close(gradient, Nx.Defn.grad(x, &vectorized_loss_plain(&1, w)))
-  end
-
-  test "a vectorized input keeps its axes in the gradient when the activation is plain" do
-    x = Nx.tensor([0.5, 1.0])
-    scale = Nx.tensor([[1.0, 2.0], [3.0, 4.0], [5.0, 6.0]]) |> Nx.vectorize(:batch)
-
-    value = vectorized_scale_loss(x, scale)
-    assert value.vectorized_axes == [batch: 3]
-    assert_all_close(value, vectorized_scale_loss_plain(x, scale))
-
-    gradient = Nx.Defn.grad(scale, &vectorized_scale_loss(x, &1))
-    assert gradient.vectorized_axes == [batch: 3]
-    assert_all_close(gradient, Nx.Defn.grad(scale, &vectorized_scale_loss_plain(x, &1)))
-  end
-
-  test "a tuple input computes the same value and gradient as the plain function" do
-    pair = {Nx.tensor([0.5, 1.0, 1.5]), Nx.tensor([2.0, 2.5, 3.0])}
-    assert_all_close(pair_loss(pair), pair_loss_plain(pair))
-    {grad_a, grad_b} = Nx.Defn.grad(pair, &pair_loss/1)
-    {plain_a, plain_b} = Nx.Defn.grad(pair, &pair_loss_plain/1)
-    assert_all_close(grad_a, plain_a)
-    assert_all_close(grad_b, plain_b)
-  end
-
-  defn duplicated_outputs(x) do
-    recompute_checkpoint(x, fn x ->
-      y = x * x
-      {y, y}
-    end)
-  end
-
-  test "duplicated outputs accumulate their gradient contributions" do
-    x = Nx.tensor([2.0, 3.0])
-
-    gradient =
-      grad(x, fn x ->
-        {a, b} = duplicated_outputs(x)
-        Nx.sum(Nx.add(a, Nx.multiply(3, b)))
-      end)
-
-    assert_equal(gradient, Nx.tensor([16.0, 24.0]))
-  end
-
-  test "either duplicated output can be used without the other" do
-    x = Nx.tensor([2.0, 3.0])
-
-    for index <- [0, 1] do
-      gradient = grad(x, fn x -> Nx.sum(elem(duplicated_outputs(x), index)) end)
-      assert_equal(gradient, Nx.tensor([4.0, 6.0]))
-    end
-  end
-
-  defnp dropout(x, key) do
-    {mask, _key} = Nx.Random.uniform(key, shape: Nx.shape(x))
-    Nx.multiply(x, Nx.greater(mask, 0.5))
-  end
-
-  defn dropout_loss(x, key) do
-    Nx.sum(recompute_checkpoint([x, key], fn x, key -> dropout(x, key) end))
-  end
-
-  defn dropout_loss_plain(x, key), do: Nx.sum(dropout(x, key))
-
-  defn dropout_grad(x, key), do: grad(x, fn x -> dropout_loss(x, key) end)
-
-  defn dropout_grad_plain(x, key), do: grad(x, fn x -> dropout_loss_plain(x, key) end)
-
-  test "a random mask from an explicit key is the same in the recomputed body" do
-    x = Nx.tensor([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
-    key = Nx.Random.key(42)
-
-    assert_all_close(dropout_loss(x, key), dropout_loss_plain(x, key))
-
-    gradient = dropout_grad(x, key)
-    assert_all_close(gradient, dropout_grad_plain(x, key))
-
-    kept = Nx.to_number(Nx.sum(gradient))
-    assert kept > 0 and kept < 8
   end
 
   defn outer_in_cond(row, column) do
@@ -752,11 +519,64 @@ defmodule EXLA.Defn.RecomputeCheckpointTest do
         Nx.Defn.grad(ws, &mlp_in_while(&1, x, 3)),
         Nx.Defn.grad(ws, &mlp_in_while_plain(&1, x, 3))
       )
+    end
+  end
 
-      assert_all_close(
-        Nx.Defn.grad(ws, &one_pair_in_while(&1, x, 3)),
-        Nx.Defn.grad(ws, &one_pair_in_while_plain(&1, x, 3))
-      )
+  describe "recompute_checkpoint/2 with grad_checkpoint/2" do
+    test "mixed chains return the value of the plain function" do
+      x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+      assert_all_close(recompute_then_grad(x), chain_plain(x))
+      assert_all_close(grad_then_recompute(x), chain_plain(x))
+    end
+
+    # Outside grad a checkpoint is the plain function. Its result is kept, so
+    # a recompute block that feeds it has one use.
+    test "grad_checkpoint keeps its result outside grad" do
+      x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+      hlo = optimized(&recompute_then_grad/1, [x])
+
+      assert count(hlo, "tanh(") == 1
+      assert count(hlo, "exponential(") == 1
+    end
+
+    test "recompute_checkpoint reading a grad_checkpoint result computes only itself again" do
+      x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
+      hlo = optimized(&grad_then_recompute/1, [x])
+
+      assert count(hlo, "tanh(") == 2
+      assert count(hlo, "exponential(") == 1
+    end
+
+    test "gradients of nested and alternating blocks match the plain function" do
+      {ws, _} = Nx.Random.normal(Nx.Random.key(0), shape: {8, 16, 16}, type: :f32)
+      x = Nx.iota({8, 16}, type: :f32) |> Nx.divide(128)
+      plain = Nx.Defn.grad(ws, &mlp_plain(&1, x))
+
+      assert_all_close(Nx.Defn.grad(ws, &mlp_recompute_in_grad(&1, x)), plain)
+      assert_all_close(Nx.Defn.grad(ws, &mlp_grad_in_recompute(&1, x)), plain)
+      assert_all_close(Nx.Defn.grad(ws, &mlp_alternating(&1, x)), plain)
+    end
+
+    # Measured on the host client, in MB of scratch and matrix products:
+    # plain 1008 and 23, checkpoint only 470 and 29, recompute only 807 and
+    # 47, alternating 605 and 29, recompute in checkpoint 537 and 35,
+    # checkpoint in recompute 605 and 31.
+    test "nested and alternating blocks lower the peak scratch memory of a gradient" do
+      n = 256
+      batch = 65536
+      ws = Nx.broadcast(Nx.tensor(0.01, type: :f32), {8, n, n})
+      x = Nx.broadcast(Nx.tensor(0.5, type: :f32), {batch, n})
+
+      scratch = fn fun ->
+        scratch_bytes(fn ws, x -> Nx.Defn.grad(ws, &fun.(&1, x)) end, [ws, x])
+      end
+
+      plain = scratch.(&mlp_plain/2)
+      activation_bytes = batch * n * 4
+
+      assert plain - scratch.(&mlp_alternating/2) >= activation_bytes
+      assert plain - scratch.(&mlp_recompute_in_grad/2) >= activation_bytes
+      assert plain - scratch.(&mlp_grad_in_recompute/2) >= activation_bytes
     end
   end
 end
