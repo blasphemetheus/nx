@@ -1,10 +1,10 @@
-defmodule EXLA.Defn.RecomputeTest do
+defmodule EXLA.Defn.RecomputeCheckpointTest do
   use EXLA.Case, async: true
 
   import Nx.Defn
 
   defn two_uses(x) do
-    y = recompute(x, &Nx.exp/1)
+    y = recompute_checkpoint(x, &Nx.exp/1)
     first = Nx.sum(y)
     Nx.sum(y * first)
   end
@@ -16,8 +16,8 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn chain(x) do
-    y = recompute(x, &Nx.exp/1)
-    z = recompute(y, &Nx.tanh/1)
+    y = recompute_checkpoint(x, &Nx.exp/1)
+    z = recompute_checkpoint(y, &Nx.tanh/1)
     first = Nx.sum(z)
     Nx.sum(z * first)
   end
@@ -30,7 +30,7 @@ defmodule EXLA.Defn.RecomputeTest do
 
   defn outer(row, column) do
     weights =
-      recompute([row, column], fn row, column ->
+      recompute_checkpoint([row, column], fn row, column ->
         Nx.exp(Nx.new_axis(row, 1) + Nx.new_axis(column, 0))
       end)
 
@@ -57,15 +57,15 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn mlp(ws, x) do
-    x = recompute([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
-    x = recompute([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
-    x = recompute([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
-    x = recompute([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
+    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
+    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
     Nx.sum(x)
   end
 
   defn recompute_then_checkpoint(x) do
-    y = recompute(x, &Nx.exp/1)
+    y = recompute_checkpoint(x, &Nx.exp/1)
     z = grad_checkpoint(y, &Nx.tanh/1)
     first = Nx.sum(z)
     Nx.sum(z * first)
@@ -73,7 +73,7 @@ defmodule EXLA.Defn.RecomputeTest do
 
   defn checkpoint_then_recompute(x) do
     y = grad_checkpoint(x, &Nx.exp/1)
-    z = recompute(y, &Nx.tanh/1)
+    z = recompute_checkpoint(y, &Nx.tanh/1)
     first = Nx.sum(z)
     Nx.sum(z * first)
   end
@@ -81,13 +81,13 @@ defmodule EXLA.Defn.RecomputeTest do
   defn mlp_recompute_in_checkpoint(ws, x) do
     x =
       grad_checkpoint([x, ws], fn x, ws ->
-        x = recompute([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
         pair(x, ws[2], ws[3])
       end)
 
     x =
       grad_checkpoint([x, ws], fn x, ws ->
-        x = recompute([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
         pair(x, ws[6], ws[7])
       end)
 
@@ -96,13 +96,13 @@ defmodule EXLA.Defn.RecomputeTest do
 
   defn mlp_checkpoint_in_recompute(ws, x) do
     x =
-      recompute([x, ws], fn x, ws ->
+      recompute_checkpoint([x, ws], fn x, ws ->
         x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
         pair(x, ws[2], ws[3])
       end)
 
     x =
-      recompute([x, ws], fn x, ws ->
+      recompute_checkpoint([x, ws], fn x, ws ->
         x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
         pair(x, ws[6], ws[7])
       end)
@@ -112,14 +112,14 @@ defmodule EXLA.Defn.RecomputeTest do
 
   defn mlp_alternating(ws, x) do
     x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
-    x = recompute([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
+    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
     x = grad_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
-    x = recompute([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
+    x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
     Nx.sum(x)
   end
 
   defn tuple_two_uses(x) do
-    {a, b} = recompute(x, fn x -> {Nx.exp(x), Nx.cos(x)} end)
+    {a, b} = recompute_checkpoint(x, fn x -> {Nx.exp(x), Nx.cos(x)} end)
     first = Nx.sum(a)
     Nx.sum(a * first) + Nx.sum(b)
   end
@@ -131,7 +131,7 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn used_in_cond(x) do
-    y = recompute(x, &Nx.exp/1)
+    y = recompute_checkpoint(x, &Nx.exp/1)
     first = Nx.sum(y)
 
     if first > 0 do
@@ -153,7 +153,7 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn while_initial(x) do
-    y = recompute(x, &Nx.exp/1)
+    y = recompute_checkpoint(x, &Nx.exp/1)
     first = Nx.sum(y)
 
     {_i, acc, _first} =
@@ -177,7 +177,7 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn block_consumer(x) do
-    y = recompute(x, &Nx.exp/1)
+    y = recompute_checkpoint(x, &Nx.exp/1)
     first = Nx.sum(y)
     Nx.sum(Nx.take(y, Nx.as_type(Nx.remainder(first, 4), :s32)) * first)
   end
@@ -200,7 +200,7 @@ defmodule EXLA.Defn.RecomputeTest do
     bytes
   end
 
-  describe "recompute/2" do
+  describe "recompute_checkpoint/2" do
     test "returns the value of the function" do
       x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
       assert_all_close(two_uses(x), two_uses_plain(x))
@@ -214,7 +214,7 @@ defmodule EXLA.Defn.RecomputeTest do
       assert count(optimized(&two_uses/1, [x]), "exponential(") == 2
     end
 
-    test "computes inputs that are recompute blocks again" do
+    test "computes inputs that are recompute_checkpoint blocks again" do
       x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
       hlo = optimized(&chain/1, [x])
 
@@ -300,7 +300,7 @@ defmodule EXLA.Defn.RecomputeTest do
     end
   end
 
-  describe "recompute/2 with grad_checkpoint/2" do
+  describe "recompute_checkpoint/2 with grad_checkpoint/2" do
     test "mixed chains return the value of the plain function" do
       x = Nx.iota({1024}, type: :f32) |> Nx.divide(1024)
       assert_all_close(recompute_then_checkpoint(x), chain_plain(x))
@@ -361,7 +361,7 @@ defmodule EXLA.Defn.RecomputeTest do
   defn body(x), do: x |> Nx.exp() |> Nx.sin()
 
   defn loss_with_recompute(x) do
-    y = recompute(x, &body/1)
+    y = recompute_checkpoint(x, &body/1)
     Nx.sum(y * y)
   end
 
@@ -372,9 +372,9 @@ defmodule EXLA.Defn.RecomputeTest do
 
   defn nested(x) do
     out =
-      recompute(x, fn x ->
+      recompute_checkpoint(x, fn x ->
         y = x * x
-        z = recompute(y, fn y -> Nx.exp(y) end)
+        z = recompute_checkpoint(y, fn y -> Nx.exp(y) end)
         Nx.sin(z)
       end)
 
@@ -387,14 +387,14 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn cond_inside(x) do
-    recompute(x, fn x ->
+    recompute_checkpoint(x, fn x ->
       if Nx.sum(x) > 0, do: Nx.sum(Nx.sin(x)), else: Nx.sum(Nx.cos(x))
     end)
   end
 
   defn cond_outside(x) do
     if Nx.sum(x) > 0 do
-      recompute(x, fn x -> Nx.sum(Nx.sin(x)) end)
+      recompute_checkpoint(x, fn x -> Nx.sum(Nx.sin(x)) end)
     else
       Nx.sum(Nx.cos(x))
     end
@@ -407,7 +407,7 @@ defmodule EXLA.Defn.RecomputeTest do
   defn while_inside(x) do
     {_, acc} =
       while {i = 0, acc = x}, i < 3 do
-        {i + 1, recompute(acc, fn acc -> Nx.sin(acc) * acc end)}
+        {i + 1, recompute_checkpoint(acc, fn acc -> Nx.sin(acc) * acc end)}
       end
 
     Nx.sum(acc)
@@ -423,7 +423,7 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn vectorized_loss(x, w) do
-    Nx.sum(recompute([x, w], fn x, w -> Nx.sin(Nx.dot(x, w)) * x end))
+    Nx.sum(recompute_checkpoint([x, w], fn x, w -> Nx.sin(Nx.dot(x, w)) * x end))
   end
 
   defn vectorized_loss_plain(x, w) do
@@ -431,7 +431,7 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn vectorized_scale_loss(x, scale) do
-    Nx.sum(recompute([x, scale], fn x, scale -> Nx.multiply(Nx.sin(x), scale) end))
+    Nx.sum(recompute_checkpoint([x, scale], fn x, scale -> Nx.multiply(Nx.sin(x), scale) end))
   end
 
   defn vectorized_scale_loss_plain(x, scale) do
@@ -439,7 +439,7 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn pair_loss(pair) do
-    {a, b} = recompute(pair, fn {a, b} -> {Nx.sin(a), Nx.cos(b)} end)
+    {a, b} = recompute_checkpoint(pair, fn {a, b} -> {Nx.sin(a), Nx.cos(b)} end)
     Nx.sum(a * b)
   end
 
@@ -456,7 +456,7 @@ defmodule EXLA.Defn.RecomputeTest do
     )
   end
 
-  test "recompute blocks with equal shapes and different bodies keep their own body" do
+  test "recompute_checkpoint blocks with equal shapes and different bodies keep their own body" do
     {ws, _} = Nx.Random.normal(Nx.Random.key(0), shape: {8, 16, 16}, type: :f32)
     x = Nx.iota({8, 16}, type: :f32) |> Nx.divide(128)
 
@@ -466,7 +466,7 @@ defmodule EXLA.Defn.RecomputeTest do
     )
   end
 
-  test "nested recompute blocks compute the same gradient as the plain function" do
+  test "nested recompute_checkpoint blocks compute the same gradient as the plain function" do
     x = Nx.tensor([0.5, 1.0, 1.5])
     assert_all_close(Nx.Defn.grad(x, &nested/1), Nx.Defn.grad(x, &nested_plain/1))
   end
@@ -520,7 +520,7 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn duplicated_outputs(x) do
-    recompute(x, fn x ->
+    recompute_checkpoint(x, fn x ->
       y = x * x
       {y, y}
     end)
@@ -553,7 +553,7 @@ defmodule EXLA.Defn.RecomputeTest do
   end
 
   defn dropout_loss(x, key) do
-    Nx.sum(recompute([x, key], fn x, key -> dropout(x, key) end))
+    Nx.sum(recompute_checkpoint([x, key], fn x, key -> dropout(x, key) end))
   end
 
   defn dropout_loss_plain(x, key), do: Nx.sum(dropout(x, key))
@@ -577,7 +577,7 @@ defmodule EXLA.Defn.RecomputeTest do
 
   defn outer_in_cond(row, column) do
     weights =
-      recompute([row, column], fn row, column ->
+      recompute_checkpoint([row, column], fn row, column ->
         Nx.exp(Nx.new_axis(row, 1) + Nx.new_axis(column, 0))
       end)
 
@@ -603,7 +603,7 @@ defmodule EXLA.Defn.RecomputeTest do
 
   defn outer_in_while(row, column) do
     weights =
-      recompute([row, column], fn row, column ->
+      recompute_checkpoint([row, column], fn row, column ->
         Nx.exp(Nx.new_axis(row, 1) + Nx.new_axis(column, 0))
       end)
 
@@ -612,7 +612,7 @@ defmodule EXLA.Defn.RecomputeTest do
     {_i, total, _row, _column} =
       while {i = 0, total = Nx.sum(first), row, column}, i < 3 do
         weights =
-          recompute([row, column], fn row, column ->
+          recompute_checkpoint([row, column], fn row, column ->
             Nx.exp(Nx.new_axis(row, 1) + Nx.new_axis(column, 0))
           end)
 
@@ -675,10 +675,10 @@ defmodule EXLA.Defn.RecomputeTest do
   defn mlp_in_while(ws, x, iterations) do
     {_i, x, _ws, _iterations} =
       while {i = 0, x, ws, iterations}, i < iterations do
-        x = recompute([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
-        x = recompute([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
-        x = recompute([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
-        x = recompute([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
+        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end)
+        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[2], ws[3]) end)
+        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[4], ws[5]) end)
+        x = recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[6], ws[7]) end)
         {i + 1, x, ws, iterations}
       end
 
@@ -697,7 +697,8 @@ defmodule EXLA.Defn.RecomputeTest do
   defn one_pair_in_while(ws, x, iterations) do
     {_i, x, _ws, _iterations} =
       while {i = 0, x, ws, iterations}, i < iterations do
-        {i + 1, recompute([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end), ws, iterations}
+        {i + 1, recompute_checkpoint([x, ws], fn x, ws -> pair(x, ws[0], ws[1]) end), ws,
+         iterations}
       end
 
     Nx.sum(x)
